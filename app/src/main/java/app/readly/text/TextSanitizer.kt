@@ -29,6 +29,13 @@ object TextSanitizer {
         return paras.mapNotNull { cleanup(it) }.joinToString("\n\n")
     }
 
+    /**
+     * Minimal cleanup for the system TTS engine: Readly speaks the app's text as
+     * given (punctuation and line breaks stay, as pauses), removing only URLs and
+     * emoji, which can never be spoken.
+     */
+    fun forSystemTts(input: String): String = stripEmoji(removeUrls(input)).trim()
+
     private data class Para(val text: String, val punctuate: Boolean)
 
     // ------------------------------------------------------------------

@@ -95,4 +95,6 @@
     <string name="preview_error_format">Couldn\'t play the preview: %1$s: %2$s</string>
     <string name="preview_text_en">Hi, I\'m %1$s. This is how I sound when I read to you.</string>
     <string name="preview_text_fa">سلام، من %1$s هستم. این صدای من است.</string>
+    <string name="tts_sample_en">This is Readly, an on-device voice.</string>
+    <string name="tts_sample_fa">این ریدلی است، یک صدای روی دستگاه.</string>
 </resources>

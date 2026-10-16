@@ -123,4 +123,22 @@ object SmartVoice {
         if (pack.variant != "Compact" && pack.variant != "Standard") return false
         return pack.sizeBytes <= MAX_AUTO_DOWNLOAD_BYTES
     }
+
+    /**
+     * System TTS pick for 2-letter [lang]: the installed pack supporting [lang]
+     * with the lowest measured on-device RTF (system speech must be instant).
+     * Packs with no measurement sort as fast (0.0); ties break by [rank], then
+     * name. Null when nothing installed supports [lang].
+     */
+    fun pickForSystem(
+        lang: String,
+        installed: List<VoicePack>,
+        rtfByPack: Map<String, Double> = emptyMap(),
+    ): VoicePack? =
+        installed.filter { lang in it.languages() }.sortedWith(
+            compareBy<VoicePack> { rtfByPack[it.id] ?: 0.0 }
+                .thenByDescending { rank(it) }
+                .thenBy { it.voiceName ?: it.id }
+                .thenBy { it.id },
+        ).firstOrNull()
 }

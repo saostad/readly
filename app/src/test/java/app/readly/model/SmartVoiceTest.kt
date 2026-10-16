@@ -195,4 +195,48 @@ class SmartVoiceTest {
         assertEquals("supertonic-3", SmartVoice.recommendedPack("ja")!!.id)
         assertEquals(null, SmartVoice.recommendedPack("th"))
     }
+
+    @Test
+    fun pickForSystem_prefersLowestMeasuredRtfOverRank() {
+        // System speech must be instant: a measured-fast Piper beats Kokoro.
+        val installed = listOf(pack("kokoro-en"), pack("piper-en_US-lessac-medium"))
+        assertEquals(
+            "piper-en_US-lessac-medium",
+            SmartVoice.pickForSystem(
+                "en", installed,
+                mapOf("kokoro-en" to 0.6, "piper-en_US-lessac-medium" to 0.09),
+            )!!.id,
+        )
+    }
+
+    @Test
+    fun pickForSystem_unknownRtfSortsFastWithRankTiebreak() {
+        // No measurements: the best-ranked pack wins.
+        val installed = listOf(pack("kitten-mini"), pack("supertonic-2"))
+        assertEquals(
+            "supertonic-2",
+            SmartVoice.pickForSystem("en", installed, emptyMap())!!.id,
+        )
+        // Unknown still beats a measured-slow pack.
+        assertEquals(
+            "supertonic-2",
+            SmartVoice.pickForSystem(
+                "en", installed, mapOf("kitten-mini" to 0.4),
+            )!!.id,
+        )
+    }
+
+    @Test
+    fun pickForSystem_onlySupportingPacksAndNullWhenNone() {
+        assertEquals(
+            "piper-fa_IR-amir-medium",
+            SmartVoice.pickForSystem(
+                "fa",
+                listOf(pack("kokoro-en"), pack("piper-fa_IR-amir-medium")),
+                emptyMap(),
+            )!!.id,
+        )
+        assertEquals(null, SmartVoice.pickForSystem("th", listOf(pack("kokoro-en")), emptyMap()))
+        assertEquals(null, SmartVoice.pickForSystem("en", emptyList(), emptyMap()))
+    }
 }

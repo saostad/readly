@@ -334,4 +334,18 @@ class TextSanitizerTest {
         // ZWJ (U+200D) removal stays: it only ever joins emoji.
         assertEquals("ab", TextSanitizer.sanitize("a\u200Db", SourceFormat.PLAIN))
     }
+
+    @Test
+    fun forSystemTts_removesOnlyUrlsAndEmoji() {
+        // System TTS speaks the app's text as given: markup, punctuation and line
+        // breaks stay (as pauses); only URLs and emoji go.
+        assertEquals(
+            "Hello!  Visit \n\nSecond line, *with* emphasis.",
+            TextSanitizer.forSystemTts(
+                "Hello! 👋 Visit https://example.com/a\n\nSecond line, *with* emphasis.",
+            ),
+        )
+        assertEquals("", TextSanitizer.forSystemTts("🎉🔥"))
+        assertEquals("plain text", TextSanitizer.forSystemTts("  plain text  "))
+    }
 }
