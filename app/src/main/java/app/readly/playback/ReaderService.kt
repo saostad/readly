@@ -477,6 +477,27 @@ class ReaderService : Service() {
                 return
             }
             if (pendingRequests.get() > 0) return
+            // Warm-up on the preload path only: the first inference after a load is
+            // slower than later ones, so run a throwaway synth now (discarded). Never
+            // on the READ path, where it would add latency before the real first
+            // chunk. A request landing mid-warm-up aborts it via the 0/1 callback.
+            val eng = engine ?: return
+            val warmSpeaker = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getInt(KEY_SPEAKER_ID, 0)
+                .coerceIn(0, KokoroEngine.SPEAKERS.size - 1)
+            try {
+                val warmStart = SystemClock.elapsedRealtime()
+                eng.synthesize(
+                    "Hello.",
+                    speakerId = warmSpeaker,
+                    speed = 1.0f,
+                    isStopped = { pendingRequests.get() > 0 },
+                )
+                Log.i("Readly", "Voice warm-up took ${SystemClock.elapsedRealtime() - warmStart} ms")
+            } catch (e: Exception) {
+                Log.w("Readly", "Voice warm-up failed; the first read will warm the engine instead", e)
+            }
+            if (pendingRequests.get() > 0) return
             val active = synchronized(pipelineLock) { pipeline != null }
             if (!active && ReaderState.snapshot.status == ReaderStatus.LOADING_VOICE) {
                 ReaderState.update { it.copy(status = ReaderStatus.IDLE) }
