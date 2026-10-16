@@ -68,7 +68,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_voices)
-        findViewById<ImageButton>(R.id.backButton).setOnClickListener { finish() }
+        findViewById<ImageButton>(R.id.backButton).setOnClickListener { closeWithTransition() }
         cardsBox = findViewById(R.id.cardsContainer)
         prefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
         addSystemSection()
@@ -165,6 +165,17 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         samples.release()
         task?.let { if (it.listener === this) it.listener = null }
         super.onDestroy()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        super.onBackPressed()
+        overridePendingTransition(R.anim.screen_close_in, R.anim.screen_close_out)
+    }
+
+    private fun closeWithTransition() {
+        finish()
+        overridePendingTransition(R.anim.screen_close_in, R.anim.screen_close_out)
     }
 
     private fun voicesDir(): File = File(noBackupFilesDir, "voices")

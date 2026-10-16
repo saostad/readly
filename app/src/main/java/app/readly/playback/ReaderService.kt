@@ -1680,7 +1680,7 @@ class ReaderService : Service() {
         }
         // No ic_media_stop on the platform; the close glyph reads as stop here.
         return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_notif_play)
             .setContentTitle(notificationTitle(snap))
             .setContentText(snap.currentText.ifBlank { statusLine })
             .setContentIntent(openApp)
@@ -1740,7 +1740,7 @@ class ReaderService : Service() {
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
         )
         return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_notif_play)
             .setContentTitle(snap.title.ifBlank { "Readly" })
             .setContentText(ask)
             .setStyle(Notification.BigTextStyle().bigText(ask))

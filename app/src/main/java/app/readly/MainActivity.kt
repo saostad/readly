@@ -146,6 +146,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         setupSampleButton.setOnClickListener { toggleSetupSample() }
         chooseVoiceButton.setOnClickListener {
             startActivity(Intent(this, VoicesActivity::class.java))
+            overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
         }
         downloadButton.setOnClickListener { startInstall() }
         retryButton.setOnClickListener { startInstall() }
@@ -177,6 +178,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         }
         miniBar.setOnClickListener {
             startActivity(Intent(this, NowPlayingActivity::class.java))
+            overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
         }
         miniToggle.setOnClickListener { sendAction(ReaderService.ACTION_TOGGLE) }
         refreshChips()
@@ -319,6 +321,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         val title = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(60) ?: ""
         ReaderService.read(this, text, title, SourceFormat.PLAIN)
         startActivity(Intent(this, NowPlayingActivity::class.java))
+        overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
     }
 
     private fun sendAction(action: String) {

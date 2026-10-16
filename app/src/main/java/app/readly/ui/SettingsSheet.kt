@@ -44,6 +44,7 @@ class SettingsSheet(
         dialog.findViewById<Button>(R.id.sheetChangePack).setOnClickListener {
             dialog.dismiss()
             activity.startActivity(Intent(activity, VoicesActivity::class.java))
+            activity.overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
         }
         fillSpeakers(dialog, pack)
         fillSpeed(dialog)

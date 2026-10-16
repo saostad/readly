@@ -57,7 +57,7 @@ class NowPlayingActivity : Activity() {
         speedChip = findViewById(R.id.npSpeedChip)
         speakerChip = findViewById(R.id.npSpeakerChip)
 
-        findViewById<ImageButton>(R.id.closeButton).setOnClickListener { finish() }
+        findViewById<ImageButton>(R.id.closeButton).setOnClickListener { closeWithTransition() }
         findViewById<ImageButton>(R.id.npPrev).setOnClickListener {
             sendAction(ReaderService.ACTION_PREVIOUS)
         }
@@ -82,6 +82,17 @@ class NowPlayingActivity : Activity() {
     override fun onStop() {
         ReaderState.removeListener(readerListener)
         super.onStop()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        super.onBackPressed()
+        overridePendingTransition(R.anim.screen_close_in, R.anim.screen_close_out)
+    }
+
+    private fun closeWithTransition() {
+        finish()
+        overridePendingTransition(R.anim.screen_close_in, R.anim.screen_close_out)
     }
 
     private fun sendAction(action: String) {

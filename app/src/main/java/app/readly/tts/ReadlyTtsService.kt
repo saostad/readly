@@ -39,6 +39,10 @@ class ReadlyTtsService : TextToSpeechService() {
 
     private val pitchLogged = AtomicBoolean(false)
 
+    /** Last logged language→pack pair, so the pick is logged once per load. */
+    @Volatile
+    private var lastTtsLogKey: String? = null
+
     @Volatile
     private var currentLang: Array<String> = arrayOf("eng", "", "")
 
@@ -138,6 +142,11 @@ class ReadlyTtsService : TextToSpeechService() {
         }
         val speed = (request.speechRate / 100f).coerceIn(0.5f, 2.0f)
         val lang = iso3ToLang2(request.language) ?: "en"
+        val logKey = "$lang/${pack.id}"
+        if (logKey != lastTtsLogKey) {
+            lastTtsLogKey = logKey
+            Log.i("Readly", "System TTS: $lang → ${pack.id}")
+        }
         val rate = try {
             engines.preload(pack.id)
         } catch (e: Exception) {
