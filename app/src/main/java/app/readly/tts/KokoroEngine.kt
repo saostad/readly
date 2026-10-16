@@ -71,7 +71,7 @@ class KokoroEngine(store: VoiceModelStore) : Closeable {
         }
         if (text.isBlank()) return FloatArray(0)
         val startMs = SystemClock.elapsedRealtime()
-        val audio = tts.generateWithCallback(text, speakerId, speed) { if (isStopped()) 0 else 1 }
+        val audio = tts.generateWithCallback(text, speakerId, speed, StopCallback(isStopped))
         val synthMs = SystemClock.elapsedRealtime() - startMs
         val audioMs = if (audio.sampleRate > 0) audio.samples.size * 1000.0 / audio.sampleRate else 0.0
         val rtf = if (audioMs > 0) synthMs / audioMs else 0.0
@@ -102,4 +102,19 @@ class KokoroEngine(store: VoiceModelStore) : Closeable {
 
     private fun loadError(dir: String, e: Throwable): String =
         "Could not load the Kokoro voice from $dir: ${e.javaClass.name}: ${e.message}"
+}
+
+/**
+ * JNI callback for [OfflineTts.generateWithCallback]. This must stay a named class implementing
+ * `(FloatArray) -> Int`, never a lambda: sherpa-onnx's JNI calls
+ * `GetMethodID(cls, "invoke", "([F)Ljava/lang/Integer;")`, but Kotlin 2.x compiles lambdas with
+ * invokedynamic and D8 then emits only the erased bridge `invoke(Object)Object`, which aborts
+ * the app on first synthesis with:
+ *
+ * `JNI DETECTED ERROR IN APPLICATION: JNI NewFloatArray called with pending exception
+ * java.lang.NoSuchMethodError: no non-static method
+ * "Lapp/readly/tts/KokoroEngine$$ExternalSyntheticLambda0;.invoke([F)Ljava/lang/Integer;"`
+ */
+internal class StopCallback(private val isStopped: () -> Boolean) : (FloatArray) -> Int {
+    override fun invoke(samples: FloatArray): Int = if (isStopped()) 0 else 1
 }
