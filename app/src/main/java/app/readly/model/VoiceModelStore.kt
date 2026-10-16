@@ -66,6 +66,10 @@ class VoiceModelStore(
         fun httpUrlOpener(url: String): DownloadConnection = HttpDownloadConnection(url)
     }
 
+    /** Installed model dir (`<base>/kokoro-int8-en-v0_19`); valid once [isInstalled]. */
+    val modelDir: File
+        get() = File(baseDir, MODEL_NAME)
+
     /** True only if the model dir holds the marker, the three files and the data dir. */
     fun isInstalled(): Boolean {
         val dir = File(baseDir, MODEL_NAME)
