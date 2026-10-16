@@ -3,7 +3,7 @@
     <string name="app_name">Readly</string>
 
     <string name="setup_title">One-time voice download</string>
-    <string name="setup_body">Readly reads aloud with Kokoro, a natural-sounding voice that runs entirely on your phone. It needs a one-time 320 MB download. After that, reading works offline and nothing you read leaves your device.</string>
+    <string name="setup_body">Readly reads aloud with Kokoro, a natural-sounding voice that runs entirely on your phone. It needs a one-time 320 MB download. After that, reading works offline and nothing you read leaves your device. Setup takes a minute or two on Wi-Fi.</string>
     <string name="migration_note">Readly now uses a faster version of the voice. The old one (103 MB) is removed after this download.</string>
     <string name="download_button">Download voice (320 MB)</string>
     <string name="download_help">Starts the one-time download. Afterwards reading works offline.</string>
