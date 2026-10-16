@@ -82,8 +82,16 @@ class ReaderService : Service() {
             )
         }
 
+        /**
+         * True once the engine is loaded. Checked by [preload] so reopening the app
+         * doesn't restart the service (and flash a notification) for nothing.
+         */
+        @Volatile
+        var engineLoaded = false
+
         /** Loads the voice in the background so the next READ starts instantly. */
         fun preload(context: Context) {
+            if (engineLoaded) return
             context.startForegroundService(
                 Intent(context, ReaderService::class.java).setAction(ACTION_PRELOAD),
             )
@@ -249,6 +257,7 @@ class ReaderService : Service() {
                         Log.w("Readly", "Closing the Kokoro voice failed", e)
                     }
                     engine = null
+                    engineLoaded = false
                 },
                 timeoutMs = 10_000,
             )
@@ -440,6 +449,7 @@ class ReaderService : Service() {
                 if (engine == null) {
                     engine = KokoroEngine(store)
                     engineRate = engine!!.sampleRate
+                    engineLoaded = true
                 }
                 engine
             } catch (e: Exception) {
@@ -503,11 +513,11 @@ class ReaderService : Service() {
                 mine.stop()
                 postError(e)
             },
-            onUnderrun = {
+            onUnderrun = { index ->
                 Log.w(
                     "Readly",
-                    "Playback underrun: synthesis can't keep up on this phone, " +
-                        "you may hear gaps between sentences.",
+                    "Playback underrun waiting for chunk $index: synthesis can't keep " +
+                        "up on this phone, you may hear gaps between sentences.",
                 )
             },
         )
@@ -656,6 +666,11 @@ class ReaderService : Service() {
 
         override fun flush() {
             try {
+                // flush() is a no-op on a running track, so pause first: that also
+                // drops the ~0.5 s already queued, and the head reads 0 again after
+                // flushing a paused track, so the next pipeline's drain() measures
+                // correctly. ensureTrack calls play() for the next pipeline.
+                track.pause()
                 track.flush()
             } catch (_: Exception) {
                 // Terminal state; stop() must still join.
@@ -711,15 +726,22 @@ class ReaderService : Service() {
         }
     }
 
-    /** Detaches from the foreground and schedules the idle shutdown. */
+    /** Leaves the foreground and schedules the idle shutdown. */
     private fun goIdle() {
         mainHandler.post {
+            val status = ReaderState.snapshot.status
+            val quiet = status == ReaderStatus.IDLE || status == ReaderStatus.FINISHED
             if (inForeground) {
                 inForeground = false
-                stopForeground(STOP_FOREGROUND_DETACH)
+                stopForeground(if (quiet) STOP_FOREGROUND_REMOVE else STOP_FOREGROUND_DETACH)
+            }
+            if (quiet) {
+                // No lingering "Ready" notification: nothing is actionable.
+                notificationManager.cancel(NOTIF_ID)
             }
             abandonFocus()
-            updateNotification()
+            // Only ERROR keeps a detached notification so the user can see the text.
+            if (status == ReaderStatus.ERROR) updateNotification() else syncSession()
             mainHandler.removeCallbacks(idleShutdown)
             mainHandler.postDelayed(idleShutdown, IDLE_TIMEOUT_MS)
         }

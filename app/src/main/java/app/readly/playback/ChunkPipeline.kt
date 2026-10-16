@@ -35,8 +35,9 @@ interface AudioSink {
  *   flushes the sink and joins both threads. It never joins the calling thread, so it is
  *   safe to call from inside a callback. After [stop] returns, no further callback runs.
  * - An exception in [synth] or [sink] reports [onError] once and stops the pipeline.
- * - [onUnderrun] fires when the consumer waited for the producer mid-playback (the
- *   engine can't keep up); the initial buffering before the first chunk doesn't count.
+ * - [onUnderrun] fires with the awaited chunk index when the consumer waited for the
+ *   producer mid-playback (the engine can't keep up), at most once per chunk gap; the
+ *   initial buffering before the first chunk doesn't count.
  */
 class ChunkPipeline(
     private val chunks: List<Chunk>,
@@ -47,7 +48,7 @@ class ChunkPipeline(
     private val onChunkStarted: (Int) -> Unit,
     private val onFinished: () -> Unit,
     private val onError: (Throwable) -> Unit,
-    private val onUnderrun: () -> Unit = {},
+    private val onUnderrun: (Int) -> Unit = {},
 ) {
     private data class Ready(val index: Int, val samples: FloatArray)
 
@@ -196,6 +197,8 @@ class ChunkPipeline(
     private fun runConsumer() {
         try {
             var firstTaken = false
+            var nextIndex = startIndex.coerceIn(0, chunks.size)
+            var underrunFired = false
             while (true) {
                 if (stopped.get()) return
                 val item = try {
@@ -206,9 +209,10 @@ class ChunkPipeline(
                 if (item == null) {
                     // Queue empty while active: the producer can't keep up. The initial
                     // fill before the first chunk is expected buffering, not an underrun.
-                    if (firstTaken && !paused && !stopped.get()) {
+                    if (firstTaken && !underrunFired && !paused && !stopped.get()) {
+                        underrunFired = true
                         try {
-                            onUnderrun()
+                            onUnderrun(nextIndex)
                         } catch (_: Exception) {
                             // Best-effort signal; never break playback.
                         }
@@ -217,6 +221,8 @@ class ChunkPipeline(
                 }
                 if (item === Finish) break
                 item as Ready
+                nextIndex = item.index + 1
+                underrunFired = false
                 aheadSlots.release()
                 if (stopped.get()) return
                 if (!waitIfPaused()) return

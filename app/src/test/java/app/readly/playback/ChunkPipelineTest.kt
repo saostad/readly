@@ -244,7 +244,7 @@ class ChunkPipelineTest {
     @Test
     fun pipeline_slowProducer_reportsUnderrunThenFinishes() {
         val sink = FakeSink()
-        val underruns = Collections.synchronizedList(mutableListOf<Unit>())
+        val underruns = Collections.synchronizedList(mutableListOf<Int>())
         val underrunArrived = CountDownLatch(1)
         val finished = CountDownLatch(1)
         val pipeline = ChunkPipeline(
@@ -259,8 +259,8 @@ class ChunkPipelineTest {
             onChunkStarted = {},
             onFinished = { finished.countDown() },
             onError = { throw AssertionError("unexpected error", it) },
-            onUnderrun = {
-                underruns.add(Unit)
+            onUnderrun = { index ->
+                underruns.add(index)
                 underrunArrived.countDown()
             },
         )
@@ -269,6 +269,39 @@ class ChunkPipelineTest {
             assertTrue(underrunArrived.await(TIMEOUT_S, TimeUnit.SECONDS))
             assertTrue(finished.await(TIMEOUT_S, TimeUnit.SECONDS))
             assertTrue(underruns.isNotEmpty())
+        } finally {
+            pipeline.stop()
+        }
+    }
+
+    @Test
+    fun pipeline_underrun_reportsAwaitedIndexOncePerGap() {
+        val sink = FakeSink()
+        val underruns = Collections.synchronizedList(mutableListOf<Int>())
+        val finished = CountDownLatch(1)
+        val pipeline = ChunkPipeline(
+            chunks = chunks(3),
+            startIndex = 0,
+            sampleRate = SAMPLE_RATE,
+            synth = { _, _ ->
+                // 700 ms per chunk vs the 200 ms consumer poll: several empty
+                // polls per gap, but only one report each, naming the chunk
+                // the consumer is waiting for.
+                Thread.sleep(700)
+                samples(50)
+            },
+            sink = sink,
+            onChunkStarted = {},
+            onFinished = { finished.countDown() },
+            onError = { throw AssertionError("unexpected error", it) },
+            onUnderrun = { underruns.add(it) },
+        )
+        try {
+            pipeline.start()
+            assertTrue(finished.await(TIMEOUT_S, TimeUnit.SECONDS))
+            // One gap before chunk 1 and one before chunk 2; the initial fill
+            // before chunk 0 is buffering, not an underrun.
+            assertEquals(listOf(1, 2), underruns)
         } finally {
             pipeline.stop()
         }
