@@ -87,9 +87,11 @@ class SentenceChunkerTest {
 
     @Test
     fun chunk_shortSentences_mergeForwardTo250Chars() {
-        val chunks = SentenceChunker.chunk("Hi. OK. This is a longer sentence here.")
+        // First sentence is 20 chars, so the tiny-first merge (< 20) doesn't fire;
+        // this still exercises the normal < 40-char merge for the rest.
+        val chunks = SentenceChunker.chunk("Hello there, friend. OK. This is a longer sentence here.")
         assertEquals(
-            listOf("Hi.", "OK. This is a longer sentence here."),
+            listOf("Hello there, friend.", "OK. This is a longer sentence here."),
             chunks.map { it.text },
         )
     }
@@ -109,10 +111,12 @@ class SentenceChunkerTest {
     @Test
     fun chunk_longSentenceWithoutPunctuation_splitsAtSpace() {
         // Capital "Word" so BreakIterator really starts a new sentence here.
+        // Long intro (26 chars) so the tiny-first merge doesn't fire.
         val long = "Word " + "word ".repeat(79) + "tail."
         assertTrue(long.length > 300)
-        val chunks = SentenceChunker.chunk("Intro here. $long")
+        val chunks = SentenceChunker.chunk("This introduction is here. $long")
         assertEquals(3, chunks.size)
+        assertEquals("This introduction is here.", chunks[0].text)
         assertTrue(chunks[1].text.length <= 300)
         assertTrue(chunks[2].text.length <= 300)
         assertEquals(long, chunks[1].text + " " + chunks[2].text)
@@ -160,7 +164,7 @@ class SentenceChunkerTest {
     fun chunk_paragraphs_neverCrossBreaks() {
         val chunks = SentenceChunker.chunk("First para one. Two here.\n\nSecond para here. More words.")
         assertEquals(
-            listOf("First para one.", "Two here.", "Second para here. More words."),
+            listOf("First para one. Two here.", "Second para here. More words."),
             chunks.map { it.text },
         )
         assertTrue(chunks.none { '\n' in it.text })
@@ -180,8 +184,12 @@ class SentenceChunkerTest {
 
     @Test
     fun chunk_fa_splitsAtSemicolon() {
-        val chunks = SentenceChunker.chunk("او آمد؛ نشست.", "fa")
-        assertEquals(listOf("او آمد؛", "نشست."), chunks.map { it.text })
+        // First sentence is 22 chars, so the tiny-first merge (< 20) doesn't fire.
+        val chunks = SentenceChunker.chunk("او دیروز به خانه آمد؛ نشست و استراحت کرد.", "fa")
+        assertEquals(
+            listOf("او دیروز به خانه آمد؛", "نشست و استراحت کرد."),
+            chunks.map { it.text },
+        )
     }
 
     @Test
@@ -209,6 +217,35 @@ class SentenceChunkerTest {
         assertEquals(first, chunks[0].text + " " + chunks[1].text)
         for (chunk in chunks) {
             assertEquals(chunk.text, first.substring(chunk.start, chunk.end).trim())
+        }
+    }
+
+    @Test
+    fun chunk_tinyFirstSentence_mergesForwardWithin80Chars() {
+        val first = "سلام!"
+        val second = "این یک آزمایش است."
+        val third = "این یک جمله سوم بسیار طولانی است که باید در قطعه دوم قرار گیرد."
+        val input = "$first $second $third"
+        val chunks = SentenceChunker.chunk(input, "fa")
+        // The next sentence would exceed 80, so it is cut: the first chunk holds
+        // the first two sentences plus a word-boundary cut of the third.
+        assertEquals(2, chunks.size)
+        assertTrue(chunks[0].text.startsWith("$first $second"))
+        assertTrue(chunks[0].text.length <= 80)
+        for (chunk in chunks) {
+            assertEquals(chunk.text, input.substring(chunk.start, chunk.end).trim())
+        }
+    }
+
+    @Test
+    fun chunk_tinyFirstSentence_cutsNextWhenItExceeds80() {
+        val long = "word ".repeat(40).trim() + "."
+        val input = "Hi. $long"
+        val chunks = SentenceChunker.chunk(input)
+        assertTrue(chunks[0].text.startsWith("Hi. "))
+        assertTrue(chunks[0].text.length <= 60)
+        for (chunk in chunks) {
+            assertEquals(chunk.text, input.substring(chunk.start, chunk.end).trim())
         }
     }
 

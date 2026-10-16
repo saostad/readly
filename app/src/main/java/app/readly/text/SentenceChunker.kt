@@ -16,6 +16,8 @@ object SentenceChunker {
 
     /** First sentence this long or shorter is spoken whole, so audio starts fast. */
     private const val FIRST_WHOLE_MAX = 80
+    /** A first sentence shorter than this is merged forward so its audio isn't tiny. */
+    private const val FIRST_MERGE_MIN = 20
     /** Over-long first sentence: cut after the last `, ; : —` in this offset window. */
     private const val FIRST_PUNCT_MIN = 25
     private const val FIRST_PUNCT_MAX = 80
@@ -50,7 +52,33 @@ object SentenceChunker {
             if (isFirst) {
                 isFirst = false
                 val (firstStart, firstEnd) = sentences[0]
-                if (firstEnd - firstStart > FIRST_WHOLE_MAX) {
+                if (firstEnd - firstStart < FIRST_MERGE_MIN && sentences.size > 1) {
+                    // Tiny first sentence (e.g. "سلام!"): merge following sentences
+                    // from the same paragraph while the total stays <= 80 chars, so
+                    // the first audio isn't shorter than the second synth (underrun).
+                    val start = firstStart
+                    var included = 0
+                    var cut: Pair<Pair<Int, Int>, Pair<Int, Int>>? = null
+                    var i = 1
+                    while (i < sentences.size) {
+                        if (sentences[i].second - start <= FIRST_WHOLE_MAX) {
+                            included = i
+                            i++
+                        } else {
+                            cut = cutFirst(input, start, sentences[i].second, splitPunct)
+                            break
+                        }
+                    }
+                    if (cut != null) {
+                        val (head, rest) = cut
+                        out.add(Chunk(input.substring(head.first, head.second), head.first, head.second))
+                        sentences = listOf(rest) + sentences.drop(i + 1)
+                    } else {
+                        val end = sentences[included].second
+                        out.add(Chunk(input.substring(start, end), start, end))
+                        sentences = sentences.drop(included + 1)
+                    }
+                } else if (firstEnd - firstStart > FIRST_WHOLE_MAX) {
                     val (head, rest) = cutFirst(input, firstStart, firstEnd, splitPunct)
                     out.add(Chunk(input.substring(head.first, head.second), head.first, head.second))
                     sentences = listOf(rest) + sentences.drop(1)
