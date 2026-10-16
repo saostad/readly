@@ -26,7 +26,6 @@ import app.readly.playback.ReaderSnapshot
 import app.readly.playback.ReaderState
 import app.readly.playback.ReaderStatus
 import app.readly.text.SourceFormat
-import app.readly.tts.KokoroEngine
 import java.io.File
 import java.util.Locale
 
@@ -230,7 +229,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     }
 
     private fun setupVoiceSpinner() {
-        val names = KokoroEngine.SPEAKERS.map { it.second }
+        val names = store.pack.speakers
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, names)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         voiceSpinner.adapter = adapter

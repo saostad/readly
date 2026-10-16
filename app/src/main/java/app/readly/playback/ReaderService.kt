@@ -34,7 +34,7 @@ import app.readly.text.Chunk
 import app.readly.text.SentenceChunker
 import app.readly.text.SourceFormat
 import app.readly.text.TextSanitizer
-import app.readly.tts.KokoroEngine
+import app.readly.tts.SpeechEngine
 import java.io.File
 import java.io.IOException
 import java.net.URI
@@ -47,7 +47,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Background playback service: owns the [KokoroEngine], runs the [ChunkPipeline] and
+ * Background playback service: owns the [SpeechEngine], runs the [ChunkPipeline] and
  * publishes state to [ReaderState].
  *
  * Threading: the engine lives on the single `readly-tts` thread for the whole service
@@ -138,7 +138,7 @@ class ReaderService : Service() {
      * thread, so a racing second load is impossible).
      */
     @Volatile
-    private var engine: KokoroEngine? = null
+    private var engine: SpeechEngine? = null
 
     /** Sample rate of [engine]; written on `readly-tts` at load, read anywhere. */
     @Volatile
@@ -297,7 +297,7 @@ class ReaderService : Service() {
                     try {
                         engine?.close()
                     } catch (e: Exception) {
-                        Log.w("Readly", "Closing the Kokoro voice failed", e)
+                        Log.w("Readly", "Closing the voice failed", e)
                     }
                     engine = null
                     engineLoaded = false
@@ -486,7 +486,7 @@ class ReaderService : Service() {
             val eng = engine ?: return
             val warmSpeaker = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getInt(KEY_SPEAKER_ID, 0)
-                .coerceIn(0, KokoroEngine.SPEAKERS.size - 1)
+                .coerceIn(0, store.pack.speakers.size - 1)
             try {
                 val warmStart = SystemClock.elapsedRealtime()
                 eng.synthesize(
@@ -603,7 +603,7 @@ class ReaderService : Service() {
      * when already on `readly-tts`, otherwise waits FIFO behind any queued preload.
      * Must not be called on the main thread (it blocks).
      */
-    private fun ensureEngineOrThrow(): KokoroEngine {
+    private fun ensureEngineOrThrow(): SpeechEngine {
         engine?.let { return it }
         // A fetch shows FETCHING until the engine load actually starts; only then
         // does the status become LOADING_VOICE.
@@ -611,7 +611,7 @@ class ReaderService : Service() {
         updateNotification()
         return runOnTtsThreadAndWait({
             if (engine == null) {
-                engine = KokoroEngine(store)
+                engine = SpeechEngine(store)
                 engineRate = engine!!.sampleRate
                 engineLoaded = true
             }
@@ -747,7 +747,7 @@ class ReaderService : Service() {
     private fun synthChunk(text: String, isStopped: () -> Boolean): FloatArray {
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val speakerId = prefs.getInt(KEY_SPEAKER_ID, 0)
-            .coerceIn(0, KokoroEngine.SPEAKERS.size - 1)
+            .coerceIn(0, store.pack.speakers.size - 1)
         val speed = prefs.getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
         val begin = SystemClock.elapsedRealtime()
         val audio = runOnTtsThreadAndWait({ engine!!.synthesize(text, speakerId, speed, isStopped) })

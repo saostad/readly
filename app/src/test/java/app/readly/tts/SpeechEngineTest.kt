@@ -5,7 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class KokoroEngineTest {
+class SpeechEngineTest {
 
     @Test
     fun stopCallback_hasTypedInvokeMethodForJni() {
