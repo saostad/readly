@@ -37,6 +37,11 @@ object TextSanitizer {
 
     private val bareUrl = Regex("""https?://\S+|www\.\S+""")
     private val urlTrailingPunct = setOf(')', '.', ',', ';', ':', '!', '?', '"', '\'')
+    private val bracketRef =
+        Regex("""\[(\d{1,3}|[a-z]|citation needed|note \d+|nb \d+)\]""", RegexOption.IGNORE_CASE)
+    private val commaRun = Regex("""(\s*,){2,}""")
+    private val commaBeforePunct = Regex(""",\s*([.!?])""")
+    private val trailingComma = Regex(""",\s*$""")
     private val spaceBeforePunct = Regex("""\s+([,.;:!?])""")
     private val entity = Regex("""&(amp|lt|gt|quot|apos|nbsp);|&#(\d+);|&#x([0-9a-fA-F]+);""")
     private val dotsRun = Regex("""\.{2,}""")
@@ -49,6 +54,7 @@ object TextSanitizer {
 
     private fun cleanup(para: Para): String? {
         var text = removeUrls(para.text)
+        text = bracketRef.replace(text, "")
         text = decodeEntities(text)
         text = stripEmoji(text)
         // Ellipses and excited punctuation are meaningful: keep them in spoken form.
@@ -62,6 +68,12 @@ object TextSanitizer {
         text = text.replace("`", "")
         text = stripSymbolTokens(text).trim()
         // Removals above can strand a space before punctuation ("nice .").
+        text = spaceBeforePunct.replace(text, "$1")
+        // Empty table cells (icons/emoji removed above) strand commas: collapse
+        // runs and drop a comma before sentence punctuation or end of text.
+        text = commaRun.replace(text, ",")
+        text = commaBeforePunct.replace(text, "$1")
+        text = trailingComma.replace(text, "")
         text = spaceBeforePunct.replace(text, "$1")
         if (text.isEmpty()) return null
         if (para.punctuate && text.last() !in PUNCT_END) text += "."
@@ -158,6 +170,7 @@ object TextSanitizer {
     private val codeSpan = Regex("""`([^`]+)`""")
     private val codePlaceholder = Regex("\u0000(\\d+)\u0000")
     private val tag = Regex("""</?[A-Za-z][^>]*>""")
+    private val badgeLink = Regex("""\[(!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\]))\](?:\([^)]*\)|\[[^\]]*\])""")
     private val image = Regex("""!\[([^\]]*)\]\([^)]*\)""")
     private val link = Regex("""\[([^\]]*)\]\([^)]*\)""")
     private val refLink = Regex("""\[([^\]]*)\]\[[^\]]*\]""")
@@ -339,14 +352,18 @@ object TextSanitizer {
             codes.add(m.groups[1]!!.value)
             "\u0000${codes.size - 1}\u0000"
         }
-        val joined = masked.split('|').map { it.trim() }.filter { it.isNotEmpty() }
+        // Clean each cell first (icons/badges/emoji drop out), then join the
+        // survivors, so emptied cells never strand runs of commas.
+        return masked.split('|').map { it.trim() }.filter { it.isNotEmpty() }
+            .map { restoreCodes(structureInline(it), codes).trim() }
+            .mapNotNull { cleanup(Para(it, punctuate = false)) }
             .joinToString(", ")
-        return restoreCodes(structureInline(joined), codes)
     }
 
     private fun structureInline(text: String): String {
         // Tags become a space (collapsed later) so inline tags never glue words.
         var result = tag.replace(text, " ")
+        result = badgeLink.replace(result, "")
         result = image.replace(result, "$1")
         result = link.replace(result, "$1")
         result = refLink.replace(result, "$1")
@@ -372,12 +389,30 @@ object TextSanitizer {
     private const val HTML_REMOVE =
         "script, style, noscript, template, svg, canvas, iframe, " +
             "nav, header, footer, aside, form, button"
+    private const val WIKI_REMOVE =
+        "sup.reference, .mw-ref, ol.references, .references, .reflist, " +
+            ".mw-references-wrap, .mw-editsection, .navbox, .hatnote, .noprint"
     private val htmlBlocks = setOf("p", "div", "blockquote", "section", "article")
     private val htmlHeadings = setOf("h1", "h2", "h3", "h4", "h5", "h6")
 
     private fun htmlParagraphs(input: String): List<Para> {
         val doc = Jsoup.parse(input)
         doc.select(HTML_REMOVE).remove()
+        doc.select(WIKI_REMOVE).remove()
+        doc.select("sup").forEach { sup ->
+            if (bracketRef.containsMatchIn(sup.text())) sup.remove()
+        }
+        // Badge links (an <a> whose only meaningful child is an <img>) are
+        // removed before images become alt text, so badges are never spoken.
+        doc.select("a").forEach { link ->
+            val kids = link.children()
+            if (kids.isNotEmpty() &&
+                kids.all { it.tagName().equals("img", ignoreCase = true) } &&
+                link.ownText().isBlank()
+            ) {
+                link.remove()
+            }
+        }
         doc.select("figure > img").remove()
         doc.select("img").forEach { img ->
             val alt = img.attr("alt")
@@ -459,6 +494,7 @@ object TextSanitizer {
             .filter { it.tagName().lowercase() == "td" || it.tagName().lowercase() == "th" }
             .map { it.text().trim() }
             .filter { it.isNotEmpty() }
+            .mapNotNull { cleanup(Para(it, punctuate = false)) }
         return Para(cells.joinToString(", "), punctuate = true)
     }
 

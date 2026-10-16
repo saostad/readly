@@ -50,6 +50,7 @@ class ArticleFetcher(
         const val MAX_BYTES = 5L * 1024 * 1024
         const val MAX_REDIRECTS = 5
         const val MIN_ARTICLE_CHARS = 200
+        const val MAX_TITLE_CHARS = 120
 
         const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -165,13 +166,36 @@ class ArticleFetcher(
         }
         val articleText = article?.textContent.orEmpty()
         val articleHtml = article?.content.orEmpty()
+        val ogTitle = doc.selectFirst("meta[property=og:title]")?.attr("content")?.trim().orEmpty()
         if (article == null || articleHtml.isBlank() || articleText.length < MIN_ARTICLE_CHARS) {
             onWarn(FALLBACK_NOTICE)
-            val title = doc.title().ifBlank { host }
-            return Document(title, doc.body().html(), SourceFormat.HTML, FALLBACK_NOTICE)
+            val raw = ogTitle.ifBlank { doc.title() }.ifBlank { host }
+            return Document(cleanTitle(raw, host), doc.body().html(), SourceFormat.HTML, FALLBACK_NOTICE)
         }
-        val title = article.title.orEmpty().ifBlank { doc.title().ifBlank { host } }
-        return Document(title, articleHtml, SourceFormat.HTML, null)
+        val raw = ogTitle.ifBlank { article.title.orEmpty().ifBlank { doc.title() } }.ifBlank { host }
+        return Document(cleanTitle(raw, host), articleHtml, SourceFormat.HTML, null)
+    }
+
+    /**
+     * Shortens a page title for speech and display: strips one trailing site
+     * suffix (` - `, ` | `, ` · `) when at least 10 chars remain, then caps at
+     * [MAX_TITLE_CHARS] on a word boundary with `…`.
+     */
+    private fun cleanTitle(raw: String, host: String): String {
+        var title = raw.trim()
+        if (title.isBlank() || title == host) return host
+        val cuts = listOf(" - ", " | ", " · ").map { title.lastIndexOf(it) }
+        val cut = cuts.maxOrNull() ?: -1
+        if (cut > 0) {
+            val left = title.substring(0, cut).trim()
+            if (left.length >= 10) title = left
+        }
+        if (title.length > MAX_TITLE_CHARS) {
+            val head = title.substring(0, MAX_TITLE_CHARS - 1)
+            val space = head.lastIndexOf(' ')
+            title = (if (space > 0) head.substring(0, space) else head).trimEnd() + "…"
+        }
+        return title.ifBlank { host }
     }
 
     /**

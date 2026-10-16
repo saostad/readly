@@ -232,4 +232,73 @@ class TextSanitizerTest {
             TextSanitizer.sanitize("$line1\n$line2", SourceFormat.PLAIN),
         )
     }
+
+    @Test
+    fun sanitize_referenceMarkers_removedFromAllFormats() {
+        val input = "Turns text into speech.[1] The reverse[2] process[citation needed] " +
+            "reads aloud[note 1] every day[nb 2] or so[a]."
+        val expected = "Turns text into speech. The reverse process reads aloud every day or so."
+        assertEquals(expected, TextSanitizer.sanitize(input, SourceFormat.PLAIN))
+        assertEquals(expected, TextSanitizer.sanitize(input, SourceFormat.MARKDOWN))
+        assertEquals(
+            expected,
+            TextSanitizer.sanitize("<p>$input</p>", SourceFormat.HTML),
+        )
+    }
+
+    @Test
+    fun sanitize_html_wikipediaClutter_removed() {
+        val input = """
+            <html><body>
+            <div class="hatnote">This article is about speech.</div>
+            <p>Turns text into speech.<sup class="reference"><a href="#c1">[1]</a></sup>
+            The reverse process<sup>[2]</sup> reads aloud.</p>
+            <div class="navbox">Navigation box</div>
+            <ol class="references"><li>↑ "AI Text to speech for videos". synthesia.io.</li></ol>
+            </body></html>
+            """.trimIndent()
+        assertEquals(
+            "Turns text into speech. The reverse process reads aloud.",
+            TextSanitizer.sanitize(input, SourceFormat.HTML),
+        )
+    }
+
+    @Test
+    fun sanitize_table_emptyCells_dropped() {
+        val markdown = "| x64 | \uD83C\uDF89 |  |\n| arm64 |  | \uD83D\uDE80 |"
+        assertEquals(
+            "x64.\n\narm64.",
+            TextSanitizer.sanitize(markdown, SourceFormat.MARKDOWN),
+        )
+        val html = "<table><tr><td>x64</td><td>\uD83C\uDF89</td><td></td></tr></table>"
+        assertEquals("x64.", TextSanitizer.sanitize(html, SourceFormat.HTML))
+    }
+
+    @Test
+    fun sanitize_commaRuns_collapsed() {
+        assertEquals(
+            "Apples, oranges.",
+            TextSanitizer.sanitize("Apples, [1], oranges.", SourceFormat.PLAIN),
+        )
+        assertEquals("x64.", TextSanitizer.sanitize("x64,,,,,.", SourceFormat.PLAIN))
+    }
+
+    @Test
+    fun sanitize_badges_removed() {
+        assertEquals(
+            "and some text.",
+            TextSanitizer.sanitize(
+                "[![Ask DeepWiki](badge.svg)](https://deepwiki.com/foo) and some text.",
+                SourceFormat.MARKDOWN,
+            ),
+        )
+        assertEquals(
+            "and some text.",
+            TextSanitizer.sanitize(
+                "<p><a href=\"https://deepwiki.com\">" +
+                    "<img alt=\"Ask DeepWiki\" src=\"badge.svg\"></a> and some text.</p>",
+                SourceFormat.HTML,
+            ),
+        )
+    }
 }

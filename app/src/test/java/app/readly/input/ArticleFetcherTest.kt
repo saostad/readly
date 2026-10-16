@@ -234,4 +234,47 @@ class ArticleFetcherTest {
         assertEquals("example.com", doc.title)
         assertNull(doc.notice)
     }
+
+    @Test
+    fun fetch_title_stripsSiteSuffix() {
+        fun titleFor(pageTitle: String): String {
+            val url = "https://example.com/wiki"
+            val html = "<html><head><title>$pageTitle</title></head>" +
+                "<body><p>Almost nothing here.</p></body></html>"
+            return fetcherFor(mapOf(htmlPage(url, html.toByteArray()))).fetch(url).title
+        }
+        assertEquals("Speech synthesis", titleFor("Speech synthesis - Wikipedia"))
+        assertEquals("Article Title", titleFor("Article Title | Site Name"))
+        assertEquals("Page Title", titleFor("Page Title · Example"))
+        assertEquals("Hi - Blog", titleFor("Hi - Blog"))
+    }
+
+    @Test
+    fun fetch_title_prefersOgTitle() {
+        val url = "https://example.com/post"
+        val html = "<html><head><title>Long site title - Example</title>" +
+            "<meta property=\"og:title\" content=\"Real Article Title\">" +
+            "</head><body><p>Almost nothing here.</p></body></html>"
+        val doc = fetcherFor(mapOf(htmlPage(url, html.toByteArray()))).fetch(url)
+        assertEquals("Real Article Title", doc.title)
+    }
+
+    @Test
+    fun fetch_title_capsAt120CharsOnWordBoundary() {
+        val url = "https://example.com/long"
+        val long = "Short title " + "x".repeat(200)
+        val html = "<html><head><title>$long</title></head>" +
+            "<body><p>Almost nothing here.</p></body></html>"
+        assertEquals(
+            "Short title…",
+            fetcherFor(mapOf(htmlPage(url, html.toByteArray()))).fetch(url).title,
+        )
+        val hard = "y".repeat(150)
+        val htmlHard = "<html><head><title>$hard</title></head>" +
+            "<body><p>Almost nothing here.</p></body></html>"
+        assertEquals(
+            "y".repeat(119) + "…",
+            fetcherFor(mapOf(htmlPage(url, htmlHard.toByteArray()))).fetch(url).title,
+        )
+    }
 }
