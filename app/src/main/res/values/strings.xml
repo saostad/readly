@@ -51,7 +51,6 @@
     <string name="status_downloaded">Downloaded</string>
     <string name="status_not_downloaded">Not downloaded</string>
     <string name="play_sample_button">Play sample</string>
-    <string name="chip_format">%1$s · %2$d MB</string>
     <string name="voice_label">Voice:</string>
     <string name="sample_button">▶ Sample</string>
     <string name="stop_sample_button">■ Stop</string>
@@ -99,7 +98,8 @@
     <string name="tts_sample_fa">این ریدلی است، یک صدای روی دستگاه.</string>
     <string name="system_voice_title">System voice</string>
     <string name="system_voice_help">Used by TalkBack, Maps and other apps when Readly is your phone\'s text-to-speech engine. Pick a fast voice; screen readers need instant speech.</string>
-    <string name="system_voice_automatic">Automatic (fastest voice for each language)</string>
+    <string name="system_voice_automatic">Automatic</string>
+    <string name="system_voice_automatic_help">Uses the fastest downloaded voice for each language.</string>
     <string name="system_voice_settings_button">Open phone text-to-speech settings</string>
     <string name="tts_settings_path">Settings → System → Languages → Text-to-speech output</string>
     <string name="phone_voice_title">Phone voice</string>
@@ -145,7 +145,8 @@
 
     <string name="voice_packs_title">Voice packs</string>
     <string name="in_use_badge_caps">✓ IN USE</string>
-    <string name="download_main_format">Download · %1$d MB</string>
+    <string name="quality_label">Quality</string>
+    <string name="size_label">Size</string>
     <string name="lang_sheet_title">Language</string>
     <string name="voice_sheet_title">Voice</string>
     <string name="search_hint">Search</string>

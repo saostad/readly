@@ -1,5 +1,9 @@
 package app.readly.ui
 
+import app.readly.model.TestVoices
+import app.readly.model.VoiceCatalog
+import app.readly.model.VoiceFamily
+import app.readly.playback.ReaderService
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertTrue
@@ -13,6 +17,10 @@ import org.w3c.dom.Element
  * chip-styled view in every layout uses one of those styles — so no button text
  * ever wraps to two lines. Code-built buttons (VoicesActivity) use the same
  * styles via `defStyleRes`, which this file-based test can't see.
+ *
+ * Round 21 adds the other half of the rule: labels must not be cut off with
+ * `…` either. [voiceLabels_fitOneLine] sweeps every label-building function
+ * over the whole catalog at ≤ 18 characters.
  */
 class ButtonOneLineTest {
 
@@ -105,5 +113,74 @@ class ButtonOneLineTest {
         }
         assertTrue("no buttons found in layouts", checked > 0)
         if (bad.isNotEmpty()) fail("Buttons without the one-line style:\n" + bad.joinToString("\n"))
+    }
+
+    /** Reads a `<string name="...">` value from `res/values/strings.xml`. */
+    private fun stringValue(name: String): String {
+        val builder = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+        val tags = builder.parse(File(resDir(), "values/strings.xml"))
+            .getElementsByTagName("string")
+        for (i in 0 until tags.length) {
+            val element = tags.item(i) as? Element ?: continue
+            if (element.getAttribute("name") == name) return element.textContent.trim()
+        }
+        throw AssertionError("string $name not found in strings.xml")
+    }
+
+    /**
+     * No truncated labels: chips, segments and the main button fit one line
+     * (≤ 18 chars) for every catalog pack and every Piper language. Only voice
+     * names can push past it, and those are capped to their first word.
+     */
+    @Test
+    fun voiceLabels_fitOneLine() {
+        TestVoices.loadCatalog()
+        val bad = mutableListOf<String>()
+        fun check(label: String, what: String) {
+            if (label.length > MAX_LABEL_CHARS) bad.add("$what: \"$label\" (${label.length})")
+        }
+        for (pack in VoiceCatalog.ALL) {
+            if (pack.family == VoiceFamily.PIPER) {
+                check(VoiceCatalog.baseQuality(pack.variant), "${pack.id} quality")
+                check(
+                    VoiceCatalog.sizeLabel(
+                        VoiceCatalog.isCompactVariant(pack.variant),
+                        pack.sizeMb,
+                    ),
+                    "${pack.id} size",
+                )
+            } else {
+                check(
+                    VoiceCatalog.segmentLabel(pack.variant, pack.sizeMb),
+                    "${pack.id} segment",
+                )
+            }
+            check(VoiceCatalog.downloadLabel(pack.sizeMb), "${pack.id} download button")
+        }
+        for (lang in VoiceCatalog.piperLangs()) {
+            check(VoiceCatalog.langChipLabel(lang), "lang chip $lang")
+        }
+        val voices = VoiceCatalog.packsFor(VoiceFamily.PIPER)
+            .mapNotNull { it.voiceName }.distinct()
+        assertTrue("no Piper voices found", voices.isNotEmpty())
+        for (voice in voices) {
+            check(VoiceCatalog.voiceChipLabel(voice), "voice chip $voice")
+        }
+        // The disabled main-button states.
+        check(stringValue("in_use_badge"), "in-use badge")
+        val inUseFor = stringValue("in_use_for_format")
+        for (bucket in listOf("fa", "ar")) {
+            check(
+                String.format(inUseFor, ReaderService.langName(bucket)),
+                "in-use-for button $bucket",
+            )
+        }
+        if (bad.isNotEmpty()) {
+            fail("Labels over $MAX_LABEL_CHARS chars:\n" + bad.joinToString("\n"))
+        }
+    }
+
+    companion object {
+        private const val MAX_LABEL_CHARS = 18
     }
 }

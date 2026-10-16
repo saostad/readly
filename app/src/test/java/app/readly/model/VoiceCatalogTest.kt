@@ -1,6 +1,7 @@
 package app.readly.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -271,6 +272,49 @@ class VoiceCatalogTest {
             VoiceCatalog.SUPERTONIC3_LANGS,
             VoiceCatalog.byId("supertonic-3")!!.languages(),
         )
+    }
+
+    @Test
+    fun langChipLabel_showsRegionCode() {
+        assertEquals("English (US)", VoiceCatalog.langChipLabel("en_US"))
+        assertEquals("English (GB)", VoiceCatalog.langChipLabel("en_GB"))
+        assertEquals("Persian (IR)", VoiceCatalog.langChipLabel("fa_IR"))
+        assertEquals("Persian", VoiceCatalog.langChipLabel("fa"))
+        assertEquals("Persian + English", VoiceCatalog.langChipLabel("fa_en"))
+    }
+
+    @Test
+    fun voiceChipLabel_capsLongNamesAtFirstWord() {
+        assertEquals("Lessac", VoiceCatalog.voiceChipLabel("Lessac (English)"))
+        // Exactly 14 chars: kept whole.
+        assertEquals("Alba (English)", VoiceCatalog.voiceChipLabel("Alba (English)"))
+        assertEquals("Ganji", VoiceCatalog.voiceChipLabel("Ganji Adabi (Persian)"))
+        // A hyphenated single token splits on "-" too.
+        assertEquals(
+            "Rezahedayatfar",
+            VoiceCatalog.voiceChipLabel("Rezahedayatfar-Ibrahimwalk (Persian + English)"),
+        )
+    }
+
+    @Test
+    fun baseQuality_mapsCompactVariants() {
+        assertEquals("Standard", VoiceCatalog.baseQuality("Standard"))
+        assertEquals("Standard", VoiceCatalog.baseQuality("Compact"))
+        assertEquals("Low", VoiceCatalog.baseQuality("Low Compact"))
+        assertEquals("HD", VoiceCatalog.baseQuality("HD Compact"))
+        assertEquals("Tiny", VoiceCatalog.baseQuality("Tiny Compact"))
+        assertTrue(VoiceCatalog.isCompactVariant("Compact"))
+        assertTrue(VoiceCatalog.isCompactVariant("Low Compact"))
+        assertFalse(VoiceCatalog.isCompactVariant("Standard"))
+        assertFalse(VoiceCatalog.isCompactVariant("Low"))
+    }
+
+    @Test
+    fun segmentSizeAndDownloadLabels_matchSpec() {
+        assertEquals("v2 · 85 MB", VoiceCatalog.segmentLabel("v2", 85))
+        assertEquals("Full · 67 MB", VoiceCatalog.sizeLabel(false, 67))
+        assertEquals("Compact · 21 MB", VoiceCatalog.sizeLabel(true, 21))
+        assertEquals("Download · 21 MB", VoiceCatalog.downloadLabel(21))
     }
 
     @Test

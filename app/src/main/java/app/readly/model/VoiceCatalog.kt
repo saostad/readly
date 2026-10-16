@@ -383,6 +383,64 @@ object VoiceCatalog {
             it.lang == lang && it.voiceName == voiceName && it.variant == variant
         }
 
+    /** Canonical Piper quality order for the Quality segments. */
+    val PIPER_QUALITY_ORDER = listOf("Tiny", "Low", "Standard", "HD")
+
+    /**
+     * Base quality of a Piper [VoicePack.variant]: `"Compact"` is Standard's
+     * int8 build, `"Low Compact"` Low's, and the rest are their own quality.
+     * Piper variants only (other families reuse the word differently).
+     */
+    fun baseQuality(variant: String): String = when {
+        variant == "Compact" -> "Standard"
+        variant.endsWith(" Compact") -> variant.removeSuffix(" Compact")
+        else -> variant
+    }
+
+    /**
+     * True for the Piper int8 builds (`"Compact"`, `"Low Compact"`, …).
+     * Piper variants only.
+     */
+    fun isCompactVariant(variant: String): Boolean = variant.endsWith("Compact")
+
+    /**
+     * One-line control labels for the Voices screen. Every one fits without
+     * truncation: ButtonOneLineTest sweeps the whole catalog at ≤ 18 chars.
+     */
+
+    /** Family-card segment: `"v2 · 85 MB"`, `"Full · 320 MB"`. */
+    fun segmentLabel(variant: String, sizeMb: Int): String = "$variant · $sizeMb MB"
+
+    /** Piper Size segment: `"Full · 67 MB"` or `"Compact · 21 MB"`. */
+    fun sizeLabel(compact: Boolean, sizeMb: Int): String =
+        "${if (compact) "Compact" else "Full"} · $sizeMb MB"
+
+    /** Main download button: `"Download · 21 MB"`. */
+    fun downloadLabel(sizeMb: Int): String = "Download · $sizeMb MB"
+
+    /**
+     * Piper language chip: `"<Language> (<REGION CODE>)"`, e.g. `"English (US)"`;
+     * region-less codes show only the language. The list sheet keeps [langDisplay].
+     */
+    fun langChipLabel(lang: String): String {
+        if (lang == "fa_en") return langShort(lang)
+        val region = lang.substringAfter("_", "")
+        return if (region.isEmpty()) langShort(lang) else "${langShort(lang)} ($region)"
+    }
+
+    /** Voice names longer than this show their first word in the voice chip. */
+    const val VOICE_CHIP_MAX_CHARS = 14
+
+    /**
+     * Piper voice chip: the full name up to [VOICE_CHIP_MAX_CHARS] chars, else
+     * the first word (`"Lessac (English)"` → `"Lessac"`). A hyphenated single
+     * token splits on `"-"` too, so the longest catalog name still fits one line.
+     */
+    fun voiceChipLabel(voiceName: String): String {
+        if (voiceName.length <= VOICE_CHIP_MAX_CHARS) return voiceName
+        return voiceName.substringBefore(" ").substringBefore("-")
+    }
+
     /**
      * Short display name for the Storage list and the main screen, e.g.
      * `"Supertonic v2"`, `"Kokoro (Full)"`, `"Piper Lessac (HD)"`, `"Piper Ryan"`.

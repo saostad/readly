@@ -122,16 +122,10 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 if (voice in VoiceCatalog.piperVoices(lang)) card.piperVoice = voice
             }
             card.rebuildPickerChips()
-            card.rebuildSegments()
             card.selectedPackId = card.chipPacks().firstOrNull()?.id ?: card.selectedPackId
-            // Re-check the segment for the new selection.
-            for (i in 0 until card.chips.childCount) {
-                val chip = card.chips.getChildAt(i) as RadioButton
-                if (chip.tag == card.selectedPackId) {
-                    card.chips.check(chip.id)
-                    break
-                }
-            }
+            // Rebuilds re-check the quality and size segments for the new selection.
+            card.rebuildSegments()
+            card.rebuildSizeGroup()
         }
         card.update()
     }
@@ -234,7 +228,33 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply {
-                topMargin = dp(10)
+                topMargin = dp(if (info.family == VoiceFamily.PIPER) 4 else 10)
+                bottomMargin = dp(8)
+            }
+        }
+        /** Piper-only captions and Size control; never added for other families. */
+        val qualityCaption = TextView(this@VoicesActivity, null, 0, R.style.Small).apply {
+            setText(R.string.quality_label)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(8) }
+        }
+        val sizeCaption = TextView(this@VoicesActivity, null, 0, R.style.Small).apply {
+            setText(R.string.size_label)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(4) }
+        }
+        val sizeGroup: RadioGroup = RadioGroup(this@VoicesActivity).apply {
+            orientation = RadioGroup.HORIZONTAL
+            setBackgroundResource(R.drawable.segmented_track)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = dp(4)
                 bottomMargin = dp(8)
             }
         }
@@ -332,8 +352,13 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                     },
                 )
                 rebuildPickerChips()
+                root.addView(qualityCaption)
             }
             root.addView(chips)
+            if (info.family == VoiceFamily.PIPER) {
+                root.addView(sizeCaption)
+                root.addView(sizeGroup)
+            }
             root.addView(statusText)
             val actionRow = LinearLayout(this@VoicesActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -358,9 +383,14 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             root.addView(progressLabel)
             root.addView(errorText)
             rebuildSegments()
+            rebuildSizeGroup()
         }
 
-        /** Packs behind this card's segments: the family, or the selected Piper voice. */
+        /**
+         * Packs behind this card's pickers: the family, or the selected Piper
+         * voice (its qualities feed the Quality segments, its builds the Size
+         * control).
+         */
         fun chipPacks(): List<VoicePack> {
             val packs = VoiceCatalog.packsFor(info.family)
             return if (info.family == VoiceFamily.PIPER) {
@@ -373,8 +403,8 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         /** Repaints the language/voice picker chips from the current selection. */
         fun rebuildPickerChips() {
             val lang = piperLang ?: return
-            langChip?.text = VoiceCatalog.langDisplay(lang)
-            voiceChip?.text = piperVoice
+            langChip?.text = VoiceCatalog.langChipLabel(lang)
+            voiceChip?.text = piperVoice?.let { VoiceCatalog.voiceChipLabel(it) }
         }
 
         /** Opens the language list sheet (with search, the list is long). */
@@ -395,6 +425,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 selectedPackId = defaultIn(chipPacks()).id
                 rebuildPickerChips()
                 rebuildSegments()
+                rebuildSizeGroup()
                 update()
             }.show()
         }
@@ -418,6 +449,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 }
                 rebuildPickerChips()
                 rebuildSegments()
+                rebuildSizeGroup()
                 update()
                 // A newly picked voice introduces itself, unless that would talk
                 // over the reader.
@@ -433,21 +465,47 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             }.show()
         }
 
+        /** One segment in a picker group: equal weight, no radio dot. */
+        private fun makeSegment(tag: String, text: String): RadioButton =
+            RadioButton(this@VoicesActivity, null, 0, R.style.Segment).apply {
+                id = View.generateViewId()
+                this.tag = tag
+                this.text = text
+                buttonDrawable = null
+                layoutParams = RadioGroup.LayoutParams(
+                    0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    1f,
+                )
+            }
+
+        /**
+         * Rebuilds the segments: one per pack for other families, or the Piper
+         * Quality segments (bare quality names, no sizes). The current selection
+         * is re-checked.
+         */
         fun rebuildSegments() {
             chips.setOnCheckedChangeListener(null)
             chips.removeAllViews()
-            for (pack in chipPacks()) {
-                val chip = RadioButton(this@VoicesActivity, null, 0, R.style.Segment).apply {
-                    id = View.generateViewId()
-                    tag = pack.id
-                    text = getString(R.string.chip_format, pack.variant, pack.sizeMb)
-                    buttonDrawable = null
-                    layoutParams = RadioGroup.LayoutParams(
-                        0,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        1f,
-                    )
+            if (info.family == VoiceFamily.PIPER) {
+                val current = currentQuality()
+                for (quality in piperQualities()) {
+                    val chip = makeSegment(quality, quality)
+                    chips.addView(chip)
+                    if (quality == current) chips.check(chip.id)
                 }
+                chips.setOnCheckedChangeListener { group, checkedId ->
+                    val quality = group.findViewById<RadioButton>(checkedId)?.tag as? String
+                        ?: return@setOnCheckedChangeListener
+                    selectQuality(quality)
+                }
+                return
+            }
+            for (pack in chipPacks()) {
+                val chip = makeSegment(
+                    pack.id,
+                    VoiceCatalog.segmentLabel(pack.variant, pack.sizeMb),
+                )
                 chips.addView(chip)
                 if (pack.id == selectedPackId) chips.check(chip.id)
             }
@@ -456,6 +514,65 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 selectedPackId = id
                 update()
             }
+        }
+
+        /**
+         * Rebuilds the Piper Size control for the selected quality. Visible only
+         * when a compact build exists for it; the Full build is always there
+         * when Compact is (verified over the catalog), anything else falls back
+         * to whatever build exists. No-op for other families.
+         */
+        fun rebuildSizeGroup() {
+            if (info.family != VoiceFamily.PIPER) return
+            val quality = currentQuality()
+            val packs = chipPacks().filter { VoiceCatalog.baseQuality(it.variant) == quality }
+            val full = packs.find { !VoiceCatalog.isCompactVariant(it.variant) }
+            val compact = packs.find { VoiceCatalog.isCompactVariant(it.variant) }
+            val visible = compact != null
+            sizeCaption.visibility = if (visible) View.VISIBLE else View.GONE
+            sizeGroup.visibility = if (visible) View.VISIBLE else View.GONE
+            if (!visible) return
+            sizeGroup.setOnCheckedChangeListener(null)
+            sizeGroup.removeAllViews()
+            for (pack in listOfNotNull(full, compact)) {
+                val chip = makeSegment(
+                    pack.id,
+                    VoiceCatalog.sizeLabel(VoiceCatalog.isCompactVariant(pack.variant), pack.sizeMb),
+                )
+                sizeGroup.addView(chip)
+                if (pack.id == selectedPackId) sizeGroup.check(chip.id)
+            }
+            sizeGroup.setOnCheckedChangeListener { group, checkedId ->
+                val id = group.findViewById<RadioButton>(checkedId)?.tag as? String ?: return@setOnCheckedChangeListener
+                selectedPackId = id
+                update()
+            }
+        }
+
+        /** Base qualities the selected Piper voice ships, in canonical order. */
+        private fun piperQualities(): List<String> {
+            val packs = chipPacks()
+            return VoiceCatalog.PIPER_QUALITY_ORDER.filter { quality ->
+                packs.any { VoiceCatalog.baseQuality(it.variant) == quality }
+            }
+        }
+
+        private fun currentQuality(): String =
+            VoiceCatalog.baseQuality(VoiceCatalog.byId(selectedPackId)?.variant ?: "")
+
+        /** Picks [quality], keeping the Full/Compact build when it exists. */
+        private fun selectQuality(quality: String) {
+            val packs = chipPacks().filter { VoiceCatalog.baseQuality(it.variant) == quality }
+            if (packs.isEmpty()) return
+            val keepCompact = VoiceCatalog.byId(selectedPackId)
+                ?.let { VoiceCatalog.isCompactVariant(it.variant) } == true
+            selectedPackId = (
+                packs.find { VoiceCatalog.isCompactVariant(it.variant) == keepCompact }
+                    ?: packs.find { !VoiceCatalog.isCompactVariant(it.variant) }
+                    ?: packs.first()
+                ).id
+            rebuildSizeGroup()
+            update()
         }
 
         /** Switches this card's selection to [pack] (and the Piper language/voice if needed). */
@@ -467,16 +584,10 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 piperLang = pack.lang
                 piperVoice = pack.voiceName
                 rebuildPickerChips()
-                rebuildSegments()
             }
             selectedPackId = pack.id
-            for (i in 0 until chips.childCount) {
-                val chip = chips.getChildAt(i) as RadioButton
-                if (chip.tag == pack.id) {
-                    chips.check(chip.id)
-                    break
-                }
-            }
+            rebuildSegments()
+            rebuildSizeGroup()
             update()
         }
 
@@ -564,7 +675,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                     mainButton.isEnabled = true
                 }
                 else -> {
-                    mainButton.text = getString(R.string.download_main_format, pack.sizeMb)
+                    mainButton.text = VoiceCatalog.downloadLabel(pack.sizeMb)
                     mainButton.isEnabled = runningId == null
                 }
             }
@@ -683,6 +794,15 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             override fun onNothingSelected(parent: AdapterView<*>) = Unit
         }
         card.addView(systemSpinner)
+        card.addView(
+            TextView(this, null, 0, R.style.Small).apply {
+                text = getString(R.string.system_voice_automatic_help)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(4) }
+            },
+        )
         card.addView(
             Button(this, null, 0, R.style.Btn_Ghost).apply {
                 text = getString(R.string.system_voice_settings_button)
