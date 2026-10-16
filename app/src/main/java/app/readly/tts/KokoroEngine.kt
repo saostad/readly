@@ -53,7 +53,7 @@ class KokoroEngine(store: VoiceModelStore) : Closeable {
             // Missing native libs surface as UnsatisfiedLinkError, not Exception.
             throw IOException(loadError(dir, e), e)
         }
-        Log.d("Readly", "Kokoro voice loaded from $dir in ${SystemClock.elapsedRealtime() - startMs} ms")
+        Log.i("Readly", "Kokoro voice loaded from $dir in ${SystemClock.elapsedRealtime() - startMs} ms")
     }
 
     /** Sample rate of [synthesize] output. */
@@ -75,7 +75,7 @@ class KokoroEngine(store: VoiceModelStore) : Closeable {
         val synthMs = SystemClock.elapsedRealtime() - startMs
         val audioMs = if (audio.sampleRate > 0) audio.samples.size * 1000.0 / audio.sampleRate else 0.0
         val rtf = if (audioMs > 0) synthMs / audioMs else 0.0
-        Log.d(
+        Log.i(
             "Readly",
             "synthesize: chars=${text.length} speaker=$speakerId speed=$speed " +
                 "synthMs=$synthMs audioMs=${audioMs.toLong()} " +
