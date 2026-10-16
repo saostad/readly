@@ -67,4 +67,6 @@
     <string name="choose_voice_button">Choose a different voice</string>
     <string name="setup_sample_help">Hear what this voice sounds like.</string>
     <string name="choose_voice_help">Compare all voices before downloading.</string>
+    <string name="change_pack_help">Pick a different voice, or download a smaller or more natural one.</string>
+    <string name="single_voice_note">This voice pack has one voice.</string>
 </resources>

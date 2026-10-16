@@ -82,6 +82,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var voicePackLabel: TextView
     private lateinit var changePackButton: Button
     private lateinit var voiceSpinner: Spinner
+    private lateinit var singleVoiceNote: TextView
     private lateinit var speedLabel: TextView
     private lateinit var speedSeek: SeekBar
 
@@ -134,6 +135,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         voicePackLabel = findViewById(R.id.voicePackLabel)
         changePackButton = findViewById(R.id.changePackButton)
         voiceSpinner = findViewById(R.id.voiceSpinner)
+        singleVoiceNote = findViewById(R.id.singleVoiceNote)
         speedLabel = findViewById(R.id.speedLabel)
         speedSeek = findViewById(R.id.speedSeek)
         defaultTextColor = statusLine.currentTextColor
@@ -312,6 +314,13 @@ class MainActivity : Activity(), InstallTask.Listener {
 
     private fun setupVoiceSpinner() {
         val pack = store.pack
+        if (pack.speakers.size == 1) {
+            voiceSpinner.visibility = View.GONE
+            singleVoiceNote.visibility = View.VISIBLE
+            return
+        }
+        singleVoiceNote.visibility = View.GONE
+        voiceSpinner.visibility = View.VISIBLE
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, pack.speakers)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         voiceSpinner.adapter = adapter
