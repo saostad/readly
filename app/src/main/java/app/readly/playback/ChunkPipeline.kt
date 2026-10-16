@@ -1,8 +1,7 @@
 package app.readly.playback
 
 import app.readly.text.Chunk
-import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.Semaphore
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -22,15 +21,16 @@ interface AudioSink {
 }
 
 /**
- * Synthesizes [chunks] one chunk ahead of playback and streams them to [sink].
+ * Synthesizes [chunks] ahead of playback and streams them to [sink].
  *
- * Pure Kotlin and JVM-testable. A producer thread synthesizes up to 2 chunks ahead of
- * playback into an [ArrayBlockingQueue]; a consumer thread writes each chunk to the sink in
- * ~100 ms slices so pause and stop react quickly. [startIndex] lets playback resume
- * mid-document (previous/next sentence).
+ * Pure Kotlin and JVM-testable. A producer thread synthesizes into an unbounded queue
+ * while the unplayed audio already synthesized stays under a duration budget; a consumer
+ * thread writes each chunk to the sink in ~100 ms slices so pause and stop react quickly.
+ * [startIndex] lets playback resume mid-document (previous/next sentence).
  *
  * Threading contract:
- * - [pause]/[resume] block and unblock the consumer only; the producer keeps filling.
+ * - [pause]/[resume] block and unblock the consumer only; the producer keeps filling
+ *   until the budget is full, then waits.
  * - [stop] sets the generation flag that [isStopped] reads, interrupts both threads,
  *   flushes the sink and joins both threads. It never joins the calling thread, so it is
  *   safe to call from inside a callback. After [stop] returns, no further callback runs.
@@ -57,15 +57,20 @@ class ChunkPipeline(
     /** ~100 ms of audio per sink write. */
     private val sliceSamples = (sampleRate / 10).coerceAtLeast(1)
 
-    private val queue = ArrayBlockingQueue<Any>(2)
+    private val queue = LinkedBlockingQueue<Any>()
 
     /**
-     * Slots for synthesized-but-not-yet-playing chunks. The producer acquires before each
-     * synthesis and the consumer releases on take, so at most 2 chunks are ever
-     * synthesized ahead of playback (a bare bounded queue would allow a third: the
-     * producer synthesizes, then blocks on put).
+     * Duration budget for synthesized-but-not-yet-played audio (queued chunks plus the
+     * rest of the chunk being written), counted in samples. The producer synthesizes
+     * while [budgetedSamples] is under 20 s of audio and fewer than 12 chunks are
+     * ahead; the consumer gives budget back slice by slice as it writes.
+     * Memory: 20 s of 24 kHz float mono is about 1.9 MB (20 * 24000 * 4), plus at most
+     * one overshooting chunk, which is fine.
      */
-    private val aheadSlots = Semaphore(2)
+    private val budgetLock = Object()
+    private var budgetedSamples = 0L
+    private var budgetedChunks = 0
+    private val budgetSamples = BUDGET_SECONDS * sampleRate.toLong()
 
     private val stopped = AtomicBoolean(false)
     private val errorReported = AtomicBoolean(false)
@@ -123,6 +128,7 @@ class ChunkPipeline(
     private fun requestStop() {
         stopped.set(true)
         synchronized(pauseLock) { pauseLock.notifyAll() }
+        synchronized(budgetLock) { budgetLock.notifyAll() }
         producer?.interrupt()
         consumer?.interrupt()
         try {
@@ -149,19 +155,21 @@ class ChunkPipeline(
         try {
             var index = startIndex.coerceIn(0, chunks.size)
             while (index < chunks.size && !stopped.get()) {
-                try {
-                    aheadSlots.acquire()
-                } catch (_: InterruptedException) {
-                    return
-                }
-                if (stopped.get()) {
-                    aheadSlots.release()
-                    return
+                synchronized(budgetLock) {
+                    while (!stopped.get() &&
+                        (budgetedSamples >= budgetSamples || budgetedChunks >= MAX_AHEAD_CHUNKS)
+                    ) {
+                        try {
+                            budgetLock.wait()
+                        } catch (_: InterruptedException) {
+                            return
+                        }
+                    }
+                    if (stopped.get()) return
                 }
                 val samples = try {
                     synth(index, isStopped)
                 } catch (e: Throwable) {
-                    aheadSlots.release()
                     if (e is InterruptedException && stopped.get()) {
                         Thread.currentThread().interrupt()
                         return
@@ -169,14 +177,15 @@ class ChunkPipeline(
                     fail(e)
                     return
                 }
-                if (stopped.get()) {
-                    aheadSlots.release()
-                    return
+                if (stopped.get()) return
+                synchronized(budgetLock) {
+                    if (stopped.get()) return
+                    budgetedSamples += samples.size
+                    budgetedChunks += 1
                 }
                 try {
                     queue.put(Ready(index, samples))
                 } catch (_: InterruptedException) {
-                    aheadSlots.release()
                     return
                 }
                 index++
@@ -223,7 +232,6 @@ class ChunkPipeline(
                 item as Ready
                 nextIndex = item.index + 1
                 underrunFired = false
-                aheadSlots.release()
                 if (stopped.get()) return
                 if (!waitIfPaused()) return
                 try {
@@ -257,7 +265,10 @@ class ChunkPipeline(
         }
     }
 
-    /** Writes one chunk in ~100 ms slices. Returns false when stopped. */
+    /**
+     * Writes one chunk in ~100 ms slices, giving duration budget back slice by slice.
+     * Returns false when stopped.
+     */
     private fun writeSlices(samples: FloatArray): Boolean {
         var offset = 0
         while (offset < samples.size) {
@@ -270,7 +281,15 @@ class ChunkPipeline(
                 fail(e)
                 return false
             }
+            synchronized(budgetLock) {
+                budgetedSamples = (budgetedSamples - (end - offset)).coerceAtLeast(0)
+                budgetLock.notifyAll()
+            }
             offset = end
+        }
+        synchronized(budgetLock) {
+            budgetedChunks = (budgetedChunks - 1).coerceAtLeast(0)
+            budgetLock.notifyAll()
         }
         return !stopped.get()
     }
@@ -291,5 +310,7 @@ class ChunkPipeline(
 
     companion object {
         private const val UNDERRUN_POLL_MS = 200L
+        private const val BUDGET_SECONDS = 20L
+        private const val MAX_AHEAD_CHUNKS = 12
     }
 }

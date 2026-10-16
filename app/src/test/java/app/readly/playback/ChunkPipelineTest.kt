@@ -92,7 +92,7 @@ class ChunkPipelineTest {
     }
 
     @Test
-    fun pipeline_synthesizesAtMostTwoChunksAheadOfPlayback() {
+    fun pipeline_synthesizesWithin20sDurationBudget() {
         val sink = FakeSink().apply { blockFirstWrite = true }
         val synthCalls = Collections.synchronizedList(mutableListOf<Int>())
         val started = Collections.synchronizedList(mutableListOf<Int>())
@@ -103,7 +103,7 @@ class ChunkPipelineTest {
             sampleRate = SAMPLE_RATE,
             synth = { index, _ ->
                 synthCalls.add(index)
-                samples(200)
+                samples(5 * SAMPLE_RATE)
             },
             sink = sink,
             onChunkStarted = { started.add(it) },
@@ -112,16 +112,53 @@ class ChunkPipelineTest {
         )
         try {
             pipeline.start()
-            // The consumer is stuck writing chunk 0; the producer may prepare
-            // chunks 1 and 2 but must then stall.
-            waitFor("producer stalls at 2 chunks ahead") { synthCalls.size == 3 }
+            // The consumer is stuck writing chunk 0 (5 s); the 20 s budget holds
+            // 4 chunks total (20 s / 5 s), then the producer must stall.
+            waitFor("producer stalls at the 20 s budget") { synthCalls.size == 4 }
             Thread.sleep(300)
-            assertEquals(listOf(0, 1, 2), synthCalls)
+            assertEquals(listOf(0, 1, 2, 3), synthCalls)
             assertEquals(listOf(0), started)
             sink.releaseFirstWrite.countDown()
             assertTrue(finished.await(TIMEOUT_S, TimeUnit.SECONDS))
             assertEquals(listOf(0, 1, 2, 3, 4, 5), started)
             assertEquals(listOf(0, 1, 2, 3, 4, 5), synthCalls)
+        } finally {
+            sink.releaseFirstWrite.countDown()
+            pipeline.stop()
+        }
+    }
+
+    @Test
+    fun pipeline_shortChunks_hit12ChunkCapBeforeDurationBudget() {
+        val sink = FakeSink().apply { blockFirstWrite = true }
+        val synthCalls = Collections.synchronizedList(mutableListOf<Int>())
+        val started = Collections.synchronizedList(mutableListOf<Int>())
+        val finished = CountDownLatch(1)
+        val pipeline = ChunkPipeline(
+            chunks = chunks(16),
+            startIndex = 0,
+            sampleRate = SAMPLE_RATE,
+            synth = { index, _ ->
+                synthCalls.add(index)
+                samples(SAMPLE_RATE)
+            },
+            sink = sink,
+            onChunkStarted = { started.add(it) },
+            onFinished = { finished.countDown() },
+            onError = { throw AssertionError("unexpected error", it) },
+        )
+        try {
+            pipeline.start()
+            // 1 s chunks: 12 s is under the 20 s budget, so the 12-chunk cap
+            // stalls the producer at 12 chunks total.
+            waitFor("producer stalls at the 12-chunk cap") { synthCalls.size == 12 }
+            Thread.sleep(300)
+            assertEquals((0..11).toList(), synthCalls)
+            assertEquals(listOf(0), started)
+            sink.releaseFirstWrite.countDown()
+            assertTrue(finished.await(TIMEOUT_S, TimeUnit.SECONDS))
+            assertEquals((0..15).toList(), started)
+            assertEquals((0..15).toList(), synthCalls)
         } finally {
             sink.releaseFirstWrite.countDown()
             pipeline.stop()
