@@ -4,10 +4,7 @@ import android.app.Activity
 import android.app.Dialog
 import android.content.Intent
 import android.content.SharedPreferences
-import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
-import android.view.Window
 import android.widget.Button
 import android.widget.SeekBar
 import android.widget.Switch
@@ -40,16 +37,8 @@ class SettingsSheet(
     fun show() {
         val pack = ReaderService.activePack(activity)
         val dialog = Dialog(activity)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.asBottomSheet() ?: return
         dialog.setContentView(R.layout.dialog_settings_sheet)
-        val window = dialog.window ?: return
-        window.setBackgroundDrawableResource(R.drawable.sheet_background)
-        window.setGravity(Gravity.BOTTOM)
-        window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        window.setDimAmount(0.45f)
-        window.attributes = window.attributes.apply {
-            windowAnimations = R.style.SheetAnimation
-        }
 
         dialog.findViewById<TextView>(R.id.sheetPackName).text = VoiceCatalog.shortName(pack)
         dialog.findViewById<Button>(R.id.sheetChangePack).setOnClickListener {

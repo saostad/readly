@@ -33,6 +33,10 @@
         <item name="android:minHeight">40dp</item>
     </style>
 
+    <style name="Btn.TextError" parent="Btn.Text">
+        <item name="android:textColor">@color/error</item>
+    </style>
+
     <style name="Chip">
         <item name="android:background">@drawable/chip_background</item>
         <item name="android:textColor">@color/chip_text</item>

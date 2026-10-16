@@ -3,16 +3,14 @@ package app.readly
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.SharedPreferences
-import android.graphics.Typeface
 import android.os.Bundle
 import android.util.Log
-import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
-import android.widget.HorizontalScrollView
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.RadioButton
@@ -30,14 +28,16 @@ import app.readly.playback.ReaderService
 import app.readly.playback.ReaderState
 import app.readly.playback.ReaderStatus
 import app.readly.tts.ReadlyTtsService
+import app.readly.ui.ListSheet
 import java.io.File
 import java.io.IOException
 
 /**
- * One card per [VoiceFamily]: pick a variant chip (and a Piper voice), play its
- * sample clip, download it or switch to it. A storage list at the bottom shows
- * what's installed. Downloads reuse the single app-wide [InstallTask], so only
- * one install runs at a time no matter which screen started it.
+ * One card per [VoiceFamily]: pick a variant segment (and a Piper language and
+ * voice), play its sample clip, download it or switch to it. A storage list at
+ * the bottom shows what's installed. Downloads reuse the single app-wide
+ * [InstallTask], so only one install runs at a time no matter which screen
+ * started it.
  */
 class VoicesActivity : Activity(), InstallTask.Listener {
     companion object {
@@ -68,6 +68,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_voices)
+        findViewById<ImageButton>(R.id.backButton).setOnClickListener { finish() }
         cardsBox = findViewById(R.id.cardsContainer)
         prefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
         addSystemSection()
@@ -76,21 +77,20 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             cards.add(card)
             cardsBox.addView(card.root)
         }
-        val storageTitle = TextView(this).apply {
-            text = getString(R.string.storage_title)
-            setTypeface(typeface, Typeface.BOLD)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(4) }
-        }
-        storageTotal = TextView(this)
+        cardsBox.addView(
+            TextView(this, null, 0, R.style.CardTitle).apply {
+                text = getString(R.string.storage_title)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(4) }
+            },
+        )
+        storageTotal = TextView(this, null, 0, R.style.Small)
         storageRows = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
-        storageNote = TextView(this)
-        cardsBox.addView(storageTitle)
+        storageNote = TextView(this, null, 0, R.style.Small)
         cardsBox.addView(storageTotal)
         cardsBox.addView(storageRows)
         cardsBox.addView(storageNote)
@@ -115,23 +115,18 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         val card = cards.firstOrNull { it.info.family == family } ?: return
         if (family == VoiceFamily.PIPER) {
             intent.getStringExtra(EXTRA_PRESELECT_LANG)?.let { lang ->
-                if (lang in VoiceCatalog.piperLangs()) {
-                    card.piperLang = lang
-                    card.piperLangSpinner?.setSelection(
-                        VoiceCatalog.piperLangs().indexOf(lang).coerceAtLeast(0),
-                    )
-                }
+                if (lang in VoiceCatalog.piperLangs()) card.piperLang = lang
             }
             intent.getStringExtra(EXTRA_PRESELECT_VOICE)?.let { voice ->
                 val lang = card.piperLang ?: return@let
                 if (voice in VoiceCatalog.piperVoices(lang)) card.piperVoice = voice
             }
-            card.rebuildVoiceSpinner()
-            card.rebuildChips()
+            card.rebuildPickerChips()
+            card.rebuildSegments()
             card.selectedPackId = card.chipPacks().firstOrNull()?.id ?: card.selectedPackId
-            // Re-check the chip for the new selection.
+            // Re-check the segment for the new selection.
             for (i in 0 until card.chips.childCount) {
-                val chip = card.chips.getChildAt(i) as android.widget.RadioButton
+                val chip = card.chips.getChildAt(i) as RadioButton
                 if (chip.tag == card.selectedPackId) {
                     card.chips.check(chip.id)
                     break
@@ -202,7 +197,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
 
         val root: LinearLayout = LinearLayout(this@VoicesActivity).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundResource(R.drawable.voice_card_background)
+            setBackgroundResource(R.drawable.card_background)
             val p = dp(16)
             setPadding(p, p, p, p)
             layoutParams = LinearLayout.LayoutParams(
@@ -211,19 +206,30 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             ).apply { bottomMargin = dp(12) }
         }
         val badge: TextView = TextView(this@VoicesActivity).apply {
-            setText(R.string.in_use_badge)
+            setText(R.string.in_use_badge_caps)
+            setTextColor(getColor(R.color.ok))
+            setBackgroundResource(R.drawable.badge_background)
+            textSize = 10.5f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            val h = dp(8)
+            val v = dp(4)
+            setPadding(h, v, h, v)
             visibility = View.GONE
         }
         val chips: RadioGroup = RadioGroup(this@VoicesActivity).apply {
             orientation = RadioGroup.HORIZONTAL
-            layoutParams = ViewGroup.LayoutParams(
+            setBackgroundResource(R.drawable.segmented_track)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            )
+            ).apply {
+                topMargin = dp(10)
+                bottomMargin = dp(8)
+            }
         }
-        var piperLangSpinner: Spinner? = null
-        var piperSpinner: Spinner? = null
-        val statusText = TextView(this@VoicesActivity)
+        var langChip: Button? = null
+        var voiceChip: Button? = null
+        val statusText = TextView(this@VoicesActivity, null, 0, R.style.Small)
         val sampleButton = Button(this@VoicesActivity, null, 0, R.style.Btn_Ghost).apply {
             setText(R.string.sample_button)
             setOnClickListener {
@@ -233,7 +239,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         val mainButton = Button(this@VoicesActivity, null, 0, R.style.Btn_Primary).apply {
             setOnClickListener { onMainButton() }
         }
-        val noteText = TextView(this@VoicesActivity).apply {
+        val noteText = TextView(this@VoicesActivity, null, 0, R.style.Small).apply {
             setText(R.string.another_downloading_note)
             visibility = View.GONE
         }
@@ -244,10 +250,12 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             )
+            progressDrawable = getDrawable(R.drawable.seekbar_progress)
+            minimumHeight = dp(4)
             max = 100
             visibility = View.GONE
         }
-        val progressLabel = TextView(this@VoicesActivity).apply {
+        val progressLabel = TextView(this@VoicesActivity, null, 0, R.style.Small).apply {
             visibility = View.GONE
         }
         val errorText = TextView(this@VoicesActivity).apply {
@@ -258,95 +266,90 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         init {
             val titleRow = LinearLayout(this@VoicesActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
             }
-            val title = TextView(this@VoicesActivity).apply {
+            val title = TextView(this@VoicesActivity, null, 0, R.style.CardTitle).apply {
                 text = info.title
-                setTypeface(typeface, Typeface.BOLD)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
             titleRow.addView(title)
             titleRow.addView(badge)
             root.addView(titleRow)
             root.addView(
-                TextView(this@VoicesActivity).apply { text = info.tagline },
+                TextView(this@VoicesActivity, null, 0, R.style.Small).apply { text = info.tagline },
             )
             if (info.family == VoiceFamily.PIPER) {
-                val langs = VoiceCatalog.piperLangs()
-                piperLangSpinner = labeledSpinner(
-                    R.string.language_label,
-                    langs.map { VoiceCatalog.langDisplay(it) },
-                    langs.indexOf(piperLang).coerceAtLeast(0),
-                ) { position ->
-                    val lang = VoiceCatalog.piperLangs()[position]
-                    if (lang == piperLang) return@labeledSpinner
-                    piperLang = lang
-                    prefs.edit().putString(ReaderService.KEY_PIPER_LANG, lang).apply()
-                    piperVoice = defaultIn(langPacks(lang)).voiceName
-                    selectedPackId = defaultIn(chipPacks()).id
-                    rebuildVoiceSpinner()
-                    rebuildChips()
-                    update()
-                }
-                piperSpinner = labeledSpinner(
-                    R.string.voice_label,
-                    VoiceCatalog.piperVoices(piperLang!!),
-                    VoiceCatalog.piperVoices(piperLang!!).indexOf(piperVoice).coerceAtLeast(0),
-                ) { position ->
-                    val voice = VoiceCatalog.piperVoices(piperLang!!)[position]
-                    if (voice == piperVoice) return@labeledSpinner
-                    piperVoice = voice
-                    if (chipPacks().none { it.id == selectedPackId }) {
-                        selectedPackId = defaultIn(chipPacks()).id
-                    }
-                    rebuildChips()
-                    update()
-                    // A newly picked voice introduces itself, unless that would talk
-                    // over the reader.
-                    if (ReaderState.snapshot.status == ReaderStatus.READING) {
-                        Toast.makeText(
-                            this@VoicesActivity,
-                            R.string.preview_busy,
-                            Toast.LENGTH_LONG,
-                        ).show()
-                    } else {
-                        VoiceCatalog.byId(selectedPackId)?.let { toggleSample(it) }
-                    }
-                }
+                root.addView(
+                    LinearLayout(this@VoicesActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply { topMargin = dp(8) }
+                        langChip = Button(this@VoicesActivity, null, 0, R.style.Chip).apply {
+                            layoutParams = LinearLayout.LayoutParams(
+                                0,
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                1f,
+                            )
+                            setCompoundDrawablesWithIntrinsicBounds(
+                                R.drawable.ic_globe,
+                                0,
+                                R.drawable.ic_chevron_down,
+                                0,
+                            )
+                            compoundDrawablePadding = dp(6)
+                            setOnClickListener { pickLanguage() }
+                        }
+                        addView(langChip)
+                        voiceChip = Button(this@VoicesActivity, null, 0, R.style.Chip).apply {
+                            layoutParams = LinearLayout.LayoutParams(
+                                0,
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                1f,
+                            ).apply { leftMargin = dp(8) }
+                            setCompoundDrawablesWithIntrinsicBounds(
+                                0,
+                                0,
+                                R.drawable.ic_chevron_down,
+                                0,
+                            )
+                            compoundDrawablePadding = dp(6)
+                            setOnClickListener { pickVoice() }
+                        }
+                        addView(voiceChip)
+                    },
+                )
+                rebuildPickerChips()
             }
-            root.addView(
-                HorizontalScrollView(this@VoicesActivity).apply {
-                    isHorizontalScrollBarEnabled = false
-                    addView(chips)
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply {
-                        topMargin = dp(8)
-                        bottomMargin = dp(4)
-                    }
-                },
-            )
+            root.addView(chips)
             root.addView(statusText)
             val actionRow = LinearLayout(this@VoicesActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = dp(10) }
             }
+            val sampleParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            sampleButton.layoutParams = sampleParams
             actionRow.addView(sampleButton)
-            actionRow.addView(
-                View(this@VoicesActivity).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, 0, 1f)
-                },
-            )
+            val mainParams = LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1.3f,
+            ).apply { leftMargin = dp(8) }
+            mainButton.layoutParams = mainParams
             actionRow.addView(mainButton)
             root.addView(actionRow)
             root.addView(noteText)
             root.addView(progressBar)
             root.addView(progressLabel)
             root.addView(errorText)
-            rebuildChips()
+            rebuildSegments()
         }
 
-        /** Packs behind this card's chips: the family, or the selected Piper voice. */
+        /** Packs behind this card's segments: the family, or the selected Piper voice. */
         fun chipPacks(): List<VoicePack> {
             val packs = VoiceCatalog.packsFor(info.family)
             return if (info.family == VoiceFamily.PIPER) {
@@ -356,76 +359,83 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             }
         }
 
-        /** A "Label: [spinner]" row, added to the card; [onPick] runs on user picks. */
-        private fun labeledSpinner(
-            labelRes: Int,
-            items: List<String>,
-            selected: Int,
-            onPick: (Int) -> Unit,
-        ): Spinner {
-            val row = LinearLayout(this@VoicesActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-            }
-            row.addView(
-                TextView(this@VoicesActivity).apply {
-                    setText(labelRes)
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { rightMargin = dp(8) }
-                },
-            )
-            val spinner = Spinner(this@VoicesActivity)
-            spinner.adapter = ArrayAdapter(
-                this@VoicesActivity,
-                android.R.layout.simple_spinner_item,
-                items,
-            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-            spinner.setSelection(selected)
-            spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(
-                    parent: AdapterView<*>,
-                    view: View?,
-                    position: Int,
-                    id: Long,
-                ) = onPick(position)
-
-                override fun onNothingSelected(parent: AdapterView<*>) = Unit
-            }
-            row.addView(spinner)
-            root.addView(row)
-            return spinner
+        /** Repaints the language/voice picker chips from the current selection. */
+        fun rebuildPickerChips() {
+            val lang = piperLang ?: return
+            langChip?.text = VoiceCatalog.langDisplay(lang)
+            voiceChip?.text = piperVoice
         }
 
-        /** Rebuilds the voice spinner for the current [piperLang], keeping the voice. */
-        fun rebuildVoiceSpinner() {
-            val spinner = piperSpinner ?: return
-            val voices = VoiceCatalog.piperVoices(piperLang!!)
-            spinner.adapter = ArrayAdapter(
+        /** Opens the language list sheet (with search, the list is long). */
+        private fun pickLanguage() {
+            val langs = VoiceCatalog.piperLangs()
+            ListSheet(
                 this@VoicesActivity,
-                android.R.layout.simple_spinner_item,
+                getString(R.string.lang_sheet_title),
+                langs.map { VoiceCatalog.langDisplay(it) },
+                langs.indexOf(piperLang).coerceAtLeast(0),
+                withSearch = true,
+            ) { position ->
+                val lang = langs[position]
+                if (lang == piperLang) return@ListSheet
+                piperLang = lang
+                prefs.edit().putString(ReaderService.KEY_PIPER_LANG, lang).apply()
+                piperVoice = defaultIn(langPacks(lang)).voiceName
+                selectedPackId = defaultIn(chipPacks()).id
+                rebuildPickerChips()
+                rebuildSegments()
+                update()
+            }.show()
+        }
+
+        /** Opens the voice list sheet; a newly picked voice introduces itself. */
+        private fun pickVoice() {
+            val lang = piperLang ?: return
+            val voices = VoiceCatalog.piperVoices(lang)
+            ListSheet(
+                this@VoicesActivity,
+                getString(R.string.voice_sheet_title),
                 voices,
-            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-            spinner.setSelection(voices.indexOf(piperVoice).coerceAtLeast(0))
+                voices.indexOf(piperVoice).coerceAtLeast(0),
+                withSearch = false,
+            ) { position ->
+                val voice = voices[position]
+                if (voice == piperVoice) return@ListSheet
+                piperVoice = voice
+                if (chipPacks().none { it.id == selectedPackId }) {
+                    selectedPackId = defaultIn(chipPacks()).id
+                }
+                rebuildPickerChips()
+                rebuildSegments()
+                update()
+                // A newly picked voice introduces itself, unless that would talk
+                // over the reader.
+                if (ReaderState.snapshot.status == ReaderStatus.READING) {
+                    Toast.makeText(
+                        this@VoicesActivity,
+                        R.string.preview_busy,
+                        Toast.LENGTH_LONG,
+                    ).show()
+                } else {
+                    VoiceCatalog.byId(selectedPackId)?.let { toggleSample(it) }
+                }
+            }.show()
         }
 
-        fun rebuildChips() {
+        fun rebuildSegments() {
             chips.setOnCheckedChangeListener(null)
             chips.removeAllViews()
             for (pack in chipPacks()) {
-                val chip = RadioButton(this@VoicesActivity, null, 0, R.style.Chip).apply {
+                val chip = RadioButton(this@VoicesActivity, null, 0, R.style.Segment).apply {
                     id = View.generateViewId()
                     tag = pack.id
                     text = getString(R.string.chip_format, pack.variant, pack.sizeMb)
                     buttonDrawable = null
                     layoutParams = RadioGroup.LayoutParams(
+                        0,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply {
-                        rightMargin = dp(8)
-                        topMargin = dp(4)
-                        bottomMargin = dp(4)
-                    }
+                        1f,
+                    )
                 }
                 chips.addView(chip)
                 if (pack.id == selectedPackId) chips.check(chip.id)
@@ -444,12 +454,9 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 (pack.lang != piperLang || pack.voiceName != piperVoice)
             ) {
                 piperLang = pack.lang
-                piperLangSpinner?.setSelection(
-                    VoiceCatalog.piperLangs().indexOf(pack.lang).coerceAtLeast(0),
-                )
                 piperVoice = pack.voiceName
-                rebuildVoiceSpinner()
-                rebuildChips()
+                rebuildPickerChips()
+                rebuildSegments()
             }
             selectedPackId = pack.id
             for (i in 0 until chips.childCount) {
@@ -501,9 +508,12 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                     }
                 }
             }
+            root.setBackgroundResource(
+                if (mainHere) R.drawable.card_active_background else R.drawable.card_background,
+            )
             when {
                 mainHere -> {
-                    badge.setText(R.string.in_use_badge)
+                    badge.setText(R.string.in_use_badge_caps)
                     badge.visibility = View.VISIBLE
                 }
                 langHereName != null -> {
@@ -543,7 +553,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                     mainButton.isEnabled = true
                 }
                 else -> {
-                    mainButton.text = getString(R.string.download_variant_format, pack.sizeMb)
+                    mainButton.text = getString(R.string.download_main_format, pack.sizeMb)
                     mainButton.isEnabled = runningId == null
                 }
             }
@@ -610,20 +620,31 @@ class VoicesActivity : Activity(), InstallTask.Listener {
     // ------------------------------------------------------------------
 
     private fun addSystemSection() {
-        cardsBox.addView(
-            TextView(this).apply {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.card_background)
+            val p = dp(16)
+            setPadding(p, p, p, p)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(12) }
+        }
+        card.addView(
+            TextView(this, null, 0, R.style.CardTitle).apply {
                 text = getString(R.string.system_voice_title)
-                setTypeface(typeface, Typeface.BOLD)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             },
         )
-        cardsBox.addView(
-            TextView(this).apply {
+        card.addView(
+            TextView(this, null, 0, R.style.Small).apply {
                 text = getString(R.string.system_voice_help)
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { bottomMargin = dp(4) }
+                ).apply {
+                    topMargin = dp(4)
+                    bottomMargin = dp(8)
+                }
             },
         )
         systemSpinner = Spinner(this)
@@ -650,20 +671,18 @@ class VoicesActivity : Activity(), InstallTask.Listener {
 
             override fun onNothingSelected(parent: AdapterView<*>) = Unit
         }
-        cardsBox.addView(systemSpinner)
-        cardsBox.addView(
+        card.addView(systemSpinner)
+        card.addView(
             Button(this, null, 0, R.style.Btn_Ghost).apply {
                 text = getString(R.string.system_voice_settings_button)
                 setOnClickListener { openTtsSettings() }
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    topMargin = dp(4)
-                    bottomMargin = dp(12)
-                }
+                ).apply { topMargin = dp(8) }
             },
         )
+        cardsBox.addView(card)
         refreshSystemSection()
     }
 
@@ -696,9 +715,10 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         for (pack in installed) {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
             }
             row.addView(
-                TextView(this).apply {
+                TextView(this, null, 0, R.style.Small).apply {
                     text = "${VoiceCatalog.shortName(pack)} · ${pack.sizeMb} MB"
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 },
@@ -706,11 +726,13 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             val langUse = langAssignment(pack)
             if (pack.id == activeId) {
                 row.addView(
-                    TextView(this).apply { setText(R.string.storage_in_use) },
+                    TextView(this, null, 0, R.style.Small).apply {
+                        setText(R.string.storage_in_use)
+                    },
                 )
             } else if (langUse != null) {
                 row.addView(
-                    TextView(this).apply {
+                    TextView(this, null, 0, R.style.Small).apply {
                         text = getString(
                             R.string.storage_in_use_for_format,
                             ReaderService.langName(langUse),
@@ -719,7 +741,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 )
             } else {
                 row.addView(
-                    Button(this, null, 0, R.style.Btn_Text).apply {
+                    Button(this, null, 0, R.style.Btn_TextError).apply {
                         setText(R.string.delete_button)
                         setOnClickListener { confirmDelete(pack) }
                     },

@@ -142,4 +142,12 @@
     <string name="opening_fallback">Opening…</string>
     <string name="previewing_fallback">Previewing…</string>
     <string name="close_desc">Close</string>
+
+    <string name="voice_packs_title">Voice packs</string>
+    <string name="in_use_badge_caps">✓ IN USE</string>
+    <string name="download_main_format">Download · %1$d MB</string>
+    <string name="lang_sheet_title">Language</string>
+    <string name="voice_sheet_title">Voice</string>
+    <string name="search_hint">Search</string>
+    <string name="back_desc">Back</string>
 </resources>
