@@ -62,8 +62,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * pipeline `synth` calls block on it. PRELOAD loads the engine from the dedicated
  * `readly-preload` thread, so it never blocks document handling. Document handling
  * (READ / READ_URL / NEXT / PREVIOUS / STOP) runs on the single `readly-read`
- * executor so stop-and-join never blocks the main thread. PAUSE / PLAY / TOGGLE are
- * instant and run on the main thread.
+ * executor so stop-and-join never blocks the main thread. Speaker previews run on
+ * their own single `readly-preview` executor: a preview must never block `readly-read`
+ * (round 20: a wedged preview froze every later READ behind it), and a new READ
+ * cancels an in-flight preview instead. PAUSE / PLAY / TOGGLE are instant and run on
+ * the main thread.
  */
 class ReaderService : Service() {
 
@@ -299,6 +302,7 @@ class ReaderService : Service() {
     private lateinit var mainHandler: Handler
     private lateinit var readerExecutor: ExecutorService
     private lateinit var preloadExecutor: ExecutorService
+    private lateinit var previewExecutor: ExecutorService
     private val engines: EngineManager by lazy { (application as ReadlyApp).engines }
     private lateinit var notificationManager: NotificationManager
     private lateinit var audioManager: AudioManager
@@ -339,6 +343,15 @@ class ReaderService : Service() {
 
     @Volatile
     private var pendingAsk: PendingAsk? = null
+
+    /**
+     * Preview generations. Each posted preview takes the next [previewSeq]; a preview is
+     * cancelled once its number is at most [previewCancelSeq]. The number is taken at
+     * post time (not when the task starts), so cancelling also covers previews still
+     * queued on `readly-preview`, while a preview posted later runs normally.
+     */
+    private val previewSeq = AtomicInteger(0)
+    private val previewCancelSeq = AtomicInteger(0)
 
     private val trackLock = Object()
     private var audioTrack: AudioTrack? = null
@@ -403,6 +416,7 @@ class ReaderService : Service() {
         mainHandler = Handler(Looper.getMainLooper())
         readerExecutor = Executors.newSingleThreadExecutor { Thread(it, "readly-read") }
         preloadExecutor = Executors.newSingleThreadExecutor { Thread(it, "readly-preload") }
+        previewExecutor = Executors.newSingleThreadExecutor { Thread(it, "readly-preview") }
         notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Reading aloud", NotificationManager.IMPORTANCE_LOW),
@@ -470,8 +484,10 @@ class ReaderService : Service() {
     override fun onDestroy() {
         destroyed = true
         mainHandler.removeCallbacks(idleShutdown)
+        cancelPreview()
         readerExecutor.shutdownNow()
         preloadExecutor.shutdownNow()
+        previewExecutor.shutdownNow()
         // Join playback first: the producer may be inside a synth call on readly-tts,
         // and the engine must not close under it. The readly-tts thread itself is
         // app-owned and stays alive for the system TTS service.
@@ -915,13 +931,19 @@ class ReaderService : Service() {
 
     /**
      * Plays a short speaker preview through the shared AudioTrack. Runs on
-     * `readly-read`, so a preview and a READ never overlap: a READ queued behind a
-     * preview simply starts when the few seconds are over. Title and index are
-     * untouched; the previous status is restored afterwards (PAUSED stays PAUSED).
+     * `readly-preview`, never on `readly-read`: a READ must never wait on a preview,
+     * so a new READ cancels an in-flight preview instead ([cancelPreview]). Title and
+     * index are untouched; the previous status is restored afterwards (PAUSED stays
+     * PAUSED), unless a READ took over meanwhile.
      */
     private fun handlePreview(packId: String, speakerId: Int, text: String) {
-        readerExecutor.execute {
+        val mySeq = previewSeq.incrementAndGet()
+        previewExecutor.execute {
+            val isCancelled = { mySeq <= previewCancelSeq.get() }
             try {
+                // A READ posted after this preview owns the track from here: leave
+                // the status alone, it is already showing the new reading.
+                if (destroyed || isCancelled()) return@execute
                 val snap = ReaderState.snapshot
                 if (snap.status == ReaderStatus.READING) {
                     mainHandler.post {
@@ -938,6 +960,10 @@ class ReaderService : Service() {
                     )
                     return@execute
                 }
+                // A READ may have started while this preview was queued. Every READ sets
+                // the cancel flag before it ever posts READING, so bailing here keeps
+                // the restore below from landing after the READ takes over.
+                if (isCancelled()) return@execute
                 val sid = speakerId.coerceIn(pack.speakers.indices)
                 val name = speakerShortName(pack, sid)
                 val prevStatus = snap.status
@@ -950,72 +976,159 @@ class ReaderService : Service() {
                 }
                 updateNotification()
                 try {
-                    playPreviewAudio(pack, text, sid)
+                    playPreviewAudio(pack, text, sid, isCancelled)
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
                     return@execute
                 } catch (e: Exception) {
-                    previewError(pack.id, e)
+                    // A READ that cancelled this preview reports its own errors.
+                    if (isCancelled()) {
+                        Log.w("Readly", "Preview ${pack.id} failed after cancel; ignoring", e)
+                    } else {
+                        previewError(pack.id, e)
+                    }
                     return@execute
                 } finally {
-                    // A concurrent preload failure may have set ERROR meanwhile; only
-                    // restore when the preview status is still ours.
-                    ReaderState.update {
-                        if (it.status == ReaderStatus.PREVIEWING) {
-                            it.copy(status = prevStatus, currentText = prevText)
-                        } else {
-                            it
+                    // A concurrent preload failure may have set ERROR meanwhile, and a
+                    // new READ may have taken over; only restore when the preview
+                    // status is still ours. The check runs on the main thread, where
+                    // every status change is serialized: reading the status here and
+                    // restoring later could pause under a live reading and wedge its
+                    // consumer.
+                    mainHandler.post {
+                        if (destroyed || ReaderState.snapshot.status != ReaderStatus.PREVIEWING) {
+                            return@post
                         }
+                        ReaderState.update { it.copy(status = prevStatus, currentText = prevText) }
+                        if (prevStatus == ReaderStatus.PAUSED) {
+                            synchronized(trackLock) { audioTrack?.pause() }
+                        }
+                        updateNotification()
+                        // A paused reading session stays foreground; anything else
+                        // detaches (a no-op while a request is live).
+                        if (prevStatus != ReaderStatus.PAUSED) goIdle()
                     }
-                    if (prevStatus == ReaderStatus.PAUSED) {
-                        synchronized(trackLock) { audioTrack?.pause() }
-                    }
-                    updateNotification()
-                    // A paused reading session stays foreground; anything else detaches
-                    // (a no-op while a request is live).
-                    if (prevStatus != ReaderStatus.PAUSED) goIdle()
                 }
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
             } catch (e: Exception) {
-                previewError(packId, e)
+                // A READ that cancelled this preview reports its own errors.
+                if (isCancelled()) {
+                    Log.w("Readly", "Preview $packId failed after cancel; ignoring", e)
+                } else {
+                    previewError(packId, e)
+                }
             }
         }
     }
 
-    /** Synthesizes [text] and plays it through the shared track, then drains it. */
-    private fun playPreviewAudio(pack: VoicePack, text: String, speakerId: Int) {
+    /** Cancels the in-flight preview, if any; the next READ owns the track from here. */
+    private fun cancelPreview() {
+        previewCancelSeq.set(previewSeq.get())
+    }
+
+    /**
+     * Synthesizes [text] and plays it through the shared track, then drains it.
+     * [isCancelled] aborts the synth, the write loop and the drain loop; every exit
+     * path after the track is touched flushes it and resets the shared frame
+     * accounting, so the reader's drain math stays consistent.
+     */
+    private fun playPreviewAudio(
+        pack: VoicePack,
+        text: String,
+        speakerId: Int,
+        isCancelled: () -> Boolean,
+    ) {
         val speed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
         val lang = if (bucketForPack(pack) == "fa") "fa" else "en"
         val rate = engines.preload(pack.id)
-        val audio = engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped = { false })
-        if (audio.isEmpty()) return
+        val audio = engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped = isCancelled)
+        if (audio.isEmpty() || isCancelled()) return
         val track = ensureTrack(rate)
-        var offset = 0
-        while (offset < audio.size) {
-            val n = track.write(audio, offset, audio.size - offset, AudioTrack.WRITE_BLOCKING)
-            if (n < 0) throw IOException("AudioTrack.write failed with error $n")
-            if (n == 0) {
+        // A READ owns the track from here; don't touch it (a flush would drop the new
+        // reading's first audio).
+        if (isCancelled()) return
+        // Flush first: a paused session may hold stale queued audio, and the head must
+        // read 0 so the drain target below measures exactly this preview. Dropping the
+        // queued half-second means resume skips it; playing it first would cut the
+        // preview short instead.
+        resetTrack(track)
+        track.play()
+        try {
+            // The head advances during blocking writes, so capture it BEFORE writing:
+            // measuring it after overshoots, and the drain then loops forever once
+            // playback stops (round 20 hang).
+            val startHead = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+            val target = DrainLoop.drainTarget(startHead, audio.size.toLong())
+            val deadlineMs = maxOf(3_000L, audio.size * 1_000L / rate + 2_000)
+            val startMs = SystemClock.elapsedRealtime()
+            var offset = 0
+            // Non-blocking: a blocking write on a paused-full track never returns, and
+            // STOP pauses the track from the main thread. Cancellation then always lands
+            // within one 10 ms sleep.
+            while (offset < audio.size) {
+                if (isCancelled()) return
+                val n = track.write(audio, offset, audio.size - offset, AudioTrack.WRITE_NON_BLOCKING)
+                if (n < 0) throw IOException("AudioTrack.write failed with error $n")
+                if (n == 0) {
+                    try {
+                        Thread.sleep(10)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return
+                    }
+                    continue
+                }
+                offset += n
+            }
+            while (true) {
+                if (isCancelled()) return
+                val head = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                val elapsed = SystemClock.elapsedRealtime() - startMs
+                if (DrainLoop.isDrained(head, target, elapsed, deadlineMs)) {
+                    if (elapsed >= deadlineMs) {
+                        Log.w(
+                            "Readly",
+                            "Playback drain timed out after $elapsed ms (head=$head, target=$target)",
+                        )
+                    }
+                    return
+                }
                 try {
-                    Thread.sleep(10)
-                } catch (e: InterruptedException) {
+                    Thread.sleep(50)
+                } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                     return
                 }
-                continue
             }
-            offset += n
+        } finally {
+            resetTrack(track)
         }
-        val endHead = (track.playbackHeadPosition.toLong() and 0xFFFFFFFFL) + audio.size
-        while (true) {
-            val head = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
-            if (head >= endHead) return
+    }
+
+    /**
+     * Drops everything queued on [track] and zeroes the shared frame accounting,
+     * atomically under [trackLock]: a starting pipeline's first writes either land
+     * before the reset (dropped by the flush) or after it (counted from 0 with the
+     * head at 0), so `drain()` stays consistent either way. Ends playing: leaving a
+     * pause here could wedge a racing new pipeline's consumer (blocking writes on a
+     * paused track stall once its buffer fills); the preview's caller re-pauses for a
+     * paused session.
+     */
+    private fun resetTrack(track: AudioTrack) {
+        synchronized(trackLock) {
             try {
-                Thread.sleep(50)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return
+                track.pause()
+                track.flush()
+            } catch (_: Exception) {
+                // Terminal state; the write loop surfaces real errors.
+            }
+            framesWritten = 0
+            try {
+                track.play()
+            } catch (_: Exception) {
+                // ensureTrack re-plays for the next pipeline.
             }
         }
     }
@@ -1378,6 +1491,9 @@ class ReaderService : Service() {
     }
 
     private fun stopPipeline() {
+        // A new READ owns the track from here: stop any in-flight preview first, so it
+        // can never write into the new pipeline (every pipeline starts here).
+        cancelPreview()
         val current = synchronized(pipelineLock) {
             val existing = pipeline
             pipeline = null
@@ -1510,9 +1626,25 @@ class ReaderService : Service() {
 
         override fun drain() {
             val total = synchronized(trackLock) { framesWritten }
+            // The head epoch is 0: every flush and every new track resets it (see
+            // flush() and ensureTrack), and framesWritten counts from the same point.
+            val target = DrainLoop.drainTarget(0L, total)
+            val rate = track.sampleRate
+            val deadlineMs = if (rate > 0) maxOf(3_000L, total * 1_000 / rate + 2_000) else 3_000L
+            val startMs = SystemClock.elapsedRealtime()
             while (true) {
                 val head = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
-                if (head >= total) return
+                val elapsed = SystemClock.elapsedRealtime() - startMs
+                if (DrainLoop.isDrained(head, target, elapsed, deadlineMs)) {
+                    if (elapsed >= deadlineMs) {
+                        Log.w(
+                            "Readly",
+                            "Playback drain timed out after $elapsed ms (head=$head, target=$target)",
+                        )
+                        flush()
+                    }
+                    return
+                }
                 try {
                     Thread.sleep(50)
                 } catch (_: InterruptedException) {
