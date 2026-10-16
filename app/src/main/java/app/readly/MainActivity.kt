@@ -2,23 +2,20 @@ package app.readly
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.util.Log
 import android.view.View
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.SeekBar
-import android.widget.Spinner
-import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import app.readly.model.InstallStage
@@ -30,14 +27,17 @@ import app.readly.playback.ReaderSnapshot
 import app.readly.playback.ReaderState
 import app.readly.playback.ReaderStatus
 import app.readly.text.SourceFormat
+import app.readly.ui.SettingsSheet
 import java.io.File
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * First-run voice download, then the reader: a text box to read aloud, playback
- * controls, voice and speed settings. Playback state arrives from [ReaderState], so
- * rotation never loses it.
+ * First-run voice download, then Home: a card to read text aloud, voice chips,
+ * a phone-voice tip and a footer hint. Playback state arrives from [ReaderState],
+ * so rotation never loses it; voice and speed live in the settings sheet.
  */
 class MainActivity : Activity(), InstallTask.Listener {
 
@@ -69,41 +69,21 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var notifRow: LinearLayout
     private lateinit var notifNote: TextView
     private lateinit var allowButton: Button
+    private lateinit var settingsButton: ImageButton
     private lateinit var inputEdit: EditText
+    private lateinit var pasteButton: Button
     private lateinit var readButton: Button
     private lateinit var inputError: TextView
-    private lateinit var nowContainer: LinearLayout
-    private lateinit var nowTitle: TextView
-    private lateinit var nowSentence: TextView
-    private lateinit var nowProgress: TextView
-    private lateinit var statusLine: TextView
-    private lateinit var speedLine: TextView
-    private lateinit var smartLine: TextView
+    private lateinit var noticeCard: LinearLayout
     private lateinit var noticeText: TextView
+    private lateinit var dismissNotice: Button
+    private lateinit var chipRow: LinearLayout
+    private lateinit var voiceChip: Button
+    private lateinit var speedChip: Button
+    private lateinit var autoChip: Button
+    private lateinit var tipCard: LinearLayout
+    private lateinit var tipSetup: Button
     private lateinit var needVoiceBanner: TextView
-    private lateinit var prevButton: Button
-    private lateinit var pausePlayButton: Button
-    private lateinit var nextButton: Button
-    private lateinit var stopButton: Button
-    private lateinit var voicePackLabel: TextView
-    private lateinit var persianPackLabel: TextView
-    private lateinit var changePackButton: Button
-    private lateinit var voiceRow: LinearLayout
-    private lateinit var voiceSpinner: Spinner
-    private lateinit var previewButton: Button
-    private lateinit var previewHelp: TextView
-    private lateinit var singleVoiceNote: TextView
-    private var speakerTouched = false
-    private lateinit var smartSwitch: Switch
-    private lateinit var autoDownloadSwitch: Switch
-    private lateinit var phoneVoiceText: TextView
-    private lateinit var phoneVoiceHelp: TextView
-    private lateinit var phoneVoiceButton: Button
-    private lateinit var phoneVoiceChange: Button
-    private lateinit var speedLabel: TextView
-    private lateinit var speedSeek: SeekBar
-
-    private var defaultTextColor = 0
 
     private val readerListener = ReaderState.Listener { render(it) }
 
@@ -131,49 +111,30 @@ class MainActivity : Activity(), InstallTask.Listener {
         notifRow = findViewById(R.id.notifRow)
         notifNote = findViewById(R.id.notifNote)
         allowButton = findViewById(R.id.allowButton)
+        settingsButton = findViewById(R.id.settingsButton)
         inputEdit = findViewById(R.id.inputEdit)
+        pasteButton = findViewById(R.id.pasteButton)
         readButton = findViewById(R.id.readButton)
         inputError = findViewById(R.id.inputError)
-        nowContainer = findViewById(R.id.nowContainer)
-        nowTitle = findViewById(R.id.nowTitle)
-        nowSentence = findViewById(R.id.nowSentence)
-        nowProgress = findViewById(R.id.nowProgress)
-        statusLine = findViewById(R.id.statusLine)
-        speedLine = findViewById(R.id.speedLine)
-        smartLine = findViewById(R.id.smartLine)
+        noticeCard = findViewById(R.id.noticeCard)
         noticeText = findViewById(R.id.noticeText)
+        dismissNotice = findViewById(R.id.dismissNotice)
+        chipRow = findViewById(R.id.chipRow)
+        voiceChip = findViewById(R.id.voiceChip)
+        speedChip = findViewById(R.id.speedChip)
+        autoChip = findViewById(R.id.autoChip)
+        tipCard = findViewById(R.id.tipCard)
+        tipSetup = findViewById(R.id.tipSetup)
         needVoiceBanner = findViewById(R.id.needVoiceBanner)
         if (intent?.getBooleanExtra(EXTRA_NEED_VOICE, false) == true) {
             needVoiceBanner.visibility = View.VISIBLE
         }
-        prevButton = findViewById(R.id.prevButton)
-        pausePlayButton = findViewById(R.id.pausePlayButton)
-        nextButton = findViewById(R.id.nextButton)
-        stopButton = findViewById(R.id.stopButton)
-        voicePackLabel = findViewById(R.id.voicePackLabel)
-        persianPackLabel = findViewById(R.id.persianPackLabel)
-        changePackButton = findViewById(R.id.changePackButton)
-        voiceRow = findViewById(R.id.voiceRow)
-        voiceSpinner = findViewById(R.id.voiceSpinner)
-        previewButton = findViewById(R.id.previewButton)
-        previewHelp = findViewById(R.id.previewHelp)
-        singleVoiceNote = findViewById(R.id.singleVoiceNote)
-        smartSwitch = findViewById(R.id.smartSwitch)
-        autoDownloadSwitch = findViewById(R.id.autoDownloadSwitch)
-        phoneVoiceText = findViewById(R.id.phoneVoiceText)
-        phoneVoiceHelp = findViewById(R.id.phoneVoiceHelp)
-        phoneVoiceButton = findViewById(R.id.phoneVoiceButton)
-        phoneVoiceChange = findViewById(R.id.phoneVoiceChange)
-        speedLabel = findViewById(R.id.speedLabel)
-        speedSeek = findViewById(R.id.speedSeek)
-        defaultTextColor = statusLine.currentTextColor
 
         val pack = ReaderService.activePack(this)
         store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
         prefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
         body.text = getString(R.string.setup_body, setupVoiceName(), pack.sizeMb)
         downloadButton.text = getString(R.string.download_button, pack.sizeMb)
-        voicePackLabel.text = getString(R.string.voice_pack_format, VoiceCatalog.shortName(pack))
         updateSetupEstimate(pack.sizeMb)
 
         setupSampleButton.setOnClickListener { toggleSetupSample() }
@@ -185,10 +146,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         cancelButton.setOnClickListener { task?.cancel() }
 
         readButton.setOnClickListener { readInputAloud() }
-        prevButton.setOnClickListener { sendAction(ReaderService.ACTION_PREVIOUS) }
-        pausePlayButton.setOnClickListener { sendAction(ReaderService.ACTION_TOGGLE) }
-        nextButton.setOnClickListener { sendAction(ReaderService.ACTION_NEXT) }
-        stopButton.setOnClickListener { sendAction(ReaderService.ACTION_STOP) }
+        pasteButton.setOnClickListener { pasteFromClipboard() }
         allowButton.setOnClickListener {
             if (Build.VERSION.SDK_INT >= 33) {
                 requestPermissions(
@@ -197,23 +155,21 @@ class MainActivity : Activity(), InstallTask.Listener {
                 )
             }
         }
-        changePackButton.setOnClickListener {
-            startActivity(Intent(this, VoicesActivity::class.java))
+        settingsButton.setOnClickListener { openSheet() }
+        voiceChip.setOnClickListener { openSheet() }
+        speedChip.setOnClickListener { openSheet() }
+        autoChip.setOnClickListener { toggleSmartVoice() }
+        dismissNotice.setOnClickListener {
+            ReaderState.update { it.copy(notice = null) }
         }
-        setupVoiceSpinner()
-        updatePersianLine()
-        setupSmartSwitches()
-        phoneVoiceButton.setOnClickListener {
+        tipSetup.setOnClickListener {
             PhoneVoiceSettings.open(
                 this,
                 getString(R.string.phone_voice_toast),
                 getString(R.string.phone_voice_fallback_toast),
             )
         }
-        phoneVoiceChange.setOnClickListener {
-            PhoneVoiceSettings.open(this, null, getString(R.string.phone_voice_fallback_toast))
-        }
-        setupSpeedSeek()
+        refreshChips()
 
         if (store.isInstalled()) {
             showReader()
@@ -263,59 +219,25 @@ class MainActivity : Activity(), InstallTask.Listener {
             body.text = getString(R.string.setup_body, setupVoiceName(), pack.sizeMb)
             downloadButton.text = getString(R.string.download_button, pack.sizeMb)
             updateSetupEstimate(pack.sizeMb)
-            refreshVoiceSection()
         }
         repaintSetupSampleButton()
-        updatePersianLine()
+        refreshChips()
+        updateTip()
         syncSetupState()
         // Warm the engine while the user pastes so the first READ starts instantly.
         if (store.isInstalled() && ReaderState.snapshot.status == ReaderStatus.IDLE) {
             ReaderService.preload(this)
         }
         updateNotifRow()
-        updatePhoneVoice()
     }
 
     /**
-     * Shows which engine is the phone's default TTS voice. The views live in
-     * the reader container, so setup never shows them.
+     * Shows the phone-voice tip card unless Readly is already the default. The
+     * views live in the reader container, so setup never shows them.
      */
-    private fun updatePhoneVoice() {
-        val defaultEngine: String? = try {
-            Settings.Secure.getString(contentResolver, Settings.Secure.TTS_DEFAULT_SYNTH)
-        } catch (e: Exception) {
-            Log.w("Readly", "Couldn't read the default TTS engine setting", e)
-            null
-        }
-        val label = if (defaultEngine != null && defaultEngine != packageName) {
-            try {
-                val info = if (Build.VERSION.SDK_INT >= 33) {
-                    packageManager.getApplicationInfo(
-                        defaultEngine,
-                        PackageManager.ApplicationInfoFlags.of(0),
-                    )
-                } else {
-                    @Suppress("DEPRECATION")
-                    packageManager.getApplicationInfo(defaultEngine, 0)
-                }
-                packageManager.getApplicationLabel(info).toString()
-            } catch (e: Exception) {
-                Log.w("Readly", "Couldn't resolve the TTS engine label for $defaultEngine", e)
-                defaultEngine
-            }
-        } else {
-            ""
-        }
-        phoneVoiceText.text = PhoneVoiceSettings.statusText(defaultEngine, packageName, label)
-        if (defaultEngine == packageName) {
-            phoneVoiceHelp.setText(R.string.phone_voice_help_ours)
-            phoneVoiceButton.visibility = View.GONE
-            phoneVoiceChange.visibility = View.VISIBLE
-        } else {
-            phoneVoiceHelp.setText(R.string.phone_voice_help_other)
-            phoneVoiceButton.visibility = View.VISIBLE
-            phoneVoiceChange.visibility = View.GONE
-        }
+    private fun updateTip() {
+        tipCard.visibility =
+            if (PhoneVoiceSettings.status(this).isOurs) View.GONE else View.VISIBLE
     }
 
     /**
@@ -374,7 +296,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     }
 
     // ------------------------------------------------------------------
-    // Reader
+    // Home
     // ------------------------------------------------------------------
 
     private fun readInputAloud() {
@@ -388,193 +310,82 @@ class MainActivity : Activity(), InstallTask.Listener {
         ReaderService.read(this, text, title, SourceFormat.PLAIN)
     }
 
-    private fun sendAction(action: String) {
-        startService(Intent(this, ReaderService::class.java).setAction(action))
-    }
-
-    private fun refreshVoiceSection() {
-        voicePackLabel.text = getString(R.string.voice_pack_format, VoiceCatalog.shortName(store.pack))
-        updatePersianLine()
-        setupVoiceSpinner()
-    }
-
-    /** `"Persian: <shortName>"` under the main voice line, when a Persian voice is set. */
-    private fun updatePersianLine() {
-        val fa = ReaderService.packIdForLang(this, "fa")?.let { VoiceCatalog.byId(it) }
-        if (fa != null) {
-            persianPackLabel.text = getString(R.string.persian_pack_format, VoiceCatalog.shortName(fa))
-            persianPackLabel.visibility = View.VISIBLE
-        } else {
-            persianPackLabel.visibility = View.GONE
-        }
-    }
-
-    private fun setupVoiceSpinner() {
-        val pack = store.pack
-        if (pack.speakers.size == 1) {
-            voiceRow.visibility = View.GONE
-            previewHelp.visibility = View.GONE
-            singleVoiceNote.visibility = View.VISIBLE
+    private fun pasteFromClipboard() {
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = manager.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.coerceToText(this)
+            ?.toString()
+            .orEmpty()
+        if (clip.isBlank()) {
+            Toast.makeText(this, R.string.nothing_to_paste, Toast.LENGTH_SHORT).show()
             return
         }
-        singleVoiceNote.visibility = View.GONE
-        voiceRow.visibility = View.VISIBLE
-        previewHelp.visibility = View.VISIBLE
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, pack.speakers)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        voiceSpinner.adapter = adapter
-        voiceSpinner.setSelection(
-            ReaderService.speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices),
-        )
-        // The initial population above must not preview: only a real tap arms it.
-        voiceSpinner.setOnTouchListener { _, _ ->
-            speakerTouched = true
-            false
-        }
-        voiceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(
-                parent: AdapterView<*>,
-                view: View?,
-                position: Int,
-                id: Long,
-            ) {
-                val old = ReaderService.speakerIdFor(this@MainActivity, pack.id)
-                ReaderService.setSpeakerId(this@MainActivity, pack.id, position)
-                if (speakerTouched && position != old) {
-                    playPreview(position)
-                }
-                speakerTouched = false
-            }
-
-            override fun onNothingSelected(parent: AdapterView<*>) = Unit
-        }
-        previewButton.setOnClickListener {
-            playPreview(voiceSpinner.selectedItemPosition)
-        }
+        val start = min(inputEdit.selectionStart, inputEdit.selectionEnd).coerceAtLeast(0)
+        val end = max(inputEdit.selectionStart, inputEdit.selectionEnd).coerceAtLeast(0)
+        inputEdit.text.replace(start, end, clip)
     }
 
-    /** Previews the active pack's [speakerId] saying its preview sentence. */
-    private fun playPreview(speakerId: Int) {
-        val pack = store.pack
-        if (!store.isInstalled()) return
-        val sid = speakerId.coerceIn(pack.speakers.indices)
-        ReaderService.preview(
+    private fun openSheet() {
+        SettingsSheet(this) {
+            refreshChips()
+            updateTip()
+        }.show()
+    }
+
+    private fun toggleSmartVoice() {
+        val on = !prefs.getBoolean(ReaderService.KEY_SMART_VOICE, true)
+        prefs.edit().putBoolean(ReaderService.KEY_SMART_VOICE, on).apply()
+        Toast.makeText(
             this,
-            pack.id,
-            sid,
-            ReaderService.previewText(this, pack, ReaderService.speakerShortName(pack, sid)),
-        )
+            if (on) R.string.smart_voice_on else R.string.smart_voice_off,
+            Toast.LENGTH_SHORT,
+        ).show()
+        refreshChips()
     }
 
-    private fun setupSmartSwitches() {
-        smartSwitch.isChecked = prefs.getBoolean(ReaderService.KEY_SMART_VOICE, true)
-        smartSwitch.setOnCheckedChangeListener { _, checked ->
-            prefs.edit().putBoolean(ReaderService.KEY_SMART_VOICE, checked).apply()
+    /** Repaints the voice/speed/Auto chips from the current settings. */
+    private fun refreshChips() {
+        val pack = ReaderService.activePack(this)
+        val family = VoiceCatalog.familyInfo(pack.family).title
+        val sid = ReaderService.speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
+        val speaker = if (pack.speakers.size == 1) {
+            pack.voiceName?.substringBefore(" (") ?: ReaderService.speakerShortName(pack, sid)
+        } else {
+            ReaderService.speakerShortName(pack, sid)
         }
-        autoDownloadSwitch.isChecked = prefs.getBoolean(ReaderService.KEY_AUTO_DOWNLOAD, true)
-        autoDownloadSwitch.setOnCheckedChangeListener { _, checked ->
-            prefs.edit().putBoolean(ReaderService.KEY_AUTO_DOWNLOAD, checked).apply()
-        }
-    }
-
-    private fun setupSpeedSeek() {
-        val speed = prefs.getFloat(ReaderService.KEY_SPEED, 1.0f)
-        speedSeek.progress = speedToProgress(speed)
-        updateSpeedLabel(speed)
-        speedSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                val speed = progressToSpeed(progress)
-                updateSpeedLabel(speed)
-                if (fromUser) prefs.edit().putFloat(ReaderService.KEY_SPEED, speed).apply()
+        voiceChip.text = "$family · $speaker"
+        // The chips must fit on one line; the speaker part goes first when narrow
+        // (the style keeps the chip itself to one line either way).
+        chipRow.post {
+            val layout = voiceChip.layout
+            if (layout != null && layout.lineCount > 0 && layout.getEllipsisCount(0) > 0) {
+                voiceChip.text = family
             }
-
-            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-            override fun onStopTrackingTouch(seekBar: SeekBar) = Unit
-        })
-    }
-
-    private fun updateSpeedLabel(speed: Float) {
-        speedLabel.text = getString(
-            R.string.speed_label_format,
+        }
+        val speed = prefs.getFloat(ReaderService.KEY_SPEED, 1.0f)
+        speedChip.text = getString(
+            R.string.speed_value_format,
             String.format(Locale.US, "%.1f", speed),
         )
+        val smartOn = prefs.getBoolean(ReaderService.KEY_SMART_VOICE, true)
+        autoChip.setCompoundDrawablesWithIntrinsicBounds(
+            if (smartOn) R.drawable.ic_check else 0,
+            0,
+            0,
+            0,
+        )
     }
 
-    /** SeekBar 0..15 maps to 0.5×..2.0× in 0.1 steps. */
-    private fun progressToSpeed(progress: Int): Float = 0.5f + progress * 0.1f
-
-    private fun speedToProgress(speed: Float): Int =
-        ((speed - 0.5f) * 10 + 0.5f).toInt().coerceIn(0, 15)
-
+    /** The reading notices render as one dismissible card above the voice chips. */
     private fun render(snap: ReaderSnapshot) {
-        nowContainer.visibility =
-            if (snap.status == ReaderStatus.IDLE) View.GONE else View.VISIBLE
-        nowTitle.text = snap.title.ifBlank { snap.currentText.take(60) }
-        nowTitle.visibility = if (nowTitle.text.isBlank()) View.GONE else View.VISIBLE
-        nowSentence.text = snap.currentText
-        nowSentence.visibility = if (snap.currentText.isBlank()) View.GONE else View.VISIBLE
-        if (snap.total > 0) {
-            nowProgress.visibility = View.VISIBLE
-            nowProgress.text = getString(R.string.sentence_format, snap.index + 1, snap.total)
-        } else {
-            nowProgress.visibility = View.GONE
-        }
-        when (snap.status) {
-            ReaderStatus.LOADING_VOICE -> {
-                statusLine.visibility = View.VISIBLE
-                statusLine.setText(R.string.loading_voice)
-                statusLine.setTextColor(defaultTextColor)
-            }
-            ReaderStatus.FETCHING -> {
-                statusLine.visibility = View.VISIBLE
-                statusLine.text = snap.currentText.ifBlank { "Opening…" }
-                statusLine.setTextColor(defaultTextColor)
-            }
-            ReaderStatus.PREVIEWING -> {
-                statusLine.visibility = View.VISIBLE
-                statusLine.text = snap.currentText.ifBlank { "Previewing…" }
-                statusLine.setTextColor(defaultTextColor)
-            }
-            ReaderStatus.ERROR -> {
-                statusLine.visibility = View.VISIBLE
-                statusLine.text = snap.errorMessage
-                statusLine.setTextColor(getColor(android.R.color.holo_red_dark))
-            }
-            ReaderStatus.FINISHED -> {
-                statusLine.visibility = View.VISIBLE
-                statusLine.setText(R.string.finished_label)
-                statusLine.setTextColor(defaultTextColor)
-            }
-            else -> statusLine.visibility = View.GONE
-        }
-        if (snap.lastRtf > 0) {
-            speedLine.visibility = View.VISIBLE
-            val factor = String.format(Locale.US, "%.1f", 1.0 / snap.lastRtf)
-            if (snap.lastRtf > 1) {
-                speedLine.text = getString(R.string.speed_slow_format, factor)
-                speedLine.setTextColor(getColor(android.R.color.holo_orange_dark))
-            } else {
-                speedLine.text = getString(R.string.speed_fast_format, factor)
-                speedLine.setTextColor(defaultTextColor)
-            }
-        } else {
-            speedLine.visibility = View.GONE
-        }
-        if (!snap.smartLine.isNullOrBlank()) {
-            smartLine.visibility = View.VISIBLE
-            smartLine.text = snap.smartLine
-        } else {
-            smartLine.visibility = View.GONE
-        }
         if (!snap.notice.isNullOrBlank()) {
-            noticeText.visibility = View.VISIBLE
+            noticeCard.visibility = View.VISIBLE
             noticeText.text = snap.notice
         } else {
-            noticeText.visibility = View.GONE
+            noticeCard.visibility = View.GONE
         }
-        pausePlayButton.setText(
-            if (snap.status == ReaderStatus.PAUSED) R.string.play_button else R.string.pause_button,
-        )
     }
 
     private fun updateNotifRow() {

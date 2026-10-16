@@ -132,4 +132,9 @@
         <item name="android:background">@drawable/icon_circle_accent</item>
         <item name="android:tint">@color/onAccent</item>
     </style>
+
+    <style name="SheetAnimation">
+        <item name="android:windowEnterAnimation">@anim/sheet_slide_up</item>
+        <item name="android:windowExitAnimation">@anim/sheet_slide_down</item>
+    </style>
 </resources>

@@ -109,4 +109,28 @@
     <string name="phone_voice_help_ours">Apps that read aloud use your System voice setting (Change voice pack → System voice).</string>
     <string name="phone_voice_toast">Tap Preferred engine, then choose Readly.</string>
     <string name="phone_voice_fallback_toast">Open System → Languages → Text-to-speech output → Preferred engine → Readly.</string>
+
+    <string name="home_card_title">What should I read?</string>
+    <string name="home_card_subtitle">Paste text, or share a link from any app.</string>
+    <string name="paste_button">Paste</string>
+    <string name="nothing_to_paste">Nothing to paste.</string>
+    <string name="smart_voice_on">Smart voice on</string>
+    <string name="smart_voice_off">Smart voice off</string>
+    <string name="chip_auto">Auto</string>
+    <string name="tip_section">Tip</string>
+    <string name="tip_title">Make Readly your phone\'s voice</string>
+    <string name="tip_sub">TalkBack, Maps and other apps will use it.</string>
+    <string name="setup_button">Set up</string>
+    <string name="footer_hint">Share → Readly · or select text → Read aloud</string>
+    <string name="sheet_title">Voice &amp; speed</string>
+    <string name="change_pack_short">Change pack</string>
+    <string name="tap_voice_hint">Tap a voice to hear it.</string>
+    <string name="speaker_chip_format">▶ %1$s</string>
+    <string name="speed_value_format">%1$s×</string>
+    <string name="auto_download_short">Auto-download on Wi-Fi</string>
+    <string name="auto_download_short_help">Up to 70 MB per language</string>
+    <string name="dismiss_button">✕</string>
+    <string name="dismiss_desc">Dismiss</string>
+    <string name="settings_desc">Voice and speed settings</string>
+    <string name="phone_voice_label">Phone voice</string>
 </resources>

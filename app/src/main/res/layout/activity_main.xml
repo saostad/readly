@@ -1,500 +1,421 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:orientation="vertical">
 
-    <LinearLayout
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="24dp">
-
-        <TextView
-            android:id="@+id/needVoiceBanner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
-            android:text="@string/need_voice_banner"
-            android:textStyle="bold"
-            android:visibility="gone" />
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
         <LinearLayout
-            android:id="@+id/setupContainer"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical">
-
-            <TextView
-                android:id="@+id/title"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/setup_title"
-                android:textAppearance="?android:attr/textAppearanceLarge" />
-
-            <TextView
-                android:id="@+id/body"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp" />
-
-            <TextView
-                android:id="@+id/setupEstimate"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp" />
-
-            <Button
-                style="@style/Btn.Ghost"
-                android:id="@+id/setupSampleButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/play_sample_button" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/setup_sample_help"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
-
-            <Button
-                style="@style/Btn.Primary"
-                android:id="@+id/downloadButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp" />
-
-            <TextView
-                android:id="@+id/downloadHelp"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/download_help"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
-
-            <Button
-                style="@style/Btn.Ghost"
-                android:id="@+id/chooseVoiceButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/choose_voice_button" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/choose_voice_help"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
-
-            <ProgressBar
-                android:id="@+id/progressBar"
-                style="?android:attr/progressBarStyleHorizontal"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:contentDescription="@string/progress_desc"
-                android:max="100"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/progressLabel"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:visibility="gone" />
-
-            <Button
-                style="@style/Btn.Ghost"
-                android:id="@+id/cancelButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/cancel_button"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/cancelHelp"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/cancel_help"
-                android:textAppearance="?android:attr/textAppearanceSmall"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/errorText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:textColor="@color/error"
-                android:visibility="gone" />
-
-            <Button
-                style="@style/Btn.Primary"
-                android:id="@+id/retryButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/try_again"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/retryHelp"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/retry_help"
-                android:textAppearance="?android:attr/textAppearanceSmall"
-                android:visibility="gone" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/readerContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:visibility="gone">
-
-            <LinearLayout
-                android:id="@+id/notifRow"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <TextView
-                    android:id="@+id/notifNote"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/notif_note" />
-
-                <Button
-                    style="@style/Btn.Ghost"
-                    android:id="@+id/allowButton"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/allow_button" />
-            </LinearLayout>
+            android:padding="16dp">
 
             <TextView
+                android:id="@+id/needVoiceBanner"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/read_section"
-                android:textAppearance="?android:attr/textAppearanceMedium" />
-
-            <EditText
-                android:id="@+id/inputEdit"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:gravity="top"
-                android:hint="@string/input_hint"
-                android:inputType="textMultiLine"
-                android:minLines="4" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/input_help"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
-
-            <Button
-                style="@style/Btn.Primary"
-                android:id="@+id/readButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/read_button" />
-
-            <TextView
-                android:id="@+id/inputError"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/input_error"
-                android:textColor="@color/error"
+                android:layout_marginBottom="16dp"
+                android:text="@string/need_voice_banner"
+                android:textStyle="bold"
                 android:visibility="gone" />
 
             <LinearLayout
-                android:id="@+id/nowContainer"
+                android:id="@+id/setupContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:orientation="vertical"
-                android:visibility="gone">
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/setup_title"
+                    android:textAppearance="?android:attr/textAppearanceLarge" />
+
+                <TextView
+                    android:id="@+id/body"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" />
+
+                <TextView
+                    android:id="@+id/setupEstimate"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" />
+
+                <Button
+                    style="@style/Btn.Ghost"
+                    android:id="@+id/setupSampleButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/play_sample_button" />
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="@string/now_section"
-                    android:textAppearance="?android:attr/textAppearanceMedium" />
-
-                <TextView
-                    android:id="@+id/nowTitle"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/nowSentence"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp" />
-
-                <TextView
-                    android:id="@+id/nowProgress"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
+                    android:text="@string/setup_sample_help"
                     android:textAppearance="?android:attr/textAppearanceSmall" />
 
-                <TextView
-                    android:id="@+id/statusLine"
+                <Button
+                    style="@style/Btn.Primary"
+                    android:id="@+id/downloadButton"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:visibility="gone" />
-
-                <TextView
-                    android:id="@+id/speedLine"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:textAppearance="?android:attr/textAppearanceSmall"
-                    android:visibility="gone" />
+                    android:layout_marginTop="16dp" />
 
                 <TextView
-                    android:id="@+id/smartLine"
+                    android:id="@+id/downloadHelp"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:textAppearance="?android:attr/textAppearanceSmall"
-                    android:visibility="gone" />
-
-                <TextView
-                    android:id="@+id/noticeText"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:textAppearance="?android:attr/textAppearanceSmall"
-                    android:visibility="gone" />
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:orientation="horizontal">
-
-                    <Button
-                        style="@style/Btn.Ghost"
-                        android:id="@+id/prevButton"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginEnd="4dp"
-                        android:layout_weight="1"
-                        android:text="@string/previous_button" />
-
-                    <Button
-                        style="@style/Btn.Ghost"
-                        android:id="@+id/pausePlayButton"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="4dp"
-                        android:layout_weight="1"
-                        android:text="@string/pause_button" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:orientation="horizontal">
-
-                    <Button
-                        style="@style/Btn.Ghost"
-                        android:id="@+id/nextButton"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginEnd="4dp"
-                        android:layout_weight="1"
-                        android:text="@string/next_button" />
-
-                    <Button
-                        style="@style/Btn.Ghost"
-                        android:id="@+id/stopButton"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="4dp"
-                        android:layout_weight="1"
-                        android:text="@string/stop_button" />
-                </LinearLayout>
-            </LinearLayout>
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/voice_section"
-                android:textAppearance="?android:attr/textAppearanceMedium" />
-
-            <TextView
-                android:id="@+id/voicePackLabel"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp" />
-
-            <TextView
-                android:id="@+id/persianPackLabel"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:visibility="gone" />
-
-            <Button
-                style="@style/Btn.Ghost"
-                android:id="@+id/changePackButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/change_pack_button" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/change_pack_help"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
-
-            <LinearLayout
-                android:id="@+id/voiceRow"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:orientation="horizontal">
-
-                <Spinner
-                    android:id="@+id/voiceSpinner"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1" />
+                    android:text="@string/download_help"
+                    android:textAppearance="?android:attr/textAppearanceSmall" />
 
                 <Button
                     style="@style/Btn.Ghost"
-                    android:id="@+id/previewButton"
-                    android:layout_width="wrap_content"
+                    android:id="@+id/chooseVoiceButton"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:text="@string/preview_button" />
+                    android:layout_marginTop="8dp"
+                    android:text="@string/choose_voice_button" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/choose_voice_help"
+                    android:textAppearance="?android:attr/textAppearanceSmall" />
+
+                <ProgressBar
+                    android:id="@+id/progressBar"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:contentDescription="@string/progress_desc"
+                    android:max="100"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/progressLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:visibility="gone" />
+
+                <Button
+                    style="@style/Btn.Ghost"
+                    android:id="@+id/cancelButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/cancel_button"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/cancelHelp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/cancel_help"
+                    android:textAppearance="?android:attr/textAppearanceSmall"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/errorText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:textColor="@color/error"
+                    android:visibility="gone" />
+
+                <Button
+                    style="@style/Btn.Primary"
+                    android:id="@+id/retryButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/try_again"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/retryHelp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/retry_help"
+                    android:textAppearance="?android:attr/textAppearanceSmall"
+                    android:visibility="gone" />
             </LinearLayout>
 
-            <TextView
-                android:id="@+id/previewHelp"
+            <LinearLayout
+                android:id="@+id/readerContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/preview_help"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
+                android:orientation="vertical"
+                android:visibility="gone">
 
-            <TextView
-                android:id="@+id/singleVoiceNote"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/single_voice_note"
-                android:visibility="gone" />
+                <LinearLayout
+                    android:id="@+id/notifRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="12dp"
+                    android:orientation="vertical"
+                    android:visibility="gone">
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/voice_help"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
+                    <TextView
+                        android:id="@+id/notifNote"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/notif_note" />
 
-            <Switch
-                android:id="@+id/smartSwitch"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/smart_voice_label" />
+                    <Button
+                        style="@style/Btn.Ghost"
+                        android:id="@+id/allowButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/allow_button" />
+                </LinearLayout>
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/smart_voice_help"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="14dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
-            <Switch
-                android:id="@+id/autoDownloadSwitch"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/auto_download_label" />
+                    <TextView
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:background="@drawable/logo_background"
+                        android:gravity="center"
+                        android:text="R"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/auto_download_help"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
+                    <TextView
+                        style="@style/Title"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="@string/app_name" />
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/phone_voice_title"
-                android:textAppearance="?android:attr/textAppearanceMedium" />
+                    <ImageButton
+                        android:id="@+id/settingsButton"
+                        style="@style/IconButton"
+                        android:layout_width="34dp"
+                        android:layout_height="34dp"
+                        android:contentDescription="@string/settings_desc"
+                        android:src="@drawable/ic_settings" />
+                </LinearLayout>
 
-            <TextView
-                android:id="@+id/phoneVoiceText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/card_background"
+                    android:orientation="vertical"
+                    android:padding="14dp">
 
-            <Button
-                style="@style/Btn.Primary"
-                android:id="@+id/phoneVoiceButton"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/phone_voice_make_button" />
+                    <TextView
+                        style="@style/CardTitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/home_card_title" />
 
-            <Button
-                android:id="@+id/phoneVoiceChange"
-                style="@style/Btn.Text"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/phone_voice_change_button" />
+                    <TextView
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/home_card_subtitle" />
 
-            <TextView
-                android:id="@+id/phoneVoiceHelp"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
+                    <EditText
+                        android:id="@+id/inputEdit"
+                        style="@style/BoxEdit"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:gravity="top"
+                        android:hint="@string/input_hint"
+                        android:inputType="textMultiLine"
+                        android:minLines="4" />
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/speed_section"
-                android:textAppearance="?android:attr/textAppearanceMedium" />
+                    <TextView
+                        android:id="@+id/inputError"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/input_error"
+                        android:textColor="@color/error"
+                        android:visibility="gone" />
 
-            <TextView
-                android:id="@+id/speedLabel"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:orientation="horizontal">
 
-            <SeekBar
-                android:id="@+id/speedSeek"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:max="15" />
+                        <Button
+                            style="@style/Btn.Ghost"
+                            android:id="@+id/pasteButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/paste_button" />
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/speed_help"
-                android:textAppearance="?android:attr/textAppearanceSmall" />
+                        <Button
+                            style="@style/Btn.Primary"
+                            android:id="@+id/readButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1.4"
+                            android:drawablePadding="8dp"
+                            android:drawableStart="@drawable/ic_play"
+                            android:drawableTint="@color/onAccent"
+                            android:text="@string/read_button" />
+                    </LinearLayout>
+                </LinearLayout>
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/how_section"
-                android:textAppearance="?android:attr/textAppearanceMedium" />
+                <LinearLayout
+                    android:id="@+id/noticeCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/card_background"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="14dp"
+                    android:visibility="gone">
 
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/how_text" />
+                    <TextView
+                        android:id="@+id/noticeText"
+                        style="@style/Body"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1" />
+
+                    <Button
+                        style="@style/Btn.Text"
+                        android:id="@+id/dismissNotice"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:contentDescription="@string/dismiss_desc"
+                        android:text="@string/dismiss_button" />
+                </LinearLayout>
+
+                <TextView
+                    style="@style/SectionLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="8dp"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/voice_section" />
+
+                <LinearLayout
+                    android:id="@+id/chipRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <Button
+                        style="@style/Chip"
+                        android:id="@+id/voiceChip"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:drawablePadding="6dp"
+                        android:drawableStart="@drawable/ic_mic"
+                        android:drawableTint="@color/accent" />
+
+                    <Button
+                        style="@style/Chip"
+                        android:id="@+id/speedChip"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp" />
+
+                    <Button
+                        style="@style/Chip"
+                        android:id="@+id/autoChip"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:drawablePadding="6dp"
+                        android:drawableTint="@color/accent"
+                        android:text="@string/chip_auto" />
+                </LinearLayout>
+
+                <TextView
+                    style="@style/SectionLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="8dp"
+                    android:layout_marginTop="16dp"
+                    android:text="@string/tip_section" />
+
+                <LinearLayout
+                    android:id="@+id/tipCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/tip_background"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="12dp"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:layout_width="30dp"
+                        android:layout_height="30dp"
+                        android:background="@drawable/tip_icon_background"
+                        android:scaleType="center"
+                        android:src="@drawable/ic_check"
+                        android:tint="@color/accent" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/tip_title"
+                            android:textColor="@color/text"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            style="@style/Small"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/tip_sub" />
+                    </LinearLayout>
+
+                    <Button
+                        style="@style/Btn.Text"
+                        android:id="@+id/tipSetup"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:text="@string/setup_button" />
+                </LinearLayout>
+
+                <TextView
+                    style="@style/Small"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="8dp"
+                    android:layout_marginTop="16dp"
+                    android:gravity="center"
+                    android:text="@string/footer_hint" />
+            </LinearLayout>
         </LinearLayout>
-    </LinearLayout>
-</ScrollView>
+    </ScrollView>
+</LinearLayout>

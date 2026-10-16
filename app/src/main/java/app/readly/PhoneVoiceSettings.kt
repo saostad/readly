@@ -3,6 +3,8 @@ package app.readly
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
@@ -33,6 +35,43 @@ object PhoneVoiceSettings {
             else ->
                 "Your phone speaks with $engineLabel."
         }
+
+    /** The default engine package, whether it is us, and the status line to show. */
+    data class PhoneStatus(val defaultEngine: String?, val isOurs: Boolean, val text: String)
+
+    /**
+     * Reads the default TTS engine setting and resolves its label (falling back
+     * to the package name, with a warning, when the label can't be read).
+     */
+    fun status(activity: Activity): PhoneStatus {
+        val ours = activity.packageName
+        val defaultEngine: String? = try {
+            Settings.Secure.getString(activity.contentResolver, Settings.Secure.TTS_DEFAULT_SYNTH)
+        } catch (e: Exception) {
+            Log.w("Readly", "Couldn't read the default TTS engine setting", e)
+            null
+        }
+        val label = if (defaultEngine != null && defaultEngine != ours) {
+            try {
+                val info = if (Build.VERSION.SDK_INT >= 33) {
+                    activity.packageManager.getApplicationInfo(
+                        defaultEngine,
+                        PackageManager.ApplicationInfoFlags.of(0),
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    activity.packageManager.getApplicationInfo(defaultEngine, 0)
+                }
+                activity.packageManager.getApplicationLabel(info).toString()
+            } catch (e: Exception) {
+                Log.w("Readly", "Couldn't resolve the TTS engine label for $defaultEngine", e)
+                defaultEngine
+            }
+        } else {
+            ""
+        }
+        return PhoneStatus(defaultEngine, defaultEngine == ours, statusText(defaultEngine, ours, label))
+    }
 
     /**
      * Opens the phone's text-to-speech settings. Shows [hintToast] after a
