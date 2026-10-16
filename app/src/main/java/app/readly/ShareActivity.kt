@@ -9,6 +9,7 @@ import android.util.Log
 import android.widget.Toast
 import app.readly.input.ShareInput
 import app.readly.input.ShareRequest
+import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
 import app.readly.playback.ReaderService
 import java.io.File
@@ -25,7 +26,8 @@ class ShareActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val store = VoiceModelStore(File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
+        val pack = VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!
+        val store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
         if (!store.isInstalled()) {
             startActivity(
                 Intent(this, MainActivity::class.java)

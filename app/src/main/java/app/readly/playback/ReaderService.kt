@@ -28,6 +28,7 @@ import android.util.Log
 import android.widget.Toast
 import app.readly.MainActivity
 import app.readly.input.ArticleFetcher
+import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
 import app.readly.text.Chunk
 import app.readly.text.SentenceChunker
@@ -223,7 +224,8 @@ class ReaderService : Service() {
         ttsThread = HandlerThread("readly-tts").also { it.start() }
         ttsHandler = Handler(ttsThread.looper)
         readerExecutor = Executors.newSingleThreadExecutor { Thread(it, "readly-read") }
-        store = VoiceModelStore(File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
+        val pack = VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!
+        store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
         notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Reading aloud", NotificationManager.IMPORTANCE_LOW),

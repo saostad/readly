@@ -19,6 +19,7 @@ import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import app.readly.model.InstallStage
+import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
 import app.readly.playback.ReaderService
 import app.readly.playback.ReaderSnapshot
@@ -126,7 +127,8 @@ class MainActivity : Activity(), InstallTask.Listener {
         speedSeek = findViewById(R.id.speedSeek)
         defaultTextColor = statusLine.currentTextColor
 
-        store = VoiceModelStore(File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
+        val pack = VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!
+        store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
         prefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
 
         downloadButton.setOnClickListener { startInstall() }
@@ -359,7 +361,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         newTask.listener = this
         app.installTask = newTask
         showProgress()
-        updateProgress(InstallStage.DOWNLOADING, 0, VoiceModelStore.ARCHIVE_SIZE_BYTES)
+        updateProgress(InstallStage.DOWNLOADING, 0, store.pack.sizeBytes)
         app.ioExecutor.execute { newTask.run() }
     }
 
@@ -396,7 +398,7 @@ class MainActivity : Activity(), InstallTask.Listener {
                 getString(
                     R.string.downloading_format,
                     bytesDone / 1_000_000,
-                    VoiceModelStore.ARCHIVE_SIZE_MB,
+                    store.pack.sizeMb,
                 )
             InstallStage.VERIFYING -> getString(R.string.verifying_label)
         }

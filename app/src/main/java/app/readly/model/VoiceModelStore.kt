@@ -31,40 +31,33 @@ interface DownloadConnection : Closeable {
 }
 
 /**
- * Downloads, verifies and unpacks the Kokoro voice model.
+ * Downloads, verifies and unpacks one [VoicePack].
  *
  * Plain JVM Kotlin with no Android types, so it is unit-testable on the host JVM.
  *
+ * @param pack the voice pack this store installs.
  * @param baseDir directory holding the download and the installed model
  *   (on device: `context.noBackupFilesDir/voices`).
- * @param urlOpener opens [ARCHIVE_URL]; production passes [httpUrlOpener].
+ * @param urlOpener opens [VoicePack.url]; production passes [httpUrlOpener].
  * @param expectedSha256 expected SHA-256 of the archive; a parameter so tests can inject
- *   fixture hashes (production uses [ARCHIVE_SHA256]).
+ *   fixture hashes (production uses the pack's [VoicePack.sha256]).
  * @param expectedSizeBytes expected archive size in bytes; a parameter so tests can inject
- *   fixture sizes (production uses [ARCHIVE_SIZE_BYTES]).
+ *   fixture sizes (production uses the pack's [VoicePack.sizeBytes]).
  * @param onInfo receives messages that production logs with `Log.i("Readly", …)`; injected
  *   so JVM tests don't touch `android.util.Log`.
  */
 class VoiceModelStore(
+    val pack: VoicePack,
     private val baseDir: File,
     private val urlOpener: (String) -> DownloadConnection,
-    private val expectedSha256: String = ARCHIVE_SHA256,
-    private val expectedSizeBytes: Long = ARCHIVE_SIZE_BYTES,
+    private val expectedSha256: String = pack.sha256,
+    private val expectedSizeBytes: Long = pack.sizeBytes,
     private val onInfo: (String) -> Unit = { android.util.Log.i("Readly", it) },
 ) {
     companion object {
-        const val MODEL_NAME = "kokoro-en-v0_19"
-        const val ARCHIVE_URL =
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/" +
-            "kokoro-en-v0_19.tar.bz2"
-        const val ARCHIVE_SIZE_BYTES = 319625534L
-        const val ARCHIVE_SHA256 =
-            "912804855a04745fa77a30be545b3f9a5d15c4d66db00b88cbcd4921df605ac7"
         const val REQUIRED_FREE_BYTES = 500L * 1024 * 1024
-        /** Previous int8 voice dir, removed after a successful install of the fp32 voice. */
+        /** Previous int8 voice dir, removed after a successful install of any pack. */
         const val LEGACY_MODEL_NAME = "kokoro-int8-en-v0_19"
-        /** [ARCHIVE_SIZE_BYTES] in decimal MB, rounded; the progress label shows this total. */
-        val ARCHIVE_SIZE_MB: Int = ((ARCHIVE_SIZE_BYTES + 500_000) / 1_000_000).toInt()
 
         private const val COMPLETE_MARKER = ".complete"
         private const val READ_BUFFER_BYTES = 64 * 1024
@@ -72,33 +65,63 @@ class VoiceModelStore(
 
         /** Production [VoiceModelStore] opener backed by [HttpURLConnection]. */
         fun httpUrlOpener(url: String): DownloadConnection = HttpDownloadConnection(url)
+
+        /** Ids of the packs installed under [base], in catalog order. */
+        fun installedIds(base: File): List<String> =
+            VoiceCatalog.ALL.filter { isPackInstalled(base, it) }.map { it.id }
+
+        /** File-level install check, shared by [VoiceModelStore.isInstalled]. */
+        internal fun isPackInstalled(base: File, pack: VoicePack): Boolean {
+            val dir = File(base, pack.topDir)
+            if (!File(dir, COMPLETE_MARKER).isFile) return false
+            if (requiredFiles(pack).any { !File(dir, it).isFile }) return false
+            return pack.family == VoiceFamily.SUPERTONIC ||
+                File(dir, "espeak-ng-data").isDirectory
+        }
+
+        private fun requiredFiles(pack: VoicePack): List<String> = when (pack.family) {
+            VoiceFamily.KOKORO, VoiceFamily.KITTEN ->
+                listOf(pack.modelFile, "voices.bin", "tokens.txt")
+            VoiceFamily.PIPER -> listOf(pack.modelFile, "tokens.txt")
+            VoiceFamily.SUPERTONIC -> listOf(
+                "duration_predictor.int8.onnx",
+                "text_encoder.int8.onnx",
+                "vector_estimator.int8.onnx",
+                "vocoder.int8.onnx",
+                "tts.json",
+                "unicode_indexer.bin",
+                "voice.bin",
+            )
+        }
     }
 
-    /** Installed model dir (`<base>/kokoro-en-v0_19`); valid once [isInstalled]. */
+    /** Installed model dir (`<base>/<topDir>`); valid once [isInstalled]. */
     val modelDir: File
-        get() = File(baseDir, MODEL_NAME)
+        get() = File(baseDir, pack.topDir)
 
     /** True if the previous int8 voice dir is still present (pending migration). */
     fun hasLegacyModel(): Boolean = File(baseDir, LEGACY_MODEL_NAME).exists()
 
-    /** True only if the model dir holds the marker, the three files and the data dir. */
-    fun isInstalled(): Boolean {
-        val dir = File(baseDir, MODEL_NAME)
-        return File(dir, COMPLETE_MARKER).isFile &&
-            File(dir, "model.onnx").isFile &&
-            File(dir, "voices.bin").isFile &&
-            File(dir, "tokens.txt").isFile &&
-            File(dir, "espeak-ng-data").isDirectory
+    /** True only if the model dir holds the marker and the family's required files. */
+    fun isInstalled(): Boolean = isPackInstalled(baseDir, pack)
+
+    /** Removes this pack's installed dir, if present. */
+    fun delete() {
+        val dir = File(baseDir, pack.topDir)
+        if (dir.exists()) {
+            dir.deleteRecursively()
+            onInfo("Removed voice pack ${pack.id}")
+        }
     }
 
     /**
-     * Downloads, verifies and installs the voice model in a single pass: download, hash
+     * Downloads, verifies and installs the voice pack in a single pass: download, hash
      * and unpack run at the same time, so bzip2 decoding overlaps the network.
      *
      * @param progress called as `(stage, bytesDone, bytesTotal)`; totals are the expected
-     *   archive size ([ARCHIVE_SIZE_BYTES] in production). DOWNLOADING reports compressed
-     *   bytes consumed, throttled to at most every 256 KB plus once at the end; VERIFYING
-     *   is reported once for the final size and hash checks.
+     *   archive size (the pack's [VoicePack.sizeBytes] in production). DOWNLOADING reports
+     *   compressed bytes consumed, throttled to at most every 256 KB plus once at the end;
+     *   VERIFYING is reported once for the final size and hash checks.
      * @param cancelled polled during download, extraction and draining; abort throws
      *   [CancellationException].
      * @throws IOException with a specific message on any failure (space, HTTP, truncation,
@@ -113,8 +136,8 @@ class VoiceModelStore(
             )
         }
         if (cancelled()) throw CancellationException("Voice download cancelled")
-        val tmpDir = File(baseDir, "$MODEL_NAME.tmp")
-        val finalDir = File(baseDir, MODEL_NAME)
+        val tmpDir = File(baseDir, "${pack.topDir}.tmp")
+        val finalDir = File(baseDir, pack.topDir)
         try {
             val digest = MessageDigest.getInstance("SHA-256")
             val consumed = streamDownloadAndUnpack(tmpDir, digest, progress, cancelled)
@@ -154,11 +177,11 @@ class VoiceModelStore(
         tmpDir.deleteRecursively()
         tmpDir.mkdirs()
         val base = tmpDir.toPath().toAbsolutePath().normalize()
-        urlOpener(ARCHIVE_URL).use { conn ->
+        urlOpener(pack.url).use { conn ->
             if (conn.statusCode !in 200..299) {
                 val detail = if (conn.statusMessage.isBlank()) "" else " ${conn.statusMessage}"
                 throw IOException(
-                    "Voice download failed: HTTP ${conn.statusCode}$detail from $ARCHIVE_URL",
+                    "Voice download failed: HTTP ${conn.statusCode}$detail from ${pack.url}",
                 )
             }
             // Buffered: commons-compress pulls its input one byte at a time, which is ~5x
@@ -276,10 +299,10 @@ class VoiceModelStore(
         }
     }
 
-    /** Strips the archive's single top dir (`kokoro-en-v0_19/`); other names pass through. */
+    /** Strips the archive's single top dir (`<topDir>/`); other names pass through. */
     private fun stripTopDir(name: String): String {
         val clean = name.removePrefix("./")
-        val prefix = "$MODEL_NAME/"
+        val prefix = "${pack.topDir}/"
         return if (clean.startsWith(prefix)) clean.removePrefix(prefix) else clean
     }
 

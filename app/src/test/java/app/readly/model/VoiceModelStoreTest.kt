@@ -24,17 +24,48 @@ class VoiceModelStoreTest {
     @get:Rule
     val temp = TemporaryFolder()
 
+    private val kokoro = VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!
+
+    private val piperTestPack = VoicePack(
+        id = "test-piper",
+        displayName = "Test Piper",
+        family = VoiceFamily.PIPER,
+        archive = "test-piper.tar.bz2",
+        sizeBytes = 0L,
+        sha256 = "unused",
+        topDir = "test-piper-1",
+        modelFile = "test.onnx",
+        speakers = listOf("Default"),
+        rtfNote = "test",
+    )
+
     @Test
     fun isInstalled_freshDir_returnsFalse() {
-        val store = VoiceModelStore(temp.newFolder("voices"), { error("unused") }, "unused")
+        val store = VoiceModelStore(kokoro, temp.newFolder("voices"), { error("unused") }, "unused")
         assertFalse(store.isInstalled())
+    }
+
+    @Test
+    fun isInstalled_existingKokoroDir_needsNoRedownload() {
+        // The owner's phone already has this dir: it must count as the kokoro-en
+        // pack without any download.
+        val base = temp.newFolder("voices")
+        touch(base, "kokoro-en-v0_19/model.onnx")
+        touch(base, "kokoro-en-v0_19/voices.bin")
+        touch(base, "kokoro-en-v0_19/tokens.txt")
+        File(base, "kokoro-en-v0_19/espeak-ng-data").mkdirs()
+        touch(base, "kokoro-en-v0_19/.complete")
+        val store = VoiceModelStore(kokoro, base, { error("must not download") })
+
+        assertTrue(store.isInstalled())
+        assertEquals(File(base, "kokoro-en-v0_19"), store.modelDir)
     }
 
     @Test
     fun install_success_installsModelAndCleansUp() {
         val archive = fixtureArchive(modelEntries())
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), archive.size.toLong())
+        val store = VoiceModelStore(kokoro, base, fakeOpener(archive), sha256(archive), archive.size.toLong())
         assertFalse(store.isInstalled())
 
         val stages = mutableListOf<InstallStage>()
@@ -52,12 +83,39 @@ class VoiceModelStoreTest {
     }
 
     @Test
+    fun install_piperPack_usesPackTopDirAndFiles() {
+        val archive = fixtureArchive(
+            mapOf(
+                "test-piper-1/test.onnx" to "fake-model".toByteArray(),
+                "test-piper-1/tokens.txt" to "fake-tokens".toByteArray(),
+                "test-piper-1/espeak-ng-data/intonation" to "fake-data".toByteArray(),
+            ),
+        )
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(
+            piperTestPack,
+            base,
+            fakeOpener(archive),
+            sha256(archive),
+            archive.size.toLong(),
+        )
+
+        store.install(progress = { _, _, _ -> }, cancelled = { false })
+
+        assertTrue(store.isInstalled())
+        assertEquals(File(base, "test-piper-1"), store.modelDir)
+        assertTrue(File(base, "test-piper-1/test.onnx").isFile)
+        assertTrue(File(base, "test-piper-1/.complete").isFile)
+        assertFalse(File(base, "test-piper-1.tmp").exists())
+    }
+
+    @Test
     fun install_wrongHash_throwsExactMessageAndCleansUp() {
         val archive = fixtureArchive(modelEntries())
         val actual = sha256(archive)
         val wrong = (if (actual[0] == '0') "1" else "0") + actual.substring(1)
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), wrong, archive.size.toLong())
+        val store = VoiceModelStore(kokoro, base, fakeOpener(archive), wrong, archive.size.toLong())
 
         try {
             store.install(progress = { _, _, _ -> }, cancelled = { false })
@@ -73,7 +131,7 @@ class VoiceModelStoreTest {
     fun install_zipSlipEntry_rejectsAndCleansUp() {
         val archive = fixtureArchive(mapOf("../evil" to "evil".toByteArray()))
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), archive.size.toLong())
+        val store = VoiceModelStore(kokoro, base, fakeOpener(archive), sha256(archive), archive.size.toLong())
 
         try {
             store.install(progress = { _, _, _ -> }, cancelled = { false })
@@ -94,7 +152,7 @@ class VoiceModelStoreTest {
         java.util.Random(42).nextBytes(padding)
         val archive = fixtureArchive(modelEntries() + ("kokoro-en-v0_19/padding.bin" to padding))
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), archive.size.toLong())
+        val store = VoiceModelStore(kokoro, base, fakeOpener(archive), sha256(archive), archive.size.toLong())
 
         var progressCalls = 0
         try {
@@ -122,7 +180,7 @@ class VoiceModelStoreTest {
             },
         )
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), archive.size.toLong())
+        val store = VoiceModelStore(kokoro, base, fakeOpener(archive), sha256(archive), archive.size.toLong())
 
         val checks = AtomicInteger()
         try {
@@ -144,7 +202,7 @@ class VoiceModelStoreTest {
         val archive = fixtureArchive(modelEntries())
         val half = archive.copyOf(archive.size / 2)
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(half), sha256(archive), archive.size.toLong())
+        val store = VoiceModelStore(kokoro, base, fakeOpener(half), sha256(archive), archive.size.toLong())
 
         try {
             store.install(progress = { _, _, _ -> }, cancelled = { false })
@@ -167,7 +225,7 @@ class VoiceModelStoreTest {
         java.util.Random(42).nextBytes(padding)
         val archive = fixtureArchive(modelEntries() + ("kokoro-en-v0_19/padding.bin" to padding))
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), archive.size.toLong())
+        val store = VoiceModelStore(kokoro, base, fakeOpener(archive), sha256(archive), archive.size.toLong())
 
         val downloading = mutableListOf<Long>()
         val verifying = mutableListOf<Long>()
@@ -203,9 +261,10 @@ class VoiceModelStoreTest {
     fun install_http404_throwsExactMessage() {
         val base = temp.newFolder("voices")
         val store = VoiceModelStore(
+            kokoro,
             base,
             { FakeConnection(404, "Not Found", ByteArray(0)) },
-            VoiceModelStore.ARCHIVE_SHA256,
+            kokoro.sha256,
         )
 
         try {
@@ -213,7 +272,7 @@ class VoiceModelStoreTest {
             fail("expected IOException")
         } catch (e: IOException) {
             assertEquals(
-                "Voice download failed: HTTP 404 Not Found from ${VoiceModelStore.ARCHIVE_URL}",
+                "Voice download failed: HTTP 404 Not Found from ${kokoro.url}",
                 e.message,
             )
         }
@@ -230,6 +289,7 @@ class VoiceModelStoreTest {
         File(legacy, "model.int8.onnx").writeText("old voice")
         val infos = mutableListOf<String>()
         val store = VoiceModelStore(
+            kokoro,
             base,
             fakeOpener(archive),
             sha256(archive),
@@ -248,7 +308,43 @@ class VoiceModelStoreTest {
 
     @Test
     fun archiveSizeMb_matchesDisplayedDownloadTotal() {
-        assertEquals(320, VoiceModelStore.ARCHIVE_SIZE_MB)
+        assertEquals(320, kokoro.sizeMb)
+    }
+
+    @Test
+    fun installedIds_listsOnlyCompletePacks() {
+        val base = temp.newFolder("voices")
+        touch(base, "kokoro-en-v0_19/model.onnx")
+        touch(base, "kokoro-en-v0_19/voices.bin")
+        touch(base, "kokoro-en-v0_19/tokens.txt")
+        File(base, "kokoro-en-v0_19/espeak-ng-data").mkdirs()
+        touch(base, "kokoro-en-v0_19/.complete")
+        touch(base, "vits-piper-en_US-lessac-medium/en_US-lessac-medium.onnx")
+        touch(base, "vits-piper-en_US-lessac-medium/tokens.txt")
+        File(base, "vits-piper-en_US-lessac-medium/espeak-ng-data").mkdirs()
+        touch(base, "vits-piper-en_US-lessac-medium/.complete")
+        // Incomplete: files but no marker.
+        touch(base, "sherpa-onnx-supertonic-tts-int8-2026-03-06/tts.json")
+
+        assertEquals(
+            listOf("kokoro-en", "piper-lessac"),
+            VoiceModelStore.installedIds(base),
+        )
+    }
+
+    @Test
+    fun delete_removesPackDirAndLogs() {
+        val base = temp.newFolder("voices")
+        touch(base, "kokoro-en-v0_19/model.onnx")
+        val infos = mutableListOf<String>()
+        val store = VoiceModelStore(kokoro, base, { error("unused") }, onInfo = infos::add)
+
+        store.delete()
+
+        assertFalse(File(base, "kokoro-en-v0_19").exists())
+        assertEquals(listOf("Removed voice pack kokoro-en"), infos)
+        store.delete()
+        assertEquals("second delete logs nothing", 1, infos.size)
     }
 
     private fun fakeOpener(archive: ByteArray): (String) -> DownloadConnection =
@@ -261,6 +357,12 @@ class VoiceModelStoreTest {
     ) : DownloadConnection {
         override fun input(): InputStream = ByteArrayInputStream(bytes)
         override fun close() {}
+    }
+
+    private fun touch(base: File, path: String) {
+        val file = File(base, path)
+        file.parentFile!!.mkdirs()
+        file.writeText("x")
     }
 
     private fun modelEntries(): Map<String, ByteArray> = mapOf(

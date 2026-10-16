@@ -42,6 +42,9 @@ object VoiceCatalog {
     /** Fresh installs download this pack. */
     const val DEFAULT_ID = "supertonic-2"
 
+    /** The only pack before pack switching; kept as the default when already installed. */
+    const val KOKORO_ID = "kokoro-en"
+
     private fun numberedVoices(n: Int): List<String> = (1..n).map { "Voice $it" }
 
     private val KOKORO_SPEAKERS = listOf(

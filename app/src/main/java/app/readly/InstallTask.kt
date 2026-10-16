@@ -41,7 +41,7 @@ class InstallTask(
         private set
 
     @Volatile
-    var lastTotalBytes: Long = VoiceModelStore.ARCHIVE_SIZE_BYTES
+    var lastTotalBytes: Long = store.pack.sizeBytes
         private set
 
     private val cancelled = AtomicBoolean(false)
