@@ -37,6 +37,14 @@ import java.io.IOException
  * one install runs at a time no matter which screen started it.
  */
 class VoicesActivity : Activity(), InstallTask.Listener {
+    companion object {
+        /** Preselect extras from the Smart voice Ask notification. */
+        const val EXTRA_PRESELECT_FAMILY = "preselectFamily"
+        const val EXTRA_PRESELECT_LANG = "preselectLang"
+        const val EXTRA_PRESELECT_VOICE = "preselectVoice"
+        const val EXTRA_PRESELECT_PACK = "preselectPack"
+    }
+
     private lateinit var cardsBox: LinearLayout
     private lateinit var prefs: SharedPreferences
     private val cards = mutableListOf<Card>()

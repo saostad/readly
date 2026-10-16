@@ -18,6 +18,7 @@ import android.media.AudioTrack
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.media.MediaMetadata
+import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -26,8 +27,12 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
+import app.readly.InstallTask
 import app.readly.MainActivity
+import app.readly.ReadlyApp
+import app.readly.VoicesActivity
 import app.readly.input.ArticleFetcher
+import app.readly.model.SmartVoice
 import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceFamily
 import app.readly.model.VoiceModelStore
@@ -41,7 +46,9 @@ import app.readly.tts.SpeechEngine
 import java.io.File
 import java.io.IOException
 import java.net.URI
+import java.util.Locale
 import java.util.concurrent.Callable
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
@@ -72,6 +79,7 @@ class ReaderService : Service() {
         const val ACTION_PREVIOUS = "app.readly.PREVIOUS"
         const val ACTION_STOP = "app.readly.STOP"
         const val ACTION_READ_URL = "app.readly.READ_URL"
+        const val ACTION_READ_ANYWAY = "app.readly.READ_ANYWAY"
 
         const val EXTRA_TEXT = "text"
         const val EXTRA_TITLE = "title"
@@ -88,6 +96,28 @@ class ReaderService : Service() {
         /** Legacy single speaker key; migrated to [speakerKey] once (see [speakerIdFor]). */
         const val KEY_SPEAKER_ID = "speakerId"
         const val KEY_SPEED = "speed"
+
+        /** Smart voice master toggle (default ON). */
+        const val KEY_SMART_VOICE = "smartVoice"
+
+        /** Auto-download small voices on Wi-Fi (default ON). */
+        const val KEY_AUTO_DOWNLOAD = "autoDownloadVoices"
+
+        /** Per-pack RTF EMA key (`rtf.<packId>`, float). */
+        fun rtfKey(packId: String): String = "rtf.$packId"
+
+        fun isSmartOn(context: Context): Boolean =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_SMART_VOICE, true)
+
+        fun isAutoDownloadOn(context: Context): Boolean =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_AUTO_DOWNLOAD, true)
+
+        /** Display name for a 2-letter language code (e.g. `es` → `Spanish`). */
+        fun languageName(lang: String): String =
+            Locale(lang).getDisplayLanguage(Locale.US)
+                .replaceFirstChar { it.titlecase(Locale.US) }.ifEmpty { lang }
 
         /** Per-pack speaker key. */
         fun speakerKey(packId: String): String = "speakerId.$packId"
@@ -282,6 +312,19 @@ class ReaderService : Service() {
     private var currentChunks: List<Chunk> = emptyList()
     private var currentTitle: String = ""
     private var currentPackId: String = ""
+    private var currentLang: String = "en"
+
+    /** Text held while Smart voice waits for the user's Ask choice. Read-anyway consumes it. */
+    private data class PendingAsk(
+        val title: String,
+        val text: String,
+        val format: SourceFormat,
+        val notice: String?,
+        val recommendedId: String?,
+    )
+
+    @Volatile
+    private var pendingAsk: PendingAsk? = null
 
     private val trackLock = Object()
     private var audioTrack: AudioTrack? = null
@@ -398,6 +441,7 @@ class ReaderService : Service() {
             ACTION_NEXT -> moveBy(1)
             ACTION_PREVIOUS -> moveBy(-1)
             ACTION_STOP -> handleStop()
+            ACTION_READ_ANYWAY -> handleReadAnyway()
             else -> Log.w("Readly", "ReaderService ignoring unknown action ${intent?.action}")
         }
         return START_NOT_STICKY
@@ -535,10 +579,12 @@ class ReaderService : Service() {
     }
 
     /**
-     * Sanitizes [text], chunks it and starts the pipeline, replacing any current
-     * reading. Runs on `readly-read`. [notice] is shown on the main screen and
-     * Toasted once reading starts. [onRequestDone] is invoked exactly once when the
-     * request starts a pipeline or ends empty (before any idle transition).
+     * Sanitizes [text], picks a voice with Smart voice, chunks it and starts the
+     * pipeline, replacing any current reading. Runs on `readly-read`. [notice] is
+     * shown on the main screen and Toasted once reading starts. [onRequestDone] is
+     * invoked exactly once when the request starts a pipeline, asks, or ends empty
+     * (before any idle transition). [forceMain] reads with the main voice without
+     * asking (the Ask notification's "Read anyway").
      */
     private fun startReading(
         title: String,
@@ -546,54 +592,287 @@ class ReaderService : Service() {
         format: SourceFormat,
         notice: String?,
         onRequestDone: () -> Unit,
+        forceMain: Boolean = false,
     ) {
         stopPipeline()
+        pendingAsk = null
         ReaderState.update { it.copy(notice = null) }
         val clean = TextSanitizer.sanitize(text, format)
-        val lang = LanguageDetector.dominant(clean)
-        val langPack = installedLangPack(lang)
-        val docPack = langPack ?: activePack(this)
-        val chunks = SentenceChunker.chunk(clean, lang)
-        if (chunks.isEmpty()) {
-            val message =
-                "Nothing to read: the text was empty after removing formatting, " +
-                "links and symbols."
-            Log.w("Readly", "READ produced no chunks (${text.length} chars in)")
-            ReaderState.update {
-                it.copy(
-                    status = ReaderStatus.ERROR,
-                    title = title,
-                    currentText = "",
-                    index = 0,
-                    total = 0,
-                    errorMessage = message,
-                    notice = null,
-                )
-            }
-            mainHandler.post {
-                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-            }
-            updateNotification()
-            onRequestDone()
-            goIdle()
+        val detected = LanguageDetector.detect(this, clean)
+        val lang = detected.lang
+        val smartOn = isSmartOn(this)
+        val mainPack = activePack(this)
+        if (forceMain) {
+            Log.i(
+                "Readly",
+                "Smart voice: lang=$lang (conf ${detected.confidence}, ${detected.source}) " +
+                    "→ ReadAnyway ${mainPack.id}",
+            )
+            startWithPack(title, clean, lang, mainPack, notice, onRequestDone)
             return
         }
-        startPipeline(chunks, title, 0, docPack, onRequestDone)
-        // A fa/ar text with no voice picked for it is still read with the main
-        // voice, but never silently: the notice says where to pick one.
-        val langNotice = if ((lang == "fa" || lang == "ar") && langPack == null) {
-            val name = langName(lang)
-            Log.w("Readly", "Text looks $name but no $name voice is selected; using the main voice")
-            "This text looks $name, but no $name voice is selected. " +
-                "Open Change voice pack → Piper → Language: $name to pick one."
-        } else {
-            null
+        val explicit = installedLangPack(lang)
+        val recommended = SmartVoice.recommendedPack(lang)
+        val canAuto = isAutoDownloadOn(this) && !isMetered() && !isInstallRunning()
+        val choice = SmartVoice.pick(
+            lang, installedPacks(), explicit, rtfByPack(), smartOn,
+            mainPack, recommended, canAuto,
+        )
+        Log.i(
+            "Readly",
+            "Smart voice: lang=$lang (conf ${detected.confidence}, ${detected.source}) " +
+                "→ ${describe(choice, mainPack)}",
+        )
+        when (choice) {
+            is SmartVoice.Choice.Use ->
+                startWithPack(title, clean, lang, choice.pack, notice, onRequestDone)
+            SmartVoice.Choice.MainVoice -> {
+                val langNotice = if (!smartOn && (lang == "fa" || lang == "ar") && explicit == null) {
+                    val name = langName(lang)
+                    Log.w("Readly", "Text looks $name but no $name voice is selected; using the main voice")
+                    "This text looks $name, but no $name voice is selected. " +
+                        "Open Change voice pack → Piper → Language: $name to pick one."
+                } else {
+                    null
+                }
+                startWithPack(
+                    title, clean, lang, mainPack,
+                    listOfNotNull(notice, langNotice).joinToString(" ").takeIf { it.isNotBlank() },
+                    onRequestDone,
+                )
+            }
+            is SmartVoice.Choice.AutoDownload ->
+                autoDownloadAndRead(title, text, clean, lang, format, notice, choice.pack, onRequestDone)
+            is SmartVoice.Choice.Ask ->
+                showAsk(title, text, format, notice, lang, choice.pack, onRequestDone)
         }
-        val combined = listOfNotNull(notice, langNotice).joinToString(" ").takeIf { it.isNotBlank() }
-        if (combined != null) {
-            ReaderState.update { it.copy(notice = combined) }
+    }
+
+    /** Chunks [clean] and starts the pipeline with [docPack], or reports empty. */
+    private fun startWithPack(
+        title: String,
+        clean: String,
+        lang: String,
+        docPack: VoicePack,
+        notice: String?,
+        onRequestDone: () -> Unit,
+    ) {
+        val chunks = SentenceChunker.chunk(clean, lang)
+        if (chunks.isEmpty()) {
+            showEmpty(title, clean.length, onRequestDone)
+            return
+        }
+        startPipeline(chunks, title, 0, docPack, lang, onRequestDone)
+        if (!notice.isNullOrBlank()) {
+            ReaderState.update { it.copy(notice = notice) }
             mainHandler.post {
-                Toast.makeText(this, combined, Toast.LENGTH_LONG).show()
+                Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun showEmpty(title: String, inChars: Int, onRequestDone: () -> Unit) {
+        val message =
+            "Nothing to read: the text was empty after removing formatting, " +
+            "links and symbols."
+        Log.w("Readly", "READ produced no chunks ($inChars chars in)")
+        ReaderState.update {
+            it.copy(
+                status = ReaderStatus.ERROR,
+                title = title,
+                currentText = "",
+                index = 0,
+                total = 0,
+                errorMessage = message,
+                notice = null,
+            )
+        }
+        mainHandler.post {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        }
+        updateNotification()
+        onRequestDone()
+        goIdle()
+    }
+
+    private fun describe(choice: SmartVoice.Choice, mainPack: VoicePack): String = when (choice) {
+        is SmartVoice.Choice.Use -> "Use ${choice.pack.id}"
+        is SmartVoice.Choice.AutoDownload -> "AutoDownload ${choice.pack.id}"
+        is SmartVoice.Choice.Ask -> "Ask ${choice.pack?.id ?: "none"}"
+        SmartVoice.Choice.MainVoice -> "MainVoice ${mainPack.id}"
+    }
+
+    /**
+     * Downloads [pack] with the single shared [InstallTask], then reads with it.
+     * Runs on `readly-read`. Failures Toast the exact text and fall back to asking.
+     */
+    private fun autoDownloadAndRead(
+        title: String,
+        text: String,
+        clean: String,
+        lang: String,
+        format: SourceFormat,
+        notice: String?,
+        pack: VoicePack,
+        onRequestDone: () -> Unit,
+    ) {
+        val chunks = SentenceChunker.chunk(clean, lang)
+        if (chunks.isEmpty()) {
+            showEmpty(title, clean.length, onRequestDone)
+            return
+        }
+        val display = languageName(lang)
+        ReaderState.update {
+            it.copy(
+                status = ReaderStatus.FETCHING,
+                title = title,
+                currentText = "Downloading a $display voice (${pack.sizeMb} MB)…",
+                index = 0,
+                total = 0,
+                errorMessage = null,
+                notice = null,
+            )
+        }
+        updateNotification()
+        val error = runSharedInstall(pack)
+        if (error != null) {
+            val message = "Voice download failed: ${error.javaClass.name}: ${error.message}"
+            Log.e("Readly", "$message (${pack.id})", error)
+            mainHandler.post { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+            showAsk(title, text, format, notice, lang, pack, onRequestDone)
+            return
+        }
+        startPipeline(chunks, title, 0, pack, lang, onRequestDone)
+        if (!notice.isNullOrBlank()) {
+            ReaderState.update { it.copy(notice = notice) }
+            mainHandler.post {
+                Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /**
+     * Runs [pack]'s install on the shared app-wide task and waits. Returns null on
+     * success, the failure otherwise. Callers checked [isInstallRunning] first, so a
+     * live task here means a race (also returned as a failure to ask instead).
+     */
+    private fun runSharedInstall(pack: VoicePack): Exception? {
+        val app = application as ReadlyApp
+        if (app.installTask?.isDone == false) {
+            return IOException("another voice is already downloading")
+        }
+        val store = VoiceModelStore(pack, voicesDir(), VoiceModelStore::httpUrlOpener)
+        val done = CountDownLatch(1)
+        // Written on the main thread, read after the latch: the latch guarantees visibility.
+        var failure: Exception? = null
+        val task = InstallTask(store) { finished ->
+            if (app.installTask === finished) app.installTask = null
+        }
+        task.listener = object : InstallTask.Listener {
+            override fun onProgress(stage: app.readly.model.InstallStage, bytesDone: Long, bytesTotal: Long) = Unit
+            override fun onDone() {
+                done.countDown()
+            }
+            override fun onCancelled() {
+                failure = IOException("voice download was cancelled")
+                done.countDown()
+            }
+            override fun onError(e: Exception) {
+                failure = e
+                done.countDown()
+            }
+        }
+        app.installTask = task
+        try {
+            task.run()
+        } catch (e: Exception) {
+            // InstallTask.run already reported via the listener; the latch still trips.
+            if (failure == null) failure = e
+            while (done.count > 0) done.countDown()
+        }
+        try {
+            // Main-thread callbacks trip the latch; the looper is always alive here.
+            while (!done.await(5, TimeUnit.SECONDS)) {
+                if (destroyed || Thread.currentThread().isInterrupted) {
+                    task.cancel()
+                    Thread.currentThread().interrupt()
+                    return IOException("voice download was interrupted")
+                }
+            }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            task.cancel()
+            return IOException("voice download was interrupted")
+        }
+        if (failure == null && !store.isInstalled()) {
+            failure = IOException("voice install finished but files are missing")
+        }
+        return failure
+    }
+
+    /**
+     * Asks which voice to download: holds [text] in [pendingAsk], shows the Ask
+     * notification and the same message as the main-screen notice. Nothing plays.
+     */
+    private fun showAsk(
+        title: String,
+        text: String,
+        format: SourceFormat,
+        notice: String?,
+        lang: String,
+        recommended: VoicePack?,
+        onRequestDone: () -> Unit,
+    ) {
+        pendingAsk = PendingAsk(title, text, format, notice, recommended?.id)
+        val display = languageName(lang)
+        val ask = if (recommended != null) {
+            "This text is in $display. Download a $display voice (${recommended.sizeMb} MB)?"
+        } else {
+            "This text is in $display. No $display voice is available yet."
+        }
+        val combined = listOfNotNull(notice?.takeIf { it.isNotBlank() }, ask).joinToString(" ")
+        ReaderState.update {
+            it.copy(
+                status = ReaderStatus.ASK,
+                title = title,
+                currentText = "",
+                index = 0,
+                total = 0,
+                errorMessage = null,
+                notice = combined,
+            )
+        }
+        mainHandler.post {
+            Toast.makeText(this, ask, Toast.LENGTH_LONG).show()
+        }
+        updateNotification()
+        onRequestDone()
+        goIdle()
+    }
+
+    /** The Ask notification's "Read anyway": reads the held text with the main voice. */
+    private fun handleReadAnyway() {
+        readerExecutor.execute {
+            try {
+                val held = pendingAsk ?: run {
+                    Log.w("Readly", "Read-anyway tapped with nothing held; ignoring")
+                    return@execute
+                }
+                pendingAsk = null
+                pendingRequests.incrementAndGet()
+                val finished = AtomicBoolean(false)
+                fun finish() {
+                    if (finished.compareAndSet(false, true)) pendingRequests.decrementAndGet()
+                }
+                try {
+                    startReading(held.title, held.text, held.format, held.notice, ::finish, forceMain = true)
+                } finally {
+                    finish()
+                }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (e: Exception) {
+                postError(e)
             }
         }
     }
@@ -608,6 +887,42 @@ class ReaderService : Service() {
         } else {
             null
         }
+    }
+
+    /** Installed packs in catalog order. */
+    private fun installedPacks(): List<VoicePack> {
+        val ids = VoiceModelStore.installedIds(voicesDir()).toSet()
+        return VoiceCatalog.ALL.filter { it.id in ids }
+    }
+
+    /** Measured RTF (EMA) by pack id, for packs that have synthesized at least once. */
+    private fun rtfByPack(): Map<String, Double> {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        return installedPacks().mapNotNull { pack ->
+            val rtf = prefs.getFloat(rtfKey(pack.id), -1f)
+            if (rtf >= 0) pack.id to rtf.toDouble() else null
+        }.toMap()
+    }
+
+    /** Updates the per-pack RTF EMA (α = 0.3) after each synthesized chunk. */
+    private fun updateRtf(packId: String, rtf: Double) {
+        if (rtf <= 0 || !rtf.isFinite()) return
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val old = prefs.getFloat(rtfKey(packId), -1f)
+        val ema = if (old < 0) rtf.toFloat() else (old * 0.7f + rtf.toFloat() * 0.3f)
+        prefs.edit().putFloat(rtfKey(packId), ema).apply()
+    }
+
+    /** True when another screen or download currently owns the shared install task. */
+    private fun isInstallRunning(): Boolean =
+        (application as ReadlyApp).installTask?.isDone == false
+
+    /** True on mobile data (or when the state can't be read: fail closed, ask instead). */
+    private fun isMetered(): Boolean = try {
+        getSystemService(ConnectivityManager::class.java)?.isActiveNetworkMetered ?: true
+    } catch (e: Exception) {
+        Log.w("Readly", "Couldn't read metered state; treating as metered", e)
+        true
     }
 
     /**
@@ -698,15 +1013,22 @@ class ReaderService : Service() {
     private fun moveBy(delta: Int) {
         readerExecutor.execute {
             try {
-                val (chunks, title, packId) = synchronized(pipelineLock) {
-                    Triple(currentChunks, currentTitle, currentPackId)
+                val chunks: List<Chunk>
+                val title: String
+                val packId: String
+                val lang: String
+                synchronized(pipelineLock) {
+                    chunks = currentChunks
+                    title = currentTitle
+                    packId = currentPackId
+                    lang = currentLang
                 }
                 if (chunks.isEmpty()) return@execute
-                // Same document, so the same voice (no re-detection).
+                // Same document, so the same voice and language (no re-detection).
                 val pack = VoiceCatalog.byId(packId) ?: activePack(this)
                 val target = (ReaderState.snapshot.index + delta).coerceIn(0, chunks.size - 1)
                 stopPipeline()
-                startPipeline(chunks, title, target, pack)
+                startPipeline(chunks, title, target, pack, lang)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
             } catch (e: Exception) {
@@ -725,6 +1047,7 @@ class ReaderService : Service() {
                     currentChunks = emptyList()
                     currentTitle = ""
                     currentPackId = ""
+                    currentLang = "en"
                 }
                 setNoisyRegistered(false)
                 ReaderState.update {
@@ -800,16 +1123,17 @@ class ReaderService : Service() {
     private fun voicesDir(): File = File(noBackupFilesDir, "voices")
 
     /**
-     * Starts playback with [docPack]'s voice. [onRequestDone] settles the
-     * originating READ/READ_URL request (null for NEXT/PREVIOUS restarts, which
-     * own no request): it runs exactly once, before any error report and right
-     * after the pipeline starts.
+     * Starts playback with [docPack]'s voice for 2-letter [lang]. [onRequestDone]
+     * settles the originating READ/READ_URL request (null for NEXT/PREVIOUS
+     * restarts, which own no request): it runs exactly once, before any error
+     * report and right after the pipeline starts.
      */
     private fun startPipeline(
         chunks: List<Chunk>,
         title: String,
         startIndex: Int,
         docPack: VoicePack,
+        lang: String,
         onRequestDone: (() -> Unit)? = null,
     ) {
         if (destroyed || Thread.currentThread().isInterrupted) {
@@ -843,7 +1167,7 @@ class ReaderService : Service() {
             chunks = chunks,
             startIndex = startIndex,
             sampleRate = rate,
-            synth = { index, isStopped -> synthChunk(chunks[index].text, isStopped, docPack) },
+            synth = { index, isStopped -> synthChunk(chunks[index].text, isStopped, docPack, lang) },
             sink = TrackSink(track),
             onChunkStarted = { index ->
                 // A stopped generation never calls back; this guard is belt and braces
@@ -895,6 +1219,7 @@ class ReaderService : Service() {
             currentChunks = chunks
             currentTitle = title
             currentPackId = docPack.id
+            currentLang = lang
         }
         ReaderState.update {
             it.copy(
@@ -923,11 +1248,16 @@ class ReaderService : Service() {
     }
 
     /**
-     * Synthesizes one chunk with [pack]'s voice, reading speaker and speed from
-     * settings every time so changes apply from the next sentence. Runs on the
-     * producer thread; the engine call itself runs on `readly-tts`.
+     * Synthesizes one chunk with [pack]'s voice for 2-letter [lang], reading speaker
+     * and speed from settings every time so changes apply from the next sentence.
+     * Runs on the producer thread; the engine call itself runs on `readly-tts`.
      */
-    private fun synthChunk(text: String, isStopped: () -> Boolean, pack: VoicePack): FloatArray {
+    private fun synthChunk(
+        text: String,
+        isStopped: () -> Boolean,
+        pack: VoicePack,
+        lang: String,
+    ): FloatArray {
         val speakerId = speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
         val speed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
@@ -936,13 +1266,14 @@ class ReaderService : Service() {
         // this one since the pipeline started; reloading is then silent and the
         // status stays READING.
         val audio = runOnTtsThreadAndWait({
-            engineFor(pack.id).synthesize(text, speakerId, speed, isStopped)
+            engineFor(pack.id).synthesize(text, speakerId, speed, isStopped, lang)
         }) ?: return FloatArray(0)
         val synthMs = SystemClock.elapsedRealtime() - begin
         val rate = rateByPack[pack.id] ?: 0
         val audioMs = if (rate > 0) audio.size * 1000.0 / rate else 0.0
         val rtf = if (audioMs > 0) synthMs / audioMs else 0.0
         ReaderState.update { it.copy(lastRtf = rtf) }
+        updateRtf(pack.id, rtf)
         return audio
     }
 
@@ -1204,6 +1535,7 @@ class ReaderService : Service() {
 
     private fun buildNotification(): Notification {
         val snap = ReaderState.snapshot
+        if (snap.status == ReaderStatus.ASK) return buildAskNotification(snap)
         val playing = snap.status == ReaderStatus.READING
         val openApp = PendingIntent.getActivity(
             this,
@@ -1219,6 +1551,7 @@ class ReaderService : Service() {
             ReaderStatus.FINISHED -> "Finished."
             ReaderStatus.ERROR -> snap.errorMessage ?: "Something went wrong"
             ReaderStatus.IDLE -> "Ready"
+            ReaderStatus.ASK -> snap.notice ?: "Choose a voice"
         }
         // No ic_media_stop on the platform; the close glyph reads as stop here.
         return Notification.Builder(this, CHANNEL_ID)
@@ -1261,6 +1594,41 @@ class ReaderService : Service() {
             .build()
     }
 
+    /** Non-ongoing Ask notification: pick a voice or read with the main one. */
+    private fun buildAskNotification(snap: ReaderSnapshot): Notification {
+        val ask = snap.notice ?: "Choose a voice"
+        val recommended = pendingAsk?.recommendedId?.let { VoiceCatalog.byId(it) }
+        val chooseIntent = Intent(this, VoicesActivity::class.java).apply {
+            recommended?.let { pack ->
+                putExtra(VoicesActivity.EXTRA_PRESELECT_FAMILY, pack.family.name)
+                putExtra(VoicesActivity.EXTRA_PRESELECT_PACK, pack.id)
+                if (pack.lang != null) putExtra(VoicesActivity.EXTRA_PRESELECT_LANG, pack.lang)
+                if (pack.voiceName != null) putExtra(VoicesActivity.EXTRA_PRESELECT_VOICE, pack.voiceName)
+            }
+        }
+        val choose = PendingIntent.getActivity(
+            this, 10, chooseIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val openApp = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
+        )
+        return Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle(snap.title.ifBlank { "Readly" })
+            .setContentText(ask)
+            .setStyle(Notification.BigTextStyle().bigText(ask))
+            .setContentIntent(openApp)
+            .setOngoing(false)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .addAction(android.R.drawable.ic_menu_add, "Choose voice", choose)
+            .addAction(
+                android.R.drawable.ic_media_play, "Read anyway",
+                serviceAction(ACTION_READ_ANYWAY, 11),
+            )
+            .build()
+    }
+
     /** The document title, or the first 60 chars of the text. */
     private fun notificationTitle(snap: ReaderSnapshot): String {
         if (snap.title.isNotBlank()) return snap.title
@@ -1276,7 +1644,7 @@ class ReaderService : Service() {
             ReaderStatus.READING -> PlaybackState.STATE_PLAYING
             ReaderStatus.PAUSED -> PlaybackState.STATE_PAUSED
             ReaderStatus.LOADING_VOICE, ReaderStatus.FETCHING -> PlaybackState.STATE_BUFFERING
-            ReaderStatus.FINISHED, ReaderStatus.IDLE -> PlaybackState.STATE_STOPPED
+            ReaderStatus.FINISHED, ReaderStatus.IDLE, ReaderStatus.ASK -> PlaybackState.STATE_STOPPED
             ReaderStatus.ERROR -> PlaybackState.STATE_ERROR
         }
         try {

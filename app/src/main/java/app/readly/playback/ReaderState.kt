@@ -13,6 +13,8 @@ enum class ReaderStatus {
     PAUSED,
     FINISHED,
     ERROR,
+    /** Smart voice needs a download choice; nothing is playing. */
+    ASK,
 }
 
 /** Immutable snapshot of the reader UI state. */
