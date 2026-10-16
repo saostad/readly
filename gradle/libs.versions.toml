@@ -5,12 +5,14 @@ commonsCompress = "1.28.0"
 jsoup = "1.23.2"
 readability4j = "1.0.8"
 junit = "4.13.2"
+json = "20240303"
 
 [libraries]
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonsCompress" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 readability4j = { module = "net.dankito.readability4j:readability4j", version.ref = "readability4j" }
 junit = { module = "junit:junit", version.ref = "junit" }
+json = { module = "org.json:json", version.ref = "json" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

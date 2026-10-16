@@ -8,9 +8,11 @@ import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URI
+import java.net.URLEncoder
 import java.nio.charset.Charset
 import java.util.Locale
 import net.dankito.readability4j.Readability4J
+import org.json.JSONObject
 import org.jsoup.Jsoup
 
 /**
@@ -64,6 +66,33 @@ class ArticleFetcher(
         fun httpUrlOpener(url: String): FetchConnection = HttpFetchConnection(url)
 
         private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
+
+        const val OEMBED_BASE = "https://publish.x.com/oembed"
+        const val X_POST_ERROR_PREFIX = "Couldn't load this post from X: "
+
+        /** Hosts that serve X/Twitter post pages. */
+        private val POST_HOSTS = setOf(
+            "x.com", "www.x.com", "mobile.x.com",
+            "twitter.com", "www.twitter.com", "mobile.twitter.com",
+        )
+
+        /** `/user/status/<digits>` plus anything after it (photo suffix, trailing slash). */
+        private val POST_PATH = Regex("^/([^/]+)/status/(\\d+)(?:/.*)?$")
+
+        /**
+         * Normalizes an X/Twitter post URL to `https://x.com/<user>/status/<id>`,
+         * dropping the query, or null when [url] isn't a post page.
+         */
+        internal fun normalizePostUrl(url: String): String? {
+            val uri = try {
+                URI(url)
+            } catch (_: Exception) {
+                return null
+            }
+            if (uri.host?.lowercase(Locale.US) !in POST_HOSTS) return null
+            val match = POST_PATH.matchEntire(uri.path.orEmpty()) ?: return null
+            return "https://x.com/${match.groupValues[1]}/status/${match.groupValues[2]}"
+        }
     }
 
     /**
@@ -83,6 +112,9 @@ class ArticleFetcher(
     }
 
     private fun fetchInner(url: String): Document {
+        // The post page itself is chrome (avatar, handle, timestamp, view
+        // count), so posts go through oEmbed instead of Readability.
+        normalizePostUrl(url)?.let { return fetchXPost(it) }
         val (finalUrl, conn) = openFollowingRedirects(url)
         conn.use {
             if (it.statusCode !in 200..299) {
@@ -111,6 +143,76 @@ class ArticleFetcher(
             }
         }
     }
+
+    /**
+     * Reads one X/Twitter post via the oEmbed endpoint. Every failure names
+     * the post failure; there is no fallback to the page chrome.
+     */
+    private fun fetchXPost(normalized: String): Document {
+        val oembedUrl = "$OEMBED_BASE?url=${urlEncode(normalized)}&omit_script=1&dnt=true"
+        val bytes = try {
+            downloadOembed(oembedUrl)
+        } catch (e: FetchException) {
+            throw e.toXPostError(oembedUrl)
+        } catch (e: Exception) {
+            throw FetchException(X_POST_ERROR_PREFIX + "${e.javaClass.name}: ${e.message}", e)
+        }
+        return parseOembed(bytes)
+    }
+
+    /** Same opener, timeouts, redirects and size cap as pages; HTTP errors are X-post errors. */
+    private fun downloadOembed(oembedUrl: String): ByteArray {
+        val (_, conn) = openFollowingRedirects(oembedUrl)
+        conn.use {
+            if (it.statusCode !in 200..299) {
+                val detail = if (it.statusMessage.isBlank()) "" else " ${it.statusMessage}"
+                throw FetchException(X_POST_ERROR_PREFIX + "HTTP ${it.statusCode}$detail")
+            }
+            return readBounded(it.input(), oembedUrl)
+        }
+    }
+
+    /**
+     * Rewrites helper errors (`Couldn't open <oembed>: <reason>`, oversize
+     * page) as X-post errors. Already-prefixed errors pass through untouched.
+     */
+    private fun FetchException.toXPostError(oembedUrl: String): FetchException {
+        val msg = message.orEmpty()
+        if (msg.startsWith(X_POST_ERROR_PREFIX)) return this
+        val reason = msg.removePrefix("Couldn't open $oembedUrl: ")
+        return FetchException(X_POST_ERROR_PREFIX + reason, this)
+    }
+
+    /**
+     * Parses the oEmbed JSON, keeping only the `blockquote > p` elements (the
+     * `— Name (@handle) date` footer sits outside the `<p>`, so it's dropped).
+     * `<br>` survives as a paragraph break through [SourceFormat.HTML].
+     */
+    private fun parseOembed(bytes: ByteArray): Document {
+        // JSON is UTF-8 by spec (RFC 8259 section 8.1).
+        val json = try {
+            JSONObject(String(bytes, Charsets.UTF_8))
+        } catch (e: Exception) {
+            throw FetchException(X_POST_ERROR_PREFIX + "${e.javaClass.name}: ${e.message}", e)
+        }
+        val author: String
+        val html: String
+        try {
+            author = json.getString("author_name")
+            html = json.getString("html")
+        } catch (e: Exception) {
+            throw FetchException(X_POST_ERROR_PREFIX + "${e.javaClass.name}: ${e.message}", e)
+        }
+        val paras = Jsoup.parseBodyFragment(html).select("blockquote > p")
+        if (paras.isEmpty()) {
+            throw FetchException(X_POST_ERROR_PREFIX + "oEmbed response has no post text")
+        }
+        val text = paras.joinToString("") { it.outerHtml() }
+        return Document("Post by $author", text, SourceFormat.HTML, null)
+    }
+
+    // The String overload: URLEncoder.encode(String, Charset) needs API 33 (minSdk 26).
+    private fun urlEncode(value: String): String = URLEncoder.encode(value, "UTF-8")
 
     /** Opens [url], following up to [MAX_REDIRECTS] redirects by hand. Returns the final URL. */
     private fun openFollowingRedirects(url: String): Pair<String, FetchConnection> {

@@ -56,6 +56,8 @@ dependencies {
     }
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     testImplementation(libs.junit)
+    // Real org.json for JVM unit tests: Android's stub throws on the host JVM.
+    testImplementation(libs.json)
 }
 
 // readability4j asks for jsoup 1.11.2; force the version we test against.

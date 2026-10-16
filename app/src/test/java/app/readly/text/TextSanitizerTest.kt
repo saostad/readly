@@ -301,4 +301,20 @@ class TextSanitizerTest {
             ),
         )
     }
+
+    @Test
+    fun sanitize_barePicTokens_removedInAllFormats() {
+        assertEquals(
+            "Look at this!",
+            TextSanitizer.sanitize("Look at this pic.x.com/AbC123!", SourceFormat.PLAIN),
+        )
+        assertEquals(
+            "Look at this!",
+            TextSanitizer.sanitize("Look at this pic.twitter.com/xYz456!", SourceFormat.MARKDOWN),
+        )
+        assertEquals(
+            "Photo time.",
+            TextSanitizer.sanitize("<p>Photo time pic.x.com/abc.</p>", SourceFormat.HTML),
+        )
+    }
 }

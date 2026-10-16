@@ -5,6 +5,7 @@ import app.readly.text.TextSanitizer
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.io.InputStream
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -302,6 +303,113 @@ class ArticleFetcherTest {
         assertEquals(
             "y".repeat(119) + "…",
             fetcherFor(mapOf(htmlPage(url, htmlHard.toByteArray()))).fetch(url).title,
+        )
+    }
+
+    private val postId = "2111029595168538686"
+    private val postNormalized = "https://x.com/UltraLinx/status/$postId"
+    private val oembedUrl = "https://publish.x.com/oembed?url=" +
+        "https%3A%2F%2Fx.com%2FUltraLinx%2Fstatus%2F2111029595168538686" +
+        "&omit_script=1&dnt=true"
+
+    private val oembedHtml = "<blockquote class=\"twitter-tweet\">" +
+        "<p lang=\"en\" dir=\"ltr\">Now that OpenCode are giving access to DeepSeek V4.1 Flash " +
+        "and GLM 5.3 Flash for FREE, how do these even compare to something like Claude or " +
+        "Codex?<br><br>It seems to good to be true? Or what am I missing here?</p>" +
+        "&mdash; Oliur (@UltraLinx) " +
+        "<a href=\"https://x.com/UltraLinx/status/2111029595168538686\">October 16, 2026</a>" +
+        "</blockquote>"
+
+    private fun oembedJson(author: String = "Oliur", html: String = oembedHtml): ByteArray =
+        JSONObject().put("author_name", author).put("html", html).toString().toByteArray()
+
+    private fun oembedPage(body: ByteArray): Pair<String, FakeConnection> =
+        oembedUrl to FakeConnection(200, "OK", mapOf("Content-Type" to "application/json"), body)
+
+    @Test
+    fun fetch_xPost_returnsOnlyPostParagraphs() {
+        val fetcher = fetcherFor(mapOf(oembedPage(oembedJson())))
+        val doc = fetcher.fetch("https://x.com/UltraLinx/status/$postId")
+        assertEquals("Post by Oliur", doc.title)
+        assertEquals(SourceFormat.HTML, doc.format)
+        assertNull(doc.notice)
+        assertEquals(
+            "Now that OpenCode are giving access to DeepSeek V4.1 Flash and GLM 5.3 Flash " +
+                "for FREE, how do these even compare to something like Claude or Codex?" +
+                "\n\nIt seems to good to be true? Or what am I missing here?",
+            TextSanitizer.sanitize(doc.text, SourceFormat.HTML),
+        )
+    }
+
+    @Test
+    fun fetch_xPost_normalizesVariantsToOneEncodedOembedUrl() {
+        val requested = mutableListOf<String>()
+        val opener: (String) -> FetchConnection = { url ->
+            requested.add(url)
+            FakeConnection(200, "OK", mapOf("Content-Type" to "application/json"), oembedJson())
+        }
+        val fetcher = ArticleFetcher(opener, warnings::add)
+        listOf(
+            "https://x.com/UltraLinx/status/$postId",
+            "https://twitter.com/UltraLinx/status/$postId?s=20",
+            "https://mobile.twitter.com/UltraLinx/status/$postId?t=abc",
+            "https://www.twitter.com/UltraLinx/status/$postId",
+            "https://www.x.com/UltraLinx/status/$postId/photo/1",
+            "https://mobile.x.com/UltraLinx/status/$postId/",
+        ).forEach {
+            assertEquals("Post by Oliur", fetcher.fetch(it).title)
+        }
+        assertEquals(List(6) { oembedUrl }, requested)
+    }
+
+    @Test
+    fun normalizePostUrl_acceptsOnlyStatusPaths() {
+        assertEquals(
+            postNormalized,
+            ArticleFetcher.normalizePostUrl("https://twitter.com/UltraLinx/status/$postId?s=20"),
+        )
+        assertEquals(
+            postNormalized,
+            ArticleFetcher.normalizePostUrl("https://mobile.x.com/UltraLinx/status/$postId/photo/1"),
+        )
+        assertNull(ArticleFetcher.normalizePostUrl("https://x.com/UltraLinx"))
+        assertNull(ArticleFetcher.normalizePostUrl("https://x.com/home"))
+        assertNull(ArticleFetcher.normalizePostUrl("https://x.com/UltraLinx/status/notanid"))
+        assertNull(ArticleFetcher.normalizePostUrl("https://example.com/u/status/123"))
+        assertNull(ArticleFetcher.normalizePostUrl("not a url"))
+    }
+
+    @Test
+    fun fetch_xPost_http404_givesPostError() {
+        val fetcher = fetcherFor(
+            mapOf(oembedUrl to FakeConnection(404, "Not Found")),
+        )
+        assertEquals(
+            "Couldn't load this post from X: HTTP 404 Not Found",
+            fetchFailsWith(fetcher, "https://x.com/UltraLinx/status/$postId"),
+        )
+    }
+
+    @Test
+    fun fetch_xPost_badJson_givesPostError() {
+        val fetcher = fetcherFor(mapOf(oembedPage("not json".toByteArray())))
+        val message = fetchFailsWith(fetcher, postNormalized)
+        assertTrue(
+            "message was: $message",
+            message.startsWith("Couldn't load this post from X: ") && "JSONException" in message,
+        )
+    }
+
+    @Test
+    fun fetch_xPost_oembedWithoutParagraphs_givesPostError() {
+        val json = JSONObject()
+            .put("author_name", "Oliur")
+            .put("html", "<blockquote></blockquote>")
+            .toString().toByteArray()
+        val fetcher = fetcherFor(mapOf(oembedPage(json)))
+        assertEquals(
+            "Couldn't load this post from X: oEmbed response has no post text",
+            fetchFailsWith(fetcher, postNormalized),
         )
     }
 }

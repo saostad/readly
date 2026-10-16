@@ -35,7 +35,9 @@ object TextSanitizer {
     // Shared cleanup (all formats)
     // ------------------------------------------------------------------
 
-    private val bareUrl = Regex("""https?://\S+|www\.\S+""")
+    // X photo links are bare `pic.x.com/…` tokens (no scheme), so the URL rule
+    // must name them explicitly or they get read aloud.
+    private val bareUrl = Regex("""https?://\S+|www\.\S+|(?<!\w)pic\.(?:x|twitter)\.com/\S+""")
     private val urlTrailingPunct = setOf(')', '.', ',', ';', ':', '!', '?', '"', '\'')
     private val bracketRef =
         Regex("""\[(\d{1,3}|[a-z]|citation needed|note \d+|nb \d+)\]""", RegexOption.IGNORE_CASE)
