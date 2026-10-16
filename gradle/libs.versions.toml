@@ -3,11 +3,13 @@ agp = "8.13.2"
 kotlin = "2.2.20"
 commonsCompress = "1.28.0"
 jsoup = "1.23.2"
+readability4j = "1.0.8"
 junit = "4.13.2"
 
 [libraries]
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonsCompress" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+readability4j = { module = "net.dankito.readability4j:readability4j", version.ref = "readability4j" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]

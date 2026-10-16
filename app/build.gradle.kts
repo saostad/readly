@@ -47,8 +47,22 @@ android {
 dependencies {
     implementation(libs.commons.compress)
     implementation(libs.jsoup)
+    // readability4j pulls jsoup 1.11.2 and kotlin-stdlib 1.3.72 transitively; we
+    // keep our own jsoup 1.23.2 (forced below) and the Kotlin plugin's stdlib.
+    // slf4j-api is kept: Readability4J's class init calls LoggerFactory, so
+    // excluding it would crash with NoClassDefFoundError (no binding = no-op).
+    implementation(libs.readability4j) {
+        exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+    }
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     testImplementation(libs.junit)
+}
+
+// readability4j asks for jsoup 1.11.2; force the version we test against.
+configurations.all {
+    resolutionStrategy {
+        force("org.jsoup:jsoup:1.23.2")
+    }
 }
 
 val sherpaOnnxAarUrl =
