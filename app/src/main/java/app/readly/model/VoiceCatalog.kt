@@ -1,5 +1,8 @@
 package app.readly.model
 
+import androidx.annotation.RawRes
+import app.readly.R
+
 /** TTS model family. Decides the required files and the sherpa-onnx config. */
 enum class VoiceFamily {
     KOKORO,
@@ -15,6 +18,8 @@ enum class VoiceFamily {
  *   model files instead, so this is `""` and unused for that family.
  * @param speakers display names; the speaker id passed to synthesis is the index.
  * @param rtfNote honest speed note, measured on a Pixel 11 Pro.
+ * @param sampleRes raw resource id of the spoken sample clip (all clips say the same
+ *   sentence). The file is `res/raw/<sampleName>.ogg`.
  */
 data class VoicePack(
     val id: String,
@@ -27,6 +32,7 @@ data class VoicePack(
     val modelFile: String,
     val speakers: List<String>,
     val rtfNote: String,
+    @RawRes val sampleRes: Int,
 ) {
     /** Download URL: every pack lives in the sherpa-onnx `tts-models` release. */
     val url: String
@@ -35,9 +41,13 @@ data class VoicePack(
     /** [sizeBytes] in decimal MB, rounded; the progress label shows this total. */
     val sizeMb: Int
         get() = ((sizeBytes + 500_000) / 1_000_000).toInt()
+
+    /** Base name of the sample clip in `res/raw` (`.ogg` suffix not included). */
+    val sampleName: String
+        get() = "sample_" + id.replace('-', '_')
 }
 
-/** The 10 voice packs the owner approved (Kitten nano was rejected after listening). */
+/** The 11 voice packs the owner approved (Kitten nano was rejected after listening). */
 object VoiceCatalog {
     /** Fresh installs download this pack. */
     const val DEFAULT_ID = "supertonic-2"
@@ -73,6 +83,7 @@ object VoiceCatalog {
             modelFile = "",
             speakers = numberedVoices(10),
             rtfNote = "About 12× faster than real time",
+            sampleRes = R.raw.sample_supertonic_2,
         ),
         VoicePack(
             id = "supertonic-3",
@@ -85,6 +96,7 @@ object VoiceCatalog {
             modelFile = "",
             speakers = numberedVoices(10),
             rtfNote = "About 3× faster",
+            sampleRes = R.raw.sample_supertonic_3,
         ),
         VoicePack(
             id = "kokoro-en",
@@ -97,6 +109,20 @@ object VoiceCatalog {
             modelFile = "model.onnx",
             speakers = KOKORO_SPEAKERS,
             rtfNote = "About 1.5–2× faster",
+            sampleRes = R.raw.sample_kokoro_en,
+        ),
+        VoicePack(
+            id = "kokoro-en-compact",
+            displayName = "Kokoro Compact",
+            family = VoiceFamily.KOKORO,
+            archive = "kokoro-int8-en-v0_19.tar.bz2",
+            sizeBytes = 103248205L,
+            sha256 = "c9f0dd393615805b0bab050c340834d5e684e732aec91c0e860cd30e982c08bd",
+            topDir = "kokoro-int8-en-v0_19",
+            modelFile = "model.int8.onnx",
+            speakers = KOKORO_SPEAKERS,
+            rtfNote = "About real time on a Pixel 11 Pro; may pause between sentences on slower phones",
+            sampleRes = R.raw.sample_kokoro_en_compact,
         ),
         VoicePack(
             id = "piper-lessac",
@@ -109,6 +135,7 @@ object VoiceCatalog {
             modelFile = "en_US-lessac-medium.onnx",
             speakers = listOf("Default"),
             rtfNote = "About 11× faster",
+            sampleRes = R.raw.sample_piper_lessac,
         ),
         VoicePack(
             id = "piper-ryan",
@@ -121,6 +148,7 @@ object VoiceCatalog {
             modelFile = "en_US-ryan-medium.onnx",
             speakers = listOf("Default"),
             rtfNote = "About 11× faster",
+            sampleRes = R.raw.sample_piper_ryan,
         ),
         VoicePack(
             id = "piper-amy",
@@ -133,6 +161,7 @@ object VoiceCatalog {
             modelFile = "en_US-amy-medium.onnx",
             speakers = listOf("Default"),
             rtfNote = "About 11× faster",
+            sampleRes = R.raw.sample_piper_amy,
         ),
         VoicePack(
             id = "piper-alba",
@@ -145,6 +174,7 @@ object VoiceCatalog {
             modelFile = "en_GB-alba-medium.onnx",
             speakers = listOf("Default"),
             rtfNote = "About 11× faster",
+            sampleRes = R.raw.sample_piper_alba,
         ),
         VoicePack(
             id = "piper-lessac-high",
@@ -157,6 +187,7 @@ object VoiceCatalog {
             modelFile = "en_US-lessac-high.onnx",
             speakers = listOf("Default"),
             rtfNote = "About 2.5× faster",
+            sampleRes = R.raw.sample_piper_lessac_high,
         ),
         VoicePack(
             id = "piper-lessac-compact",
@@ -169,6 +200,7 @@ object VoiceCatalog {
             modelFile = "en_US-lessac-medium.onnx",
             speakers = listOf("Default"),
             rtfNote = "About 5× faster",
+            sampleRes = R.raw.sample_piper_lessac_compact,
         ),
         VoicePack(
             id = "kitten-mini",
@@ -181,6 +213,7 @@ object VoiceCatalog {
             modelFile = "model.onnx",
             speakers = numberedVoices(8),
             rtfNote = "About 2× faster",
+            sampleRes = R.raw.sample_kitten_mini,
         ),
     )
 

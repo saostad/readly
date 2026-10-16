@@ -52,4 +52,28 @@ class VoiceCatalogTest {
         assertEquals(85, VoiceCatalog.byId("supertonic-2")!!.sizeMb)
         assertEquals(21, VoiceCatalog.byId("piper-lessac-compact")!!.sizeMb)
     }
+
+    @Test
+    fun kokoroCompact_sitsAfterKokoroAndUsesInt8Model() {
+        val compact = VoiceCatalog.byId("kokoro-en-compact")!!
+        assertEquals(VoiceFamily.KOKORO, compact.family)
+        assertEquals(11, compact.speakers.size)
+        assertEquals(11, VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!.speakers.size)
+        assertEquals("model.int8.onnx", compact.modelFile)
+        assertEquals("kokoro-int8-en-v0_19", compact.topDir)
+        assertEquals(103, compact.sizeMb)
+        val ids = VoiceCatalog.ALL.map { it.id }
+        assertEquals(ids.indexOf("kokoro-en") + 1, ids.indexOf("kokoro-en-compact"))
+    }
+
+    @Test
+    fun everyPack_hasSampleClipInResRaw() {
+        // Unit tests run from the module dir (`app/`), but fall back to the repo
+        // root so the check also works when run from there.
+        for (pack in VoiceCatalog.ALL) {
+            val file = "src/main/res/raw/${pack.sampleName}.ogg"
+            val exists = java.io.File(file).isFile || java.io.File("app/$file").isFile
+            assertTrue("${pack.id}: missing res/raw/${pack.sampleName}.ogg", exists)
+        }
+    }
 }

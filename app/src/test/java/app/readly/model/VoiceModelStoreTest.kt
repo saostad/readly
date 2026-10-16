@@ -37,6 +37,7 @@ class VoiceModelStoreTest {
         modelFile = "test.onnx",
         speakers = listOf("Default"),
         rtfNote = "test",
+        sampleRes = 0,
     )
 
     @Test
@@ -278,32 +279,6 @@ class VoiceModelStoreTest {
         }
         assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertFalse(store.isInstalled())
-    }
-
-    @Test
-    fun install_success_deletesLegacyModelDir() {
-        val archive = fixtureArchive(modelEntries())
-        val base = temp.newFolder("voices")
-        val legacy = File(base, VoiceModelStore.LEGACY_MODEL_NAME)
-        legacy.mkdirs()
-        File(legacy, "model.int8.onnx").writeText("old voice")
-        val infos = mutableListOf<String>()
-        val store = VoiceModelStore(
-            kokoro,
-            base,
-            fakeOpener(archive),
-            sha256(archive),
-            archive.size.toLong(),
-            infos::add,
-        )
-        assertTrue(store.hasLegacyModel())
-
-        store.install(progress = { _, _, _ -> }, cancelled = { false })
-
-        assertTrue(store.isInstalled())
-        assertFalse(legacy.exists())
-        assertFalse(store.hasLegacyModel())
-        assertEquals(1, infos.size)
     }
 
     @Test

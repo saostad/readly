@@ -55,6 +55,8 @@ dependencies {
         exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
     }
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
+    // Compile-time resource annotations (@RawRes) for the voice sample clips.
+    implementation(libs.annotation)
     testImplementation(libs.junit)
     // Real org.json for JVM unit tests: Android's stub throws on the host JVM.
     testImplementation(libs.json)

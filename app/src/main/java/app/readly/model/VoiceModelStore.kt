@@ -56,8 +56,6 @@ class VoiceModelStore(
 ) {
     companion object {
         const val REQUIRED_FREE_BYTES = 500L * 1024 * 1024
-        /** Previous int8 voice dir, removed after a successful install of any pack. */
-        const val LEGACY_MODEL_NAME = "kokoro-int8-en-v0_19"
 
         private const val COMPLETE_MARKER = ".complete"
         private const val READ_BUFFER_BYTES = 64 * 1024
@@ -98,9 +96,6 @@ class VoiceModelStore(
     /** Installed model dir (`<base>/<topDir>`); valid once [isInstalled]. */
     val modelDir: File
         get() = File(baseDir, pack.topDir)
-
-    /** True if the previous int8 voice dir is still present (pending migration). */
-    fun hasLegacyModel(): Boolean = File(baseDir, LEGACY_MODEL_NAME).exists()
 
     /** True only if the model dir holds the marker and the family's required files. */
     fun isInstalled(): Boolean = isPackInstalled(baseDir, pack)
@@ -157,7 +152,6 @@ class VoiceModelStore(
             if (!isInstalled()) {
                 throw IOException("Voice install failed: archive is missing model files")
             }
-            deleteLegacyModel()
         } finally {
             tmpDir.deleteRecursively()
         }
@@ -287,15 +281,6 @@ class VoiceModelStore(
             throw IOException(
                 "Voice download is corrupted: expected SHA-256 $expectedSha256, got $actual",
             )
-        }
-    }
-
-    /** Removes the previous int8 voice after a successful install, if still present. */
-    private fun deleteLegacyModel() {
-        val legacy = File(baseDir, LEGACY_MODEL_NAME)
-        if (legacy.exists()) {
-            legacy.deleteRecursively()
-            onInfo("Removed old voice model $LEGACY_MODEL_NAME")
         }
     }
 
