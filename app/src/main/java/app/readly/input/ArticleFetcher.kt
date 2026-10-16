@@ -1,6 +1,7 @@
 package app.readly.input
 
 import app.readly.text.SourceFormat
+import app.readly.text.TextSanitizer
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.IOException
@@ -158,9 +159,12 @@ class ArticleFetcher(
         val probe = Jsoup.parse(String(bytes, Charsets.UTF_8), finalUrl)
         val html = decode(bytes, contentType, probe)
         val doc = Jsoup.parse(html, finalUrl)
+        stripNonProse(doc)
         val host = hostOf(finalUrl)
         val article = try {
-            Readability4J(finalUrl, html).parse()
+            // Readability4J mutates the Document it is given, so it gets a
+            // clone; the fallback path below reads the cleaned original.
+            Readability4J(finalUrl, doc.clone()).parse()
         } catch (e: Exception) {
             throw FetchException("Couldn't open $url: ${e.javaClass.name}: ${e.message}", e)
         }
@@ -174,6 +178,54 @@ class ArticleFetcher(
         }
         val raw = ogTitle.ifBlank { article.title.orEmpty().ifBlank { doc.title() } }.ifBlank { host }
         return Document(cleanTitle(raw, host), articleHtml, SourceFormat.HTML, null)
+    }
+
+    /**
+     * Removes reference-style clutter before Readability runs: Readability4J
+     * drops `class` attributes from its output, so class selectors (and section
+     * headings it keeps as plain text) can only be stripped here.
+     */
+    private fun stripNonProse(doc: org.jsoup.nodes.Document) {
+        doc.select(TextSanitizer.NON_PROSE_SELECTORS).remove()
+        doc.body()?.select("h1, h2, h3, h4, h5, h6")
+            ?.filter(::isTailSectionHeading)
+            ?.forEach(::removeSection)
+    }
+
+    /** Trailing sections that list sources instead of telling the story. */
+    private val tailSectionNames = setOf(
+        "references", "notes", "citations", "further reading", "external links", "see also",
+    )
+
+    /**
+     * True when the heading's own or inner `id` (Wikipedia puts it on a span,
+     * e.g. `id="See_also"`) or its text names a trailing section. Runs after
+     * the selector strip above, so edit links are already gone from the text.
+     */
+    private fun isTailSectionHeading(heading: org.jsoup.nodes.Element): Boolean {
+        val candidates = mutableListOf(heading.id(), heading.text())
+        heading.select("[id]").forEach { candidates.add(it.id()) }
+        return candidates.any {
+            it.replace('_', ' ').trim().lowercase(Locale.US) in tailSectionNames
+        }
+    }
+
+    /** Removes [heading] and its following siblings up to the next heading of the same or higher level. */
+    private fun removeSection(heading: org.jsoup.nodes.Element) {
+        val level = heading.tagName().substring(1).toInt()
+        var sibling = heading.nextElementSibling()
+        heading.remove()
+        while (sibling != null) {
+            val next = sibling.nextElementSibling()
+            if (sibling.isSameOrHigherHeading(level)) break
+            sibling.remove()
+            sibling = next
+        }
+    }
+
+    private fun org.jsoup.nodes.Element.isSameOrHigherHeading(level: Int): Boolean {
+        val tag = tagName().lowercase(Locale.US)
+        return tag.length == 2 && tag[0] == 'h' && tag[1] in '1'..'6' && (tag[1] - '0') <= level
     }
 
     /**

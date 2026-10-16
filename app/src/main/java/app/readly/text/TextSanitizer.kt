@@ -389,7 +389,12 @@ object TextSanitizer {
     private const val HTML_REMOVE =
         "script, style, noscript, template, svg, canvas, iframe, " +
             "nav, header, footer, aside, form, button"
-    private const val WIKI_REMOVE =
+    /**
+     * Reference-style clutter that is never prose. Shared with `ArticleFetcher`,
+     * which strips it before Readability runs (Readability4J drops `class`
+     * attributes from its output, so these selectors can't match afterwards).
+     */
+    internal const val NON_PROSE_SELECTORS =
         "sup.reference, .mw-ref, ol.references, .references, .reflist, " +
             ".mw-references-wrap, .mw-editsection, .navbox, .hatnote, .noprint"
     private val htmlBlocks = setOf("p", "div", "blockquote", "section", "article")
@@ -398,7 +403,7 @@ object TextSanitizer {
     private fun htmlParagraphs(input: String): List<Para> {
         val doc = Jsoup.parse(input)
         doc.select(HTML_REMOVE).remove()
-        doc.select(WIKI_REMOVE).remove()
+        doc.select(NON_PROSE_SELECTORS).remove()
         doc.select("sup").forEach { sup ->
             if (bracketRef.containsMatchIn(sup.text())) sup.remove()
         }

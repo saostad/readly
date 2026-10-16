@@ -77,6 +77,33 @@ class ArticleFetcherTest {
     }
 
     @Test
+    fun fetch_wikipedia_dropsReferenceSections() {
+        val url = "https://en.wikipedia.org/wiki/Speech_synthesis"
+        val fetcher = fetcherFor(mapOf(htmlPage(url, resource("article-wikipedia.html"))))
+        val doc = fetcher.fetch(url)
+        assertEquals(SourceFormat.HTML, doc.format)
+        assertNull(doc.notice)
+        assertTrue("title was: ${doc.title}", doc.title.contains("Speech synthesis"))
+
+        val clean = TextSanitizer.sanitize(doc.text, SourceFormat.HTML)
+        assertTrue(clean.contains("artificial production of human speech"))
+        assertTrue(clean.contains("bellows and reeds"))
+        assertTrue(clean.contains("sounds almost human"))
+        listOf(
+            // Inline citation marker and the reference list.
+            "[1]", "Bruno", "Vocal Synthesis and Deep Listening", "etd.fi14040802",
+            "Klatt", "Acoustical Society",
+            // Lower-level heading nested inside References.
+            "Printed volumes", "letterpress era",
+            // See also and External links sections.
+            "Concatenative synthesis", "Festival Speech Synthesis System",
+            "free software toolkit",
+        ).forEach { clutter ->
+            assertFalse("clutter leaked through: $clutter", clean.contains(clutter))
+        }
+    }
+
+    @Test
     fun fetch_shortPage_readsWholeBodyWithNotice() {
         val url = "https://example.com/tiny"
         val fetcher = fetcherFor(mapOf(htmlPage(url, resource("article-short.html"))))
