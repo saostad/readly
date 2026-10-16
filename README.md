@@ -61,6 +61,20 @@ Playback runs in the background with notification, lock-screen and headset
 controls (previous/next sentence, pause/play, stop). The voice and speed picked
 in the app apply from the next sentence.
 
+## Use Readly as the phone's voice
+
+Readly can be the phone's default text-to-speech engine, so TalkBack, Maps and
+other apps speak with your downloaded voices:
+
+1. Open Settings → System → Languages → Text-to-speech output.
+2. Tap Preferred engine and choose **Readly**.
+3. Tap the engine's Play sample button to hear it.
+
+On the Voices screen, **System voice** picks which downloaded voice other apps
+use, or leave it on Automatic for the fastest voice in each language. Speech
+from other apps is spoken as written (only links and emoji are removed); the
+app's own cleanup rules for shared text don't apply.
+
 ## Troubleshooting
 
 Watch what Readly is doing with:

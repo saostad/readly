@@ -105,9 +105,7 @@ class ReadlyTtsService : TextToSpeechService() {
     }
 
     override fun onGetDefaultVoiceNameFor(lang: String?, country: String?, variant: String?): String? {
-        val two = iso3ToLang2(lang) ?: return null
-        val pack = SmartVoice.pickForSystem(two, installedPacks(), rtfByPack()) ?: return null
-        val sid = ReaderService.speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
+        val (pack, sid) = defaultForRequest(lang, country) ?: return null
         return "${pack.id}#$sid"
     }
 
@@ -167,10 +165,20 @@ class ReadlyTtsService : TextToSpeechService() {
         callback.done()
     }
 
-    /** Default voice for a request language: fastest installed pack supporting it. */
+    /**
+     * Default voice for a request language: the user's system voice when it is
+     * installed and supports the language, else the fastest installed pack
+     * supporting it ([SmartVoice.pickForSystem]).
+     */
     private fun defaultForRequest(language: String?, country: String?): Pair<VoicePack, Int>? {
         val two = iso3ToLang2(language) ?: "en"
-        val pack = SmartVoice.pickForSystem(two, installedPacks(), rtfByPack()) ?: return null
+        val installed = installedPacks()
+        val system = systemPackId(this)?.let { VoiceCatalog.byId(it) }
+        val pack = if (system != null && system in installed && two in system.languages()) {
+            system
+        } else {
+            SmartVoice.pickForSystem(two, installed, rtfByPack())
+        } ?: return null
         val sid = ReaderService.speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
         return pack to sid
     }
@@ -280,6 +288,19 @@ class ReadlyTtsService : TextToSpeechService() {
     }
 
     companion object {
+        /** System TTS voice pack id in the `settings` prefs; null means automatic. */
+        const val KEY_SYSTEM_PACK = "systemPackId"
+
+        /**
+         * The user's system voice pack id, or null for automatic (fastest voice
+         * per language). Unknown ids read as null.
+         */
+        fun systemPackId(context: Context): String? {
+            val id = context.getSharedPreferences(ReaderService.PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_SYSTEM_PACK, null) ?: return null
+            return id.takeIf { VoiceCatalog.byId(it) != null }
+        }
+
         /**
          * 2-letter codes worth mapping from ISO3: every code any pack can serve
          * (Supertonic 3's 31 plus the generated Piper prefixes, which are covered

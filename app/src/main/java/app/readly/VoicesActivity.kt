@@ -2,9 +2,12 @@ package app.readly
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Typeface
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
 import android.view.View
@@ -29,6 +32,7 @@ import app.readly.model.VoicePack
 import app.readly.playback.ReaderService
 import app.readly.playback.ReaderState
 import app.readly.playback.ReaderStatus
+import app.readly.tts.ReadlyTtsService
 import java.io.File
 import java.io.IOException
 
@@ -49,6 +53,9 @@ class VoicesActivity : Activity(), InstallTask.Listener {
 
     private lateinit var cardsBox: LinearLayout
     private lateinit var prefs: SharedPreferences
+    private lateinit var systemSpinner: Spinner
+    /** Pack id per system spinner row; null is the automatic entry. */
+    private var systemRows: List<String?> = listOf(null)
     private val cards = mutableListOf<Card>()
     private lateinit var storageTotal: TextView
     private lateinit var storageRows: LinearLayout
@@ -66,6 +73,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         setContentView(R.layout.activity_voices)
         cardsBox = findViewById(R.id.cardsContainer)
         prefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
+        addSystemSection()
         for (info in VoiceCatalog.FAMILIES) {
             val card = Card(info)
             cards.add(card)
@@ -600,8 +608,96 @@ class VoicesActivity : Activity(), InstallTask.Listener {
 
     /** Re-reads installed/active/installing state from disk and repaints every card. */
     private fun refresh() {
+        refreshSystemSection()
         for (card in cards) card.update()
         refreshStorage()
+    }
+
+    // ------------------------------------------------------------------
+    // System voice (the phone's text-to-speech engine)
+    // ------------------------------------------------------------------
+
+    private fun addSystemSection() {
+        cardsBox.addView(
+            TextView(this).apply {
+                text = getString(R.string.system_voice_title)
+                setTypeface(typeface, Typeface.BOLD)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            },
+        )
+        cardsBox.addView(
+            TextView(this).apply {
+                text = getString(R.string.system_voice_help)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = dp(4) }
+            },
+        )
+        systemSpinner = Spinner(this)
+        systemSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(
+                parent: AdapterView<*>,
+                view: View?,
+                position: Int,
+                id: Long,
+            ) {
+                // Programmatic rebuilds below re-fire with the stored value; only a
+                // real change writes.
+                val picked = systemRows.getOrNull(position)
+                if (picked != ReadlyTtsService.systemPackId(this@VoicesActivity)) {
+                    val edit = prefs.edit()
+                    if (picked == null) {
+                        edit.remove(ReadlyTtsService.KEY_SYSTEM_PACK)
+                    } else {
+                        edit.putString(ReadlyTtsService.KEY_SYSTEM_PACK, picked)
+                    }
+                    edit.apply()
+                }
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>) = Unit
+        }
+        cardsBox.addView(systemSpinner)
+        cardsBox.addView(
+            Button(this).apply {
+                text = getString(R.string.system_voice_settings_button)
+                setOnClickListener { openTtsSettings() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    topMargin = dp(4)
+                    bottomMargin = dp(12)
+                }
+            },
+        )
+        refreshSystemSection()
+    }
+
+    /** Rebuilds the system spinner from the installed packs, keeping the setting. */
+    private fun refreshSystemSection() {
+        val installed = VoiceCatalog.ALL.filter { isInstalled(it) }
+        systemRows = listOf(null) + installed.map { it.id }
+        val items = listOf(getString(R.string.system_voice_automatic)) +
+            installed.map { VoiceCatalog.shortName(it) }
+        systemSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            items,
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        systemSpinner.setSelection(
+            systemRows.indexOf(ReadlyTtsService.systemPackId(this)).coerceAtLeast(0),
+        )
+    }
+
+    private fun openTtsSettings() {
+        try {
+            startActivity(Intent("com.android.settings.TTS_SETTINGS"))
+        } catch (_: ActivityNotFoundException) {
+            startActivity(Intent(Settings.ACTION_SETTINGS))
+            Toast.makeText(this, R.string.tts_settings_path, Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun refreshStorage() {

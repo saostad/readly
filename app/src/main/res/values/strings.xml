@@ -97,4 +97,9 @@
     <string name="preview_text_fa">سلام، من %1$s هستم. این صدای من است.</string>
     <string name="tts_sample_en">This is Readly, an on-device voice.</string>
     <string name="tts_sample_fa">این ریدلی است، یک صدای روی دستگاه.</string>
+    <string name="system_voice_title">System voice</string>
+    <string name="system_voice_help">Used by TalkBack, Maps and other apps when Readly is your phone\'s text-to-speech engine. Pick a fast voice; screen readers need instant speech.</string>
+    <string name="system_voice_automatic">Automatic (fastest voice for each language)</string>
+    <string name="system_voice_settings_button">Open phone text-to-speech settings</string>
+    <string name="tts_settings_path">Settings → System → Languages → Text-to-speech output</string>
 </resources>
