@@ -5,12 +5,19 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.media.MediaMetadata
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -95,6 +102,8 @@ class ReaderService : Service() {
     private lateinit var readerExecutor: ExecutorService
     private lateinit var store: VoiceModelStore
     private lateinit var notificationManager: NotificationManager
+    private lateinit var audioManager: AudioManager
+    private lateinit var mediaSession: MediaSession
 
     /**
      * The engine. Constructed, used and closed on `readly-tts` only; the volatile read
@@ -127,6 +136,44 @@ class ReaderService : Service() {
     @Volatile
     private var destroyed = false
 
+    private val focusLock = Object()
+    private var focusRequest: AudioFocusRequest? = null
+
+    /**
+     * Main thread only: an audio-focus transient loss paused us, so the next gain
+     * resumes. Cleared by any manual pause/resume (the user took over).
+     */
+    private var pausedForFocusLoss = false
+
+    private val noisyLock = Object()
+    private var noisyRegistered = false
+    private val noisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) pauseReading()
+        }
+    }
+
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS -> pauseReading()
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                if (ReaderState.snapshot.status == ReaderStatus.READING) {
+                    pausedForFocusLoss = true
+                    pauseReading(clearFocusResume = false)
+                }
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                // Let the system duck us; keep reading quietly underneath.
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (pausedForFocusLoss) {
+                    pausedForFocusLoss = false
+                    resumeReading()
+                }
+            }
+        }
+    }
+
     private val idleShutdown = Runnable {
         Log.i("Readly", "Reader idle for 10 minutes, shutting down")
         stopSelf()
@@ -147,6 +194,20 @@ class ReaderService : Service() {
         notificationManager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Reading aloud", NotificationManager.IMPORTANCE_LOW),
         )
+        audioManager = getSystemService(AudioManager::class.java)
+        mediaSession = MediaSession(this, "Readly").apply {
+            setCallback(
+                object : MediaSession.Callback() {
+                    override fun onPlay() = resumeReading()
+                    override fun onPause() = pauseReading()
+                    override fun onSkipToNext() = moveBy(1)
+                    override fun onSkipToPrevious() = moveBy(-1)
+                    override fun onStop() = handleStop()
+                },
+                mainHandler,
+            )
+            isActive = true
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -211,6 +272,10 @@ class ReaderService : Service() {
             audioTrack = null
         }
         notificationManager.cancel(NOTIF_ID)
+        abandonFocus()
+        setNoisyRegistered(false)
+        mediaSession.isActive = false
+        mediaSession.release()
         ReaderState.update { it.copy(status = ReaderStatus.IDLE) }
         super.onDestroy()
     }
@@ -287,11 +352,13 @@ class ReaderService : Service() {
         }
     }
 
-    private fun pauseReading() {
+    private fun pauseReading(clearFocusResume: Boolean = true) {
         val current = synchronized(pipelineLock) { pipeline } ?: return
         if (ReaderState.snapshot.status != ReaderStatus.READING) return
+        if (clearFocusResume) pausedForFocusLoss = false
         synchronized(trackLock) { audioTrack?.pause() }
         current.pause()
+        setNoisyRegistered(false)
         ReaderState.update { it.copy(status = ReaderStatus.PAUSED) }
         updateNotification()
     }
@@ -299,8 +366,11 @@ class ReaderService : Service() {
     private fun resumeReading() {
         val current = synchronized(pipelineLock) { pipeline } ?: return
         if (ReaderState.snapshot.status != ReaderStatus.PAUSED) return
+        pausedForFocusLoss = false
+        requestFocus()
         synchronized(trackLock) { audioTrack?.play() }
         current.resume()
+        setNoisyRegistered(true)
         ReaderState.update { it.copy(status = ReaderStatus.READING) }
         updateNotification()
     }
@@ -332,6 +402,7 @@ class ReaderService : Service() {
                     currentChunks = emptyList()
                     currentTitle = ""
                 }
+                setNoisyRegistered(false)
                 ReaderState.update {
                     it.copy(
                         status = ReaderStatus.IDLE,
@@ -417,6 +488,7 @@ class ReaderService : Service() {
                     if (pipeline !== mine) return@ChunkPipeline
                     pipeline = null
                 }
+                setNoisyRegistered(false)
                 ReaderState.update { it.copy(status = ReaderStatus.FINISHED) }
                 updateNotification()
                 goIdle()
@@ -454,6 +526,8 @@ class ReaderService : Service() {
                 errorMessage = null,
             )
         }
+        requestFocus()
+        setNoisyRegistered(true)
         updateNotification()
         mine.start()
     }
@@ -605,12 +679,13 @@ class ReaderService : Service() {
     }
 
     // ------------------------------------------------------------------
-    // Errors, foreground, notification (minimal here; item 3 adds media controls)
+    // Errors + foreground
     // ------------------------------------------------------------------
 
     private fun postError(e: Throwable) {
         val message = "Couldn't read aloud: ${e.javaClass.name}: ${e.message}"
         Log.e("Readly", message, e)
+        setNoisyRegistered(false)
         ReaderState.update { it.copy(status = ReaderStatus.ERROR, errorMessage = message) }
         mainHandler.post { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
         updateNotification()
@@ -643,11 +718,69 @@ class ReaderService : Service() {
                 inForeground = false
                 stopForeground(STOP_FOREGROUND_DETACH)
             }
+            abandonFocus()
             updateNotification()
             mainHandler.removeCallbacks(idleShutdown)
             mainHandler.postDelayed(idleShutdown, IDLE_TIMEOUT_MS)
         }
     }
+
+    // ------------------------------------------------------------------
+    // Audio focus + headphones
+    // ------------------------------------------------------------------
+
+    /** Requests permanent focus. A denial is logged and playback proceeds anyway. */
+    private fun requestFocus() {
+        synchronized(focusLock) {
+            if (focusRequest != null) return
+            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                .setOnAudioFocusChangeListener(focusListener, mainHandler)
+                .build()
+            focusRequest = request
+            if (audioManager.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                Log.w("Readly", "Audio focus denied; reading anyway, another app may play over us.")
+            }
+        }
+    }
+
+    private fun abandonFocus() {
+        synchronized(focusLock) {
+            focusRequest?.let {
+                focusRequest = null
+                audioManager.abandonAudioFocusRequest(it)
+            }
+        }
+        pausedForFocusLoss = false
+    }
+
+    /** The headphones-unplugged receiver lives only while reading. */
+    private fun setNoisyRegistered(reading: Boolean) {
+        synchronized(noisyLock) {
+            if (reading && !noisyRegistered) {
+                noisyRegistered = true
+                val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+                if (Build.VERSION.SDK_INT >= 33) {
+                    registerReceiver(noisyReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    @Suppress("UnspecifiedRegisterReceiverFlag")
+                    registerReceiver(noisyReceiver, filter)
+                }
+            } else if (!reading && noisyRegistered) {
+                noisyRegistered = false
+                unregisterReceiver(noisyReceiver)
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Notification + media session
+    // ------------------------------------------------------------------
 
     private fun updateNotification() {
         if (destroyed) return
@@ -656,29 +789,112 @@ class ReaderService : Service() {
         } catch (e: Exception) {
             Log.w("Readly", "Updating the notification failed", e)
         }
+        syncSession()
     }
+
+    private fun serviceAction(action: String, requestCode: Int): PendingIntent =
+        PendingIntent.getService(
+            this,
+            requestCode,
+            Intent(this, ReaderService::class.java).setAction(action),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
 
     private fun buildNotification(): Notification {
         val snap = ReaderState.snapshot
+        val playing = snap.status == ReaderStatus.READING
         val openApp = PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE,
         )
-        val text = when (snap.status) {
+        val statusLine = when (snap.status) {
             ReaderStatus.LOADING_VOICE -> "Loading voice…"
-            ReaderStatus.READING -> snap.currentText.ifBlank { "Reading…" }
+            ReaderStatus.READING -> "Reading…"
             ReaderStatus.PAUSED -> "Paused"
             ReaderStatus.FINISHED -> "Finished."
             ReaderStatus.ERROR -> snap.errorMessage ?: "Something went wrong"
             ReaderStatus.IDLE -> "Ready"
         }
+        // No ic_media_stop on the platform; the close glyph reads as stop here.
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(snap.title.ifBlank { "Readly" })
-            .setContentText(text)
+            .setContentTitle(notificationTitle(snap))
+            .setContentText(snap.currentText.ifBlank { statusLine })
             .setContentIntent(openApp)
+            .setOngoing(
+                snap.status == ReaderStatus.READING ||
+                    snap.status == ReaderStatus.PAUSED ||
+                    snap.status == ReaderStatus.LOADING_VOICE,
+            )
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .addAction(
+                android.R.drawable.ic_media_previous,
+                "Previous sentence",
+                serviceAction(ACTION_PREVIOUS, 1),
+            )
+            .addAction(
+                if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                if (playing) "Pause" else "Play",
+                serviceAction(if (playing) ACTION_PAUSE else ACTION_PLAY, 2),
+            )
+            .addAction(
+                android.R.drawable.ic_media_next,
+                "Next sentence",
+                serviceAction(ACTION_NEXT, 3),
+            )
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Stop",
+                serviceAction(ACTION_STOP, 4),
+            )
+            .setStyle(
+                Notification.MediaStyle()
+                    .setMediaSession(mediaSession.sessionToken)
+                    .setShowActionsInCompactView(0, 1, 2),
+            )
             .build()
+    }
+
+    /** The document title, or the first 60 chars of the text. */
+    private fun notificationTitle(snap: ReaderSnapshot): String {
+        if (snap.title.isNotBlank()) return snap.title
+        val first = synchronized(pipelineLock) { currentChunks.firstOrNull()?.text }
+        return first?.take(60)?.ifBlank { "Readly" } ?: "Readly"
+    }
+
+    /** Keeps PlaybackState and MediaMetadata in sync with [ReaderState]. */
+    private fun syncSession() {
+        if (destroyed) return
+        val snap = ReaderState.snapshot
+        val state = when (snap.status) {
+            ReaderStatus.READING -> PlaybackState.STATE_PLAYING
+            ReaderStatus.PAUSED -> PlaybackState.STATE_PAUSED
+            ReaderStatus.LOADING_VOICE -> PlaybackState.STATE_BUFFERING
+            ReaderStatus.FINISHED, ReaderStatus.IDLE -> PlaybackState.STATE_STOPPED
+            ReaderStatus.ERROR -> PlaybackState.STATE_ERROR
+        }
+        try {
+            mediaSession.setPlaybackState(
+                PlaybackState.Builder()
+                    .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
+                    .setActions(
+                        PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+                            PlaybackState.ACTION_PLAY_PAUSE or
+                            PlaybackState.ACTION_SKIP_TO_NEXT or
+                            PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_STOP,
+                    )
+                    .build(),
+            )
+            mediaSession.setMetadata(
+                MediaMetadata.Builder()
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, notificationTitle(snap))
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, "Readly")
+                    .build(),
+            )
+        } catch (e: Exception) {
+            Log.w("Readly", "Syncing the media session failed", e)
+        }
     }
 }
