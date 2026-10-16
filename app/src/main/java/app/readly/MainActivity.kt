@@ -1,25 +1,47 @@
 package app.readly
 
+import android.Manifest
 import android.app.Activity
+import android.content.Intent
+import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.SeekBar
+import android.widget.Spinner
 import android.widget.TextView
 import app.readly.model.InstallStage
 import app.readly.model.VoiceModelStore
+import app.readly.playback.ReaderService
+import app.readly.playback.ReaderSnapshot
+import app.readly.playback.ReaderState
+import app.readly.playback.ReaderStatus
+import app.readly.text.SourceFormat
+import app.readly.tts.KokoroEngine
 import java.io.File
+import java.util.Locale
 
 /**
- * First-run setup screen: downloads the Kokoro voice, then shows a placeholder until round 2
- * adds the reader.
+ * First-run voice download, then the reader: a text box to read aloud, playback
+ * controls, voice and speed settings. Playback state arrives from [ReaderState], so
+ * rotation never loses it.
  */
 class MainActivity : Activity(), InstallTask.Listener {
 
     private lateinit var store: VoiceModelStore
+    private lateinit var prefs: SharedPreferences
     private var task: InstallTask? = null
 
+    private lateinit var setupContainer: LinearLayout
+    private lateinit var readerContainer: LinearLayout
     private lateinit var title: TextView
     private lateinit var body: TextView
     private lateinit var downloadButton: Button
@@ -31,13 +53,37 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var errorText: TextView
     private lateinit var retryButton: Button
     private lateinit var retryHelp: TextView
-    private lateinit var readyTitle: TextView
-    private lateinit var readyHint: TextView
+
+    private lateinit var notifRow: LinearLayout
+    private lateinit var notifNote: TextView
+    private lateinit var allowButton: Button
+    private lateinit var inputEdit: EditText
+    private lateinit var readButton: Button
+    private lateinit var inputError: TextView
+    private lateinit var nowContainer: LinearLayout
+    private lateinit var nowTitle: TextView
+    private lateinit var nowSentence: TextView
+    private lateinit var nowProgress: TextView
+    private lateinit var statusLine: TextView
+    private lateinit var speedLine: TextView
+    private lateinit var prevButton: Button
+    private lateinit var pausePlayButton: Button
+    private lateinit var nextButton: Button
+    private lateinit var stopButton: Button
+    private lateinit var voiceSpinner: Spinner
+    private lateinit var speedLabel: TextView
+    private lateinit var speedSeek: SeekBar
+
+    private var defaultTextColor = 0
+
+    private val readerListener = ReaderState.Listener { render(it) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        setupContainer = findViewById(R.id.setupContainer)
+        readerContainer = findViewById(R.id.readerContainer)
         title = findViewById(R.id.title)
         body = findViewById(R.id.body)
         downloadButton = findViewById(R.id.downloadButton)
@@ -49,16 +95,53 @@ class MainActivity : Activity(), InstallTask.Listener {
         errorText = findViewById(R.id.errorText)
         retryButton = findViewById(R.id.retryButton)
         retryHelp = findViewById(R.id.retryHelp)
-        readyTitle = findViewById(R.id.readyTitle)
-        readyHint = findViewById(R.id.readyHint)
+
+        notifRow = findViewById(R.id.notifRow)
+        notifNote = findViewById(R.id.notifNote)
+        allowButton = findViewById(R.id.allowButton)
+        inputEdit = findViewById(R.id.inputEdit)
+        readButton = findViewById(R.id.readButton)
+        inputError = findViewById(R.id.inputError)
+        nowContainer = findViewById(R.id.nowContainer)
+        nowTitle = findViewById(R.id.nowTitle)
+        nowSentence = findViewById(R.id.nowSentence)
+        nowProgress = findViewById(R.id.nowProgress)
+        statusLine = findViewById(R.id.statusLine)
+        speedLine = findViewById(R.id.speedLine)
+        prevButton = findViewById(R.id.prevButton)
+        pausePlayButton = findViewById(R.id.pausePlayButton)
+        nextButton = findViewById(R.id.nextButton)
+        stopButton = findViewById(R.id.stopButton)
+        voiceSpinner = findViewById(R.id.voiceSpinner)
+        speedLabel = findViewById(R.id.speedLabel)
+        speedSeek = findViewById(R.id.speedSeek)
+        defaultTextColor = statusLine.currentTextColor
 
         store = VoiceModelStore(File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
+        prefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
+
         downloadButton.setOnClickListener { startInstall() }
         retryButton.setOnClickListener { startInstall() }
         cancelButton.setOnClickListener { task?.cancel() }
 
+        readButton.setOnClickListener { readInputAloud() }
+        prevButton.setOnClickListener { sendAction(ReaderService.ACTION_PREVIOUS) }
+        pausePlayButton.setOnClickListener { sendAction(ReaderService.ACTION_TOGGLE) }
+        nextButton.setOnClickListener { sendAction(ReaderService.ACTION_NEXT) }
+        stopButton.setOnClickListener { sendAction(ReaderService.ACTION_STOP) }
+        allowButton.setOnClickListener {
+            if (Build.VERSION.SDK_INT >= 33) {
+                requestPermissions(
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    NOTIF_REQUEST,
+                )
+            }
+        }
+        setupVoiceSpinner()
+        setupSpeedSeek()
+
         if (store.isInstalled()) {
-            showReady()
+            showReader()
         } else {
             // Re-attach to the running install after rotation instead of restarting it.
             val running = (application as ReadlyApp).installTask
@@ -71,12 +154,180 @@ class MainActivity : Activity(), InstallTask.Listener {
                 showIdle()
             }
         }
+        render(ReaderState.snapshot)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        ReaderState.addListener(readerListener)
+    }
+
+    override fun onStop() {
+        ReaderState.removeListener(readerListener)
+        super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Warm the engine while the user pastes so the first READ starts instantly.
+        if (store.isInstalled() && ReaderState.snapshot.status == ReaderStatus.IDLE) {
+            ReaderService.preload(this)
+        }
+        updateNotifRow()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray,
+    ) {
+        if (requestCode != NOTIF_REQUEST) {
+            super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+            return
+        }
+        if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            notifRow.visibility = View.GONE
+        } else {
+            // Keep the note visible: reading works, notification controls don't.
+            notifNote.setText(R.string.notif_note_denied)
+            notifRow.visibility = View.VISIBLE
+        }
     }
 
     override fun onDestroy() {
         task?.let { if (it.listener === this) it.listener = null }
         super.onDestroy()
     }
+
+    // ------------------------------------------------------------------
+    // Reader
+    // ------------------------------------------------------------------
+
+    private fun readInputAloud() {
+        val text = inputEdit.text.toString()
+        if (text.isBlank()) {
+            inputError.visibility = View.VISIBLE
+            return
+        }
+        inputError.visibility = View.GONE
+        val title = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(60) ?: ""
+        ReaderService.read(this, text, title, SourceFormat.PLAIN)
+    }
+
+    private fun sendAction(action: String) {
+        startService(Intent(this, ReaderService::class.java).setAction(action))
+    }
+
+    private fun setupVoiceSpinner() {
+        val names = KokoroEngine.SPEAKERS.map { it.second }
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, names)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        voiceSpinner.adapter = adapter
+        voiceSpinner.setSelection(
+            prefs.getInt(ReaderService.KEY_SPEAKER_ID, 0).coerceIn(names.indices),
+        )
+        voiceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(
+                parent: AdapterView<*>,
+                view: View?,
+                position: Int,
+                id: Long,
+            ) {
+                prefs.edit().putInt(ReaderService.KEY_SPEAKER_ID, position).apply()
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>) = Unit
+        }
+    }
+
+    private fun setupSpeedSeek() {
+        updateSpeedLabel(progressToSpeed(speedSeek.progress))
+        speedSeek.progress =
+            speedToProgress(prefs.getFloat(ReaderService.KEY_SPEED, 1.0f))
+        speedSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                val speed = progressToSpeed(progress)
+                updateSpeedLabel(speed)
+                if (fromUser) prefs.edit().putFloat(ReaderService.KEY_SPEED, speed).apply()
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar) = Unit
+        })
+    }
+
+    private fun updateSpeedLabel(speed: Float) {
+        speedLabel.text = getString(
+            R.string.speed_label_format,
+            String.format(Locale.US, "%.1f", speed),
+        )
+    }
+
+    /** SeekBar 0..15 maps to 0.5×..2.0× in 0.1 steps. */
+    private fun progressToSpeed(progress: Int): Float = 0.5f + progress * 0.1f
+
+    private fun speedToProgress(speed: Float): Int =
+        ((speed - 0.5f) * 10 + 0.5f).toInt().coerceIn(0, 15)
+
+    private fun render(snap: ReaderSnapshot) {
+        nowContainer.visibility =
+            if (snap.status == ReaderStatus.IDLE) View.GONE else View.VISIBLE
+        nowTitle.text = snap.title.ifBlank { snap.currentText.take(60) }
+        nowTitle.visibility = if (nowTitle.text.isBlank()) View.GONE else View.VISIBLE
+        nowSentence.text = snap.currentText
+        nowSentence.visibility = if (snap.currentText.isBlank()) View.GONE else View.VISIBLE
+        if (snap.total > 0) {
+            nowProgress.visibility = View.VISIBLE
+            nowProgress.text = getString(R.string.sentence_format, snap.index + 1, snap.total)
+        } else {
+            nowProgress.visibility = View.GONE
+        }
+        when (snap.status) {
+            ReaderStatus.LOADING_VOICE -> {
+                statusLine.visibility = View.VISIBLE
+                statusLine.setText(R.string.loading_voice)
+                statusLine.setTextColor(defaultTextColor)
+            }
+            ReaderStatus.ERROR -> {
+                statusLine.visibility = View.VISIBLE
+                statusLine.text = snap.errorMessage
+                statusLine.setTextColor(getColor(android.R.color.holo_red_dark))
+            }
+            ReaderStatus.FINISHED -> {
+                statusLine.visibility = View.VISIBLE
+                statusLine.setText(R.string.finished_label)
+                statusLine.setTextColor(defaultTextColor)
+            }
+            else -> statusLine.visibility = View.GONE
+        }
+        if (snap.lastRtf > 0) {
+            speedLine.visibility = View.VISIBLE
+            val factor = String.format(Locale.US, "%.1f", 1.0 / snap.lastRtf)
+            if (snap.lastRtf > 1) {
+                speedLine.text = getString(R.string.speed_slow_format, factor)
+                speedLine.setTextColor(getColor(android.R.color.holo_orange_dark))
+            } else {
+                speedLine.text = getString(R.string.speed_fast_format, factor)
+                speedLine.setTextColor(defaultTextColor)
+            }
+        } else {
+            speedLine.visibility = View.GONE
+        }
+        pausePlayButton.setText(
+            if (snap.status == ReaderStatus.PAUSED) R.string.play_button else R.string.pause_button,
+        )
+    }
+
+    private fun updateNotifRow() {
+        val needAsk = Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        notifRow.visibility = if (needAsk) View.VISIBLE else View.GONE
+    }
+
+    // ------------------------------------------------------------------
+    // Voice install (first run)
+    // ------------------------------------------------------------------
 
     private fun startInstall() {
         val app = application as ReadlyApp
@@ -99,7 +350,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     override fun onDone() {
         Log.i("Readly", "Voice install complete")
         task = null
-        showReady()
+        showReader()
     }
 
     override fun onCancelled() {
@@ -131,35 +382,37 @@ class MainActivity : Activity(), InstallTask.Listener {
     }
 
     private fun showIdle() {
+        setupContainer.visibility = View.VISIBLE
+        readerContainer.visibility = View.GONE
         setSetupVisible(true)
         setProgressVisible(false)
         setErrorVisible(false)
-        setReadyVisible(false)
     }
 
     private fun showProgress() {
+        setupContainer.visibility = View.VISIBLE
+        readerContainer.visibility = View.GONE
         setSetupVisible(true)
         downloadButton.visibility = View.GONE
         downloadHelp.visibility = View.GONE
         setProgressVisible(true)
         setErrorVisible(false)
-        setReadyVisible(false)
     }
 
     private fun showError() {
+        setupContainer.visibility = View.VISIBLE
+        readerContainer.visibility = View.GONE
         setSetupVisible(true)
         downloadButton.visibility = View.GONE
         downloadHelp.visibility = View.GONE
         setProgressVisible(false)
         setErrorVisible(true)
-        setReadyVisible(false)
     }
 
-    private fun showReady() {
-        setSetupVisible(false)
-        setProgressVisible(false)
-        setErrorVisible(false)
-        setReadyVisible(true)
+    private fun showReader() {
+        setupContainer.visibility = View.GONE
+        readerContainer.visibility = View.VISIBLE
+        updateNotifRow()
     }
 
     private fun setSetupVisible(visible: Boolean) {
@@ -185,9 +438,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         retryHelp.visibility = v
     }
 
-    private fun setReadyVisible(visible: Boolean) {
-        val v = if (visible) View.VISIBLE else View.GONE
-        readyTitle.visibility = v
-        readyHint.visibility = v
+    companion object {
+        private const val NOTIF_REQUEST = 1
     }
 }

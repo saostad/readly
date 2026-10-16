@@ -15,6 +15,31 @@
     <string name="try_again">Try again</string>
     <string name="retry_help">Tries the voice download again.</string>
     <string name="error_format">Voice download failed: %1$s: %2$s</string>
-    <string name="ready_title">Voice ready</string>
-    <string name="ready_hint">To read something, open any app, tap Share, and choose Readly. Round 2 adds the reader.</string>
+
+    <string name="read_section">Read something</string>
+    <string name="input_hint">Paste or type text here</string>
+    <string name="input_help">Readly removes Markdown, links, code and emoji before reading.</string>
+    <string name="read_button">Read aloud</string>
+    <string name="input_error">Type or paste some text first.</string>
+    <string name="now_section">Now reading</string>
+    <string name="sentence_format">Sentence %1$d of %2$d</string>
+    <string name="previous_button">Previous</string>
+    <string name="pause_button">Pause</string>
+    <string name="play_button">Play</string>
+    <string name="next_button">Next</string>
+    <string name="stop_button">Stop</string>
+    <string name="loading_voice">Loading the voice… (first time takes a few seconds)</string>
+    <string name="finished_label">Finished.</string>
+    <string name="speed_fast_format">This phone makes speech %1$s× faster than it plays.</string>
+    <string name="speed_slow_format">This phone makes speech slower than it plays (%1$s×), so you may hear short gaps between sentences.</string>
+    <string name="voice_section">Voice</string>
+    <string name="voice_help">Who reads to you. Changes apply from the next sentence.</string>
+    <string name="speed_section">Speed</string>
+    <string name="speed_label_format">Speed: %1$s×</string>
+    <string name="speed_help">How fast the voice talks.</string>
+    <string name="how_section">How to use</string>
+    <string name="how_text">In any app, tap Share and choose Readly. Or select text and choose Read aloud.</string>
+    <string name="notif_note">Allow notifications so you can pause and skip from the notification shade and lock screen.</string>
+    <string name="notif_note_denied">Allow notifications so you can pause and skip from the notification shade and lock screen. Reading still works without them.</string>
+    <string name="allow_button">Allow</string>
 </resources>
