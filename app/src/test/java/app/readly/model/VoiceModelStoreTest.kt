@@ -111,6 +111,41 @@ class VoiceModelStoreTest {
     }
 
     @Test
+    fun install_largeArchive_throttlesProgressTo256KBPlusEndOfStage() {
+        // ~300 KB of incompressible fixture data: big enough to cross one 256 KB
+        // threshold, small enough to stay under two.
+        val padding = ByteArray(300_000)
+        java.util.Random(42).nextBytes(padding)
+        val archive = fixtureArchive(modelEntries() + ("kokoro-int8-en-v0_19/padding.bin" to padding))
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive))
+
+        val downloading = mutableListOf<Long>()
+        val unpacking = mutableListOf<Long>()
+        val verifying = mutableListOf<Long>()
+        store.install(
+            progress = { stage, done, _ ->
+                when (stage) {
+                    InstallStage.DOWNLOADING -> downloading.add(done)
+                    InstallStage.VERIFYING -> verifying.add(done)
+                    InstallStage.UNPACKING -> unpacking.add(done)
+                }
+            },
+            cancelled = { false },
+        )
+
+        assertTrue(store.isInstalled())
+        // One mid-stage report (first 64 KB read past 256 KB) plus end-of-stage.
+        assertEquals(2, downloading.size)
+        assertEquals(archive.size.toLong(), downloading.last())
+        assertEquals(1, verifying.size)
+        // Unpacking streams ~300 KB through bzip2: one mid-stage report at most
+        // (whether the decoder has buffered the tail by then), plus end-of-stage.
+        // Unthrottled this would be one report per entry (5).
+        assertTrue("unpacking reports: ${unpacking.size}", unpacking.size in 1..2)
+    }
+
+    @Test
     fun install_http404_throwsExactMessage() {
         val base = temp.newFolder("voices")
         val store = VoiceModelStore(

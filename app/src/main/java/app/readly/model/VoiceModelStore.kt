@@ -59,6 +59,8 @@ class VoiceModelStore(
 
         private const val PART_NAME = "download.part"
         private const val COMPLETE_MARKER = ".complete"
+        private const val READ_BUFFER_BYTES = 64 * 1024
+        private const val PROGRESS_MIN_DELTA_BYTES = 256L * 1024
 
         /** Production [VoiceModelStore] opener backed by [HttpURLConnection]. */
         fun httpUrlOpener(url: String): DownloadConnection = HttpDownloadConnection(url)
@@ -78,6 +80,7 @@ class VoiceModelStore(
      * Downloads, verifies and installs the voice model.
      *
      * @param progress called as `(stage, bytesDone, bytesTotal)`; totals are [ARCHIVE_SIZE_BYTES].
+     *   Throttled: at most every 256 KB within a stage, plus once at the end of each stage.
      * @param cancelled polled during download and unpacking; abort throws [CancellationException].
      * @throws IOException with a specific message on any failure (space, HTTP, hash, unsafe path).
      */
@@ -128,9 +131,10 @@ class VoiceModelStore(
                 )
             }
             var done = 0L
+            var lastReported = 0L
             partFile.outputStream().use { out ->
                 conn.input().use { input ->
-                    val buf = ByteArray(8192)
+                    val buf = ByteArray(READ_BUFFER_BYTES)
                     while (true) {
                         if (cancelled()) throw CancellationException("Voice download cancelled")
                         val n = input.read(buf)
@@ -138,9 +142,15 @@ class VoiceModelStore(
                         out.write(buf, 0, n)
                         digest.update(buf, 0, n)
                         done += n
-                        progress(InstallStage.DOWNLOADING, done, ARCHIVE_SIZE_BYTES)
+                        if (done - lastReported >= PROGRESS_MIN_DELTA_BYTES) {
+                            progress(InstallStage.DOWNLOADING, done, ARCHIVE_SIZE_BYTES)
+                            lastReported = done
+                        }
                     }
                 }
+            }
+            if (done != lastReported) {
+                progress(InstallStage.DOWNLOADING, done, ARCHIVE_SIZE_BYTES)
             }
             return done
         }
@@ -169,6 +179,7 @@ class VoiceModelStore(
         tmpDir.mkdirs()
         val base = tmpDir.toPath().toAbsolutePath().normalize()
         val counting = CountingInputStream(partFile.inputStream())
+        var lastReported = 0L
         BZip2CompressorInputStream(counting).use { bz ->
             TarArchiveInputStream(bz).use { tar ->
                 var entry = tar.nextEntry
@@ -186,10 +197,16 @@ class VoiceModelStore(
                     } else {
                         throw IOException("Unsupported entry in voice archive: ${entry.name}")
                     }
-                    progress(InstallStage.UNPACKING, counting.count, ARCHIVE_SIZE_BYTES)
+                    if (counting.count - lastReported >= PROGRESS_MIN_DELTA_BYTES) {
+                        progress(InstallStage.UNPACKING, counting.count, ARCHIVE_SIZE_BYTES)
+                        lastReported = counting.count
+                    }
                     entry = tar.nextEntry
                 }
             }
+        }
+        if (counting.count != lastReported) {
+            progress(InstallStage.UNPACKING, counting.count, ARCHIVE_SIZE_BYTES)
         }
     }
 
