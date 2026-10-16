@@ -95,7 +95,11 @@ class KokoroEngine(store: VoiceModelStore) : Closeable {
             tokens = "$dir/tokens.txt",
             dataDir = "$dir/espeak-ng-data",
         )
-        val threads = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4)
+        // On-device benchmark (Pixel 11 Pro, fp32 kokoro-en-v0_19, same 14.8 s of
+        // audio): 3 threads -> RTF 0.66, 6 -> 0.48, 7 -> 0.61. NNAPI gives no
+        // gain over cpu (0.47 vs 0.48), so the provider stays cpu. Don't "fix"
+        // this back to fewer threads: synthesis time is what delays first sound.
+        val threads = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 6)
         val model = OfflineTtsModelConfig(kokoro = kokoro, numThreads = threads, debug = false, provider = "cpu")
         return OfflineTtsConfig(model = model, maxNumSentences = 1)
     }
