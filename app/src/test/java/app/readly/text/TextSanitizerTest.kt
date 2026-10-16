@@ -1,6 +1,7 @@
 package app.readly.text
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TextSanitizerTest {
@@ -167,5 +168,68 @@ class TextSanitizerTest {
         assertEquals("", TextSanitizer.sanitize("", SourceFormat.PLAIN))
         assertEquals("", TextSanitizer.sanitize("", SourceFormat.MARKDOWN))
         assertEquals("", TextSanitizer.sanitize("", SourceFormat.HTML))
+    }
+
+    @Test
+    fun sanitize_punctuationRuns_keepSpokenForm() {
+        assertEquals(
+            "Wait… what?! This is cool!",
+            TextSanitizer.sanitize("Wait... what?!! This is cool!!!", SourceFormat.PLAIN),
+        )
+        assertEquals(
+            "Really? Yes…",
+            TextSanitizer.sanitize("Really?? Yes..", SourceFormat.PLAIN),
+        )
+    }
+
+    @Test
+    fun sanitize_meaningfulSymbols_areKept() {
+        val input = "It's 25°C today © 2026"
+        assertEquals(input, TextSanitizer.sanitize(input, SourceFormat.PLAIN))
+        val marks = "Nice™ product (®) → buy it ← § 5 ¶ 2 № 7 µ 100℉"
+        assertEquals(marks, TextSanitizer.sanitize(marks, SourceFormat.PLAIN))
+    }
+
+    @Test
+    fun sanitize_removalBeforePunctuation_leavesNoSpace() {
+        assertEquals(
+            "That was nice.",
+            TextSanitizer.sanitize("That was nice 🎉.", SourceFormat.PLAIN),
+        )
+        // ™ is now a kept symbol, so this stays untouched.
+        assertEquals("nice ™.", TextSanitizer.sanitize("nice ™.", SourceFormat.PLAIN))
+    }
+
+    @Test
+    fun sanitize_inlineTags_doNotGlueWords() {
+        assertEquals(
+            "More Hidden text",
+            TextSanitizer.sanitize(
+                "<details><summary>More</summary>Hidden text</details>",
+                SourceFormat.PLAIN,
+            ),
+        )
+    }
+
+    @Test
+    fun sanitize_shortTitleLine_breaksBeforeNextSentence() {
+        assertEquals(
+            "Breaking News.\n\nThe market fell 3% today.",
+            TextSanitizer.sanitize(
+                "Breaking News\nThe market fell 3% today.",
+                SourceFormat.PLAIN,
+            ),
+        )
+    }
+
+    @Test
+    fun sanitize_hardWrappedProse_stillJoins() {
+        val line1 = "The quick brown fox jumps over the lazy dog near the river bank today"
+        val line2 = "And this next line starts uppercase but the first line is too long to split"
+        assertTrue("fixture line must exceed the 60-char join guard", line1.length > 60)
+        assertEquals(
+            "$line1 $line2",
+            TextSanitizer.sanitize("$line1\n$line2", SourceFormat.PLAIN),
+        )
     }
 }

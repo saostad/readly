@@ -18,7 +18,9 @@ object SentenceChunker {
     private const val MERGE_UNDER = 40
     private const val MERGE_MAX = 250
     private const val SPLIT_OVER = 300
-    private val abbreviationEnd = Regex("""(?i)\b(Mr|Mrs|Dr|St|e\.g|i\.e|vs|etc)\.$""")
+    /** Titles: always glue, whatever case follows (never speak "Mr." alone). */
+    private val titleEnd = Regex("""\b(Mr|Mrs|Ms|Dr|Prof|St|Sr|Jr|Mt|No)\.$""")
+    private val abbreviationEnd = Regex("""(?i)\b(e\.g|i\.e|vs|etc)\.$""")
     private val paragraphBreak = Regex("""\r?\n[ \t]*\r?\n""")
     private val splitPunct = setOf(',', ';', ':', '—')
 
@@ -71,14 +73,14 @@ object SentenceChunker {
             start = end
             end = iterator.next()
         }
-        // Undo false breaks after abbreviations ("e.g. red", "etc. 12").
+        // Undo false breaks after abbreviations ("e.g. red", "etc. 12") and titles
+        // ("Mr. Smith" is one sentence no matter what follows "Mr.").
         val out = mutableListOf<Pair<Int, Int>>()
         var i = 0
         while (i < raw.size) {
             var (startOffset, endOffset) = raw[i]
             while (i + 1 < raw.size &&
-                abbreviationEnd.containsMatchIn(input.substring(startOffset, endOffset)) &&
-                input[raw[i + 1].first].let { it.isLowerCase() || it.isDigit() }
+                shouldGlue(input.substring(startOffset, endOffset), input[raw[i + 1].first])
             ) {
                 endOffset = raw[i + 1].second
                 i++
@@ -88,6 +90,10 @@ object SentenceChunker {
         }
         return out
     }
+
+    private fun shouldGlue(current: String, nextFirst: Char): Boolean =
+        titleEnd.containsMatchIn(current) ||
+            (abbreviationEnd.containsMatchIn(current) && (nextFirst.isLowerCase() || nextFirst.isDigit()))
 
     /** Cuts an over-long first sentence at the last space within 160 chars, else hard. */
     private fun cutFirst(input: String, start: Int, end: Int): Pair<Pair<Int, Int>, Pair<Int, Int>> {

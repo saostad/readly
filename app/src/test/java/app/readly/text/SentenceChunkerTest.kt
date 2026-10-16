@@ -102,14 +102,19 @@ class SentenceChunkerTest {
     }
 
     @Test
-    fun chunk_abbreviationBeforeCapital_followsBreakIterator() {
-        // BreakIterator splits "Mr. Smith"; the abbreviation rule only covers a
-        // following lowercase letter or digit, so the first chunk is "Mr." and the
-        // merge rule rejoins the rest.
+    fun chunk_titlesBeforeCapitals_stayGlued() {
+        // BreakIterator splits "Mr. Smith", but titles always glue so the voice never
+        // speaks "Mr." as a separate fragment.
         assertEquals(
-            listOf("Mr.", "Smith went home. He slept."),
+            listOf("Mr. Smith went home.", "He slept."),
             SentenceChunker.chunk("Mr. Smith went home. He slept.").map { it.text },
         )
+    }
+
+    @Test
+    fun chunk_titlesWithTimesAndStreets_isOneChunk() {
+        val input = "Mr. Smith met Dr. Jones at 5 p.m. on St. Mark's Rd."
+        assertEquals(listOf(input), SentenceChunker.chunk(input).map { it.text })
     }
 
     @Test

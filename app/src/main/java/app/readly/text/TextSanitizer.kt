@@ -39,6 +39,9 @@ object TextSanitizer {
     private val urlTrailingPunct = setOf(')', '.', ',', ';', ':', '!', '?', '"', '\'')
     private val spaceBeforePunct = Regex("""\s+([,.;:!?])""")
     private val entity = Regex("""&(amp|lt|gt|quot|apos|nbsp);|&#(\d+);|&#x([0-9a-fA-F]+);""")
+    private val dotsRun = Regex("""\.{2,}""")
+    private val bangRun = Regex("""!{2,}""")
+    private val questionRun = Regex("""\?{2,}""")
     private val runOfSame = Regex("""(.)\1\1+""")
     private val symbolToken = Regex("""^[#*_`|~^=+<>]+$""")
     private val keptSingleSymbol = setOf('*', '=', '+', '<', '>')
@@ -48,12 +51,18 @@ object TextSanitizer {
         var text = removeUrls(para.text)
         text = decodeEntities(text)
         text = stripEmoji(text)
+        // Ellipses and excited punctuation are meaningful: keep them in spoken form.
+        text = dotsRun.replace(text, "…")
+        text = bangRun.replace(text, "!")
+        text = questionRun.replace(text, "?")
         text = runOfSame.replace(text) { m ->
             if (m.value[0].isLetterOrDigit()) m.value else ""
         }
         // Unmatched backticks are markup residue, never prose.
         text = text.replace("`", "")
         text = stripSymbolTokens(text).trim()
+        // Removals above can strand a space before punctuation ("nice .").
+        text = spaceBeforePunct.replace(text, "$1")
         if (text.isEmpty()) return null
         if (para.punctuate && text.last() !in PUNCT_END) text += "."
         if (!text.any { it.isLetterOrDigit() }) return null
@@ -92,18 +101,35 @@ object TextSanitizer {
         }
     }
 
+    /** Meaningful symbols that survive emoji stripping (units, legal marks, arrows). */
+    private val keptSymbols = setOf(
+        0x00B0, // ° degree
+        0x2103, // ℃
+        0x2109, // ℉
+        0x00A9, // ©
+        0x00AE, // ®
+        0x2122, // ™
+        0x2116, // №
+        0x00A7, // §
+        0x00B6, // ¶
+        0x00B5, // µ
+        0x2190, 0x2191, 0x2192, 0x2193, // ← → ↑ ↓
+    )
+
     private fun stripEmoji(text: String): String {
         val out = StringBuilder(text.length)
         var i = 0
         while (i < text.length) {
             val cp = text.codePointAt(i)
             val type = Character.getType(cp)
-            val drop = type == Character.OTHER_SYMBOL.toInt() ||
-                type == Character.SURROGATE.toInt() ||
-                cp == 0xFE0E || cp == 0xFE0F || cp == 0x200D || cp == 0x20E3 ||
-                cp in 0x1F3FB..0x1F3FF || // skin-tone modifiers
-                cp in 0x1F1E6..0x1F1FF || // regional indicators
-                cp in 0xE0020..0xE007F // tag characters
+            val drop = cp !in keptSymbols && (
+                type == Character.OTHER_SYMBOL.toInt() ||
+                    type == Character.SURROGATE.toInt() ||
+                    cp == 0xFE0E || cp == 0xFE0F || cp == 0x200D || cp == 0x20E3 ||
+                    cp in 0x1F3FB..0x1F3FF || // skin-tone modifiers
+                    cp in 0x1F1E6..0x1F1FF || // regional indicators
+                    cp in 0xE0020..0xE007F // tag characters
+                )
             if (!drop) out.appendCodePoint(cp)
             i += Character.charCount(cp)
         }
@@ -230,11 +256,26 @@ object TextSanitizer {
                 paras.add(Para(tableRow(trimmed), punctuate = true))
                 i++; continue
             }
+            if (isTitleLineBreak(current.lastOrNull(), trimmed)) {
+                paras.add(Para(inline(current.joinToString("\n")), punctuate = true))
+                current.clear()
+            }
             current.add(trimmed)
             i++
         }
         flush()
         return paras
+    }
+
+    /**
+     * A single newline ends the sentence (short title line over a new sentence) when the
+     * earlier line has no ending punctuation, is at most 60 chars, and the next line starts
+     * with an uppercase letter or digit. Longer hard-wrapped prose still joins.
+     */
+    private fun isTitleLineBreak(prev: String?, next: String): Boolean {
+        if (prev.isNullOrEmpty() || next.isEmpty()) return false
+        return prev.last() !in ".!?:;," && prev.length <= 60 &&
+            (next[0].isUpperCase() || next[0].isDigit())
     }
 
     private fun stripFrontMatter(text: String): String {
@@ -304,7 +345,8 @@ object TextSanitizer {
     }
 
     private fun structureInline(text: String): String {
-        var result = tag.replace(text, "")
+        // Tags become a space (collapsed later) so inline tags never glue words.
+        var result = tag.replace(text, " ")
         result = image.replace(result, "$1")
         result = link.replace(result, "$1")
         result = refLink.replace(result, "$1")
