@@ -395,11 +395,10 @@ class MainActivity : Activity(), InstallTask.Listener {
             InstallStage.DOWNLOADING ->
                 getString(
                     R.string.downloading_format,
-                    bytesDone / 1024 / 1024,
+                    bytesDone / 1_000_000,
                     VoiceModelStore.ARCHIVE_SIZE_MB,
                 )
             InstallStage.VERIFYING -> getString(R.string.verifying_label)
-            InstallStage.UNPACKING -> getString(R.string.unpacking_label)
         }
         progressBar.progress =
             if (bytesTotal > 0) ((bytesDone * 100 / bytesTotal).toInt().coerceIn(0, 100)) else 0

@@ -1,5 +1,6 @@
 package app.readly.model
 
+import java.io.BufferedInputStream
 import java.io.Closeable
 import java.io.File
 import java.io.FilterInputStream
@@ -7,8 +8,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URI
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
+import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
@@ -18,7 +18,6 @@ import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 enum class InstallStage {
     DOWNLOADING,
     VERIFYING,
-    UNPACKING,
 }
 
 /**
@@ -41,6 +40,8 @@ interface DownloadConnection : Closeable {
  * @param urlOpener opens [ARCHIVE_URL]; production passes [httpUrlOpener].
  * @param expectedSha256 expected SHA-256 of the archive; a parameter so tests can inject
  *   fixture hashes (production uses [ARCHIVE_SHA256]).
+ * @param expectedSizeBytes expected archive size in bytes; a parameter so tests can inject
+ *   fixture sizes (production uses [ARCHIVE_SIZE_BYTES]).
  * @param onInfo receives messages that production logs with `Log.i("Readly", …)`; injected
  *   so JVM tests don't touch `android.util.Log`.
  */
@@ -48,6 +49,7 @@ class VoiceModelStore(
     private val baseDir: File,
     private val urlOpener: (String) -> DownloadConnection,
     private val expectedSha256: String = ARCHIVE_SHA256,
+    private val expectedSizeBytes: Long = ARCHIVE_SIZE_BYTES,
     private val onInfo: (String) -> Unit = { android.util.Log.i("Readly", it) },
 ) {
     companion object {
@@ -58,13 +60,12 @@ class VoiceModelStore(
         const val ARCHIVE_SIZE_BYTES = 319625534L
         const val ARCHIVE_SHA256 =
             "912804855a04745fa77a30be545b3f9a5d15c4d66db00b88cbcd4921df605ac7"
-        const val REQUIRED_FREE_BYTES = 800L * 1024 * 1024
+        const val REQUIRED_FREE_BYTES = 500L * 1024 * 1024
         /** Previous int8 voice dir, removed after a successful install of the fp32 voice. */
         const val LEGACY_MODEL_NAME = "kokoro-int8-en-v0_19"
         /** [ARCHIVE_SIZE_BYTES] in decimal MB, rounded; the progress label shows this total. */
         val ARCHIVE_SIZE_MB: Int = ((ARCHIVE_SIZE_BYTES + 500_000) / 1_000_000).toInt()
 
-        private const val PART_NAME = "download.part"
         private const val COMPLETE_MARKER = ".complete"
         private const val READ_BUFFER_BYTES = 64 * 1024
         private const val PROGRESS_MIN_DELTA_BYTES = 256L * 1024
@@ -91,31 +92,40 @@ class VoiceModelStore(
     }
 
     /**
-     * Downloads, verifies and installs the voice model.
+     * Downloads, verifies and installs the voice model in a single pass: download, hash
+     * and unpack run at the same time, so bzip2 decoding overlaps the network.
      *
-     * @param progress called as `(stage, bytesDone, bytesTotal)`; totals are [ARCHIVE_SIZE_BYTES].
-     *   Throttled: at most every 256 KB within a stage, plus once at the end of each stage.
-     * @param cancelled polled during download and unpacking; abort throws [CancellationException].
-     * @throws IOException with a specific message on any failure (space, HTTP, hash, unsafe path).
+     * @param progress called as `(stage, bytesDone, bytesTotal)`; totals are the expected
+     *   archive size ([ARCHIVE_SIZE_BYTES] in production). DOWNLOADING reports compressed
+     *   bytes consumed, throttled to at most every 256 KB plus once at the end; VERIFYING
+     *   is reported once for the final size and hash checks.
+     * @param cancelled polled during download, extraction and draining; abort throws
+     *   [CancellationException].
+     * @throws IOException with a specific message on any failure (space, HTTP, truncation,
+     *   hash, unsafe path).
      */
     fun install(progress: (InstallStage, Long, Long) -> Unit, cancelled: () -> Boolean) {
         baseDir.mkdirs()
         val usable = baseDir.usableSpace
         if (usable < REQUIRED_FREE_BYTES) {
             throw IOException(
-                "Not enough free space: need 800 MB, have ${usable / 1024 / 1024} MB",
+                "Not enough free space: need 500 MB, have ${usable / 1024 / 1024} MB",
             )
         }
         if (cancelled()) throw CancellationException("Voice download cancelled")
-        val partFile = File(baseDir, PART_NAME)
         val tmpDir = File(baseDir, "$MODEL_NAME.tmp")
         val finalDir = File(baseDir, MODEL_NAME)
         try {
             val digest = MessageDigest.getInstance("SHA-256")
-            val downloaded = download(partFile, digest, progress, cancelled)
-            progress(InstallStage.VERIFYING, downloaded, ARCHIVE_SIZE_BYTES)
+            val consumed = streamDownloadAndUnpack(tmpDir, digest, progress, cancelled)
+            progress(InstallStage.VERIFYING, consumed, expectedSizeBytes)
+            if (consumed != expectedSizeBytes) {
+                throw IOException(
+                    "Voice download is incomplete: expected $expectedSizeBytes bytes, " +
+                        "got $consumed",
+                )
+            }
             verify(digest)
-            unpack(partFile, tmpDir, progress, cancelled)
             File(tmpDir, COMPLETE_MARKER).createNewFile()
             if (finalDir.exists()) finalDir.deleteRecursively()
             if (!tmpDir.renameTo(finalDir)) {
@@ -126,18 +136,24 @@ class VoiceModelStore(
             }
             deleteLegacyModel()
         } finally {
-            partFile.delete()
             tmpDir.deleteRecursively()
         }
     }
 
-    /** Streams the archive to [partFile] while hashing; returns the bytes downloaded. */
-    private fun download(
-        partFile: File,
+    /**
+     * Single pass: reads the archive from HTTP through the hash into the bzip2/tar
+     * decoders and extracts into [tmpDir]. No `download.part` is written, which halves the
+     * disk needed. Returns the compressed bytes consumed.
+     */
+    private fun streamDownloadAndUnpack(
+        tmpDir: File,
         digest: MessageDigest,
         progress: (InstallStage, Long, Long) -> Unit,
         cancelled: () -> Boolean,
     ): Long {
+        tmpDir.deleteRecursively()
+        tmpDir.mkdirs()
+        val base = tmpDir.toPath().toAbsolutePath().normalize()
         urlOpener(ARCHIVE_URL).use { conn ->
             if (conn.statusCode !in 200..299) {
                 val detail = if (conn.statusMessage.isBlank()) "" else " ${conn.statusMessage}"
@@ -145,29 +161,100 @@ class VoiceModelStore(
                     "Voice download failed: HTTP ${conn.statusCode}$detail from $ARCHIVE_URL",
                 )
             }
-            var done = 0L
+            // Buffered: commons-compress pulls its input one byte at a time, which is ~5x
+            // slower unbuffered (round 9 host benchmark: 1.6 vs 8.7 MB/s). The digest and
+            // the counter sit above the buffer so they see every compressed byte consumed.
+            val counting = CountingInputStream(
+                DigestInputStream(
+                    BufferedInputStream(conn.input(), READ_BUFFER_BYTES),
+                    digest,
+                ),
+            )
             var lastReported = 0L
-            partFile.outputStream().use { out ->
-                conn.input().use { input ->
-                    val buf = ByteArray(READ_BUFFER_BYTES)
-                    while (true) {
-                        if (cancelled()) throw CancellationException("Voice download cancelled")
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                        digest.update(buf, 0, n)
-                        done += n
-                        if (done - lastReported >= PROGRESS_MIN_DELTA_BYTES) {
-                            progress(InstallStage.DOWNLOADING, done, ARCHIVE_SIZE_BYTES)
-                            lastReported = done
-                        }
-                    }
+            fun maybeReport() {
+                if (counting.count - lastReported >= PROGRESS_MIN_DELTA_BYTES) {
+                    progress(InstallStage.DOWNLOADING, counting.count, expectedSizeBytes)
+                    lastReported = counting.count
                 }
             }
-            if (done != lastReported) {
-                progress(InstallStage.DOWNLOADING, done, ARCHIVE_SIZE_BYTES)
+            // Our own content errors, rethrown as-is; any other IOException out of the
+            // decoders means a truncated or corrupt stream (handled in the catch below).
+            var contentError: IOException? = null
+            fun fail(message: String): Nothing {
+                val e = IOException(message)
+                contentError = e
+                throw e
             }
-            return done
+            // bz/tar are pure in-memory wrappers; closing `counting` releases the chain.
+            try {
+                val tar = TarArchiveInputStream(BZip2CompressorInputStream(counting))
+                val buf = ByteArray(READ_BUFFER_BYTES)
+                var entry = tar.nextEntry
+                while (entry != null) {
+                    if (cancelled()) throw CancellationException("Voice download cancelled")
+                    val target = base.resolve(stripTopDir(entry.name)).normalize()
+                    if (!target.startsWith(base)) {
+                        fail("Unsafe path in voice archive: ${entry.name}")
+                    }
+                    if (entry.isDirectory) {
+                        target.toFile().mkdirs()
+                    } else if (entry.isFile) {
+                        target.parent?.toFile()?.mkdirs()
+                        target.toFile().outputStream().use { out ->
+                            while (true) {
+                                if (cancelled()) {
+                                    throw CancellationException("Voice download cancelled")
+                                }
+                                val n = tar.read(buf)
+                                if (n < 0) break
+                                out.write(buf, 0, n)
+                                maybeReport()
+                            }
+                        }
+                    } else {
+                        fail("Unsupported entry in voice archive: ${entry.name}")
+                    }
+                    maybeReport()
+                    entry = tar.nextEntry
+                }
+                drain(counting, cancelled)
+                if (counting.count != lastReported) {
+                    progress(InstallStage.DOWNLOADING, counting.count, expectedSizeBytes)
+                }
+                return counting.count
+            } catch (e: IOException) {
+                if (e === contentError) throw e
+                // The decoder failed: either the server closed early (truncated) or the
+                // bytes are corrupt. Drain what the transport still holds, then decide by
+                // the byte count.
+                var drainError: IOException? = null
+                try {
+                    drain(counting, cancelled)
+                } catch (d: IOException) {
+                    drainError = d
+                }
+                if (counting.count != expectedSizeBytes) {
+                    val incomplete = IOException(
+                        "Voice download is incomplete: expected $expectedSizeBytes bytes, " +
+                            "got ${counting.count}",
+                    )
+                    if (drainError != null) incomplete.addSuppressed(drainError)
+                    throw incomplete
+                }
+                if (drainError != null) e.addSuppressed(drainError)
+                throw e
+            } finally {
+                counting.close()
+            }
+        }
+    }
+
+    /** Reads [counting] to EOF so the digest covers the whole archive. */
+    private fun drain(counting: CountingInputStream, cancelled: () -> Boolean) {
+        val buf = ByteArray(READ_BUFFER_BYTES)
+        while (true) {
+            if (cancelled()) throw CancellationException("Voice download cancelled")
+            if (counting.read(buf) < 0) break
         }
     }
 
@@ -186,51 +273,6 @@ class VoiceModelStore(
         if (legacy.exists()) {
             legacy.deleteRecursively()
             onInfo("Removed old voice model $LEGACY_MODEL_NAME")
-        }
-    }
-
-    /**
-     * Extracts the archive into [tmpDir], stripping the `kokoro-en-v0_19/` top dir so the
-     * model files land directly in [tmpDir] (which is then renamed to the final dir).
-     */
-    private fun unpack(
-        partFile: File,
-        tmpDir: File,
-        progress: (InstallStage, Long, Long) -> Unit,
-        cancelled: () -> Boolean,
-    ) {
-        tmpDir.deleteRecursively()
-        tmpDir.mkdirs()
-        val base = tmpDir.toPath().toAbsolutePath().normalize()
-        val counting = CountingInputStream(partFile.inputStream())
-        var lastReported = 0L
-        BZip2CompressorInputStream(counting).use { bz ->
-            TarArchiveInputStream(bz).use { tar ->
-                var entry = tar.nextEntry
-                while (entry != null) {
-                    if (cancelled()) throw CancellationException("Voice download cancelled")
-                    val target = base.resolve(stripTopDir(entry.name)).normalize()
-                    if (!target.startsWith(base)) {
-                        throw IOException("Unsafe path in voice archive: ${entry.name}")
-                    }
-                    if (entry.isDirectory) {
-                        target.toFile().mkdirs()
-                    } else if (entry.isFile) {
-                        target.parent?.toFile()?.mkdirs()
-                        Files.copy(tar, target, StandardCopyOption.REPLACE_EXISTING)
-                    } else {
-                        throw IOException("Unsupported entry in voice archive: ${entry.name}")
-                    }
-                    if (counting.count - lastReported >= PROGRESS_MIN_DELTA_BYTES) {
-                        progress(InstallStage.UNPACKING, counting.count, ARCHIVE_SIZE_BYTES)
-                        lastReported = counting.count
-                    }
-                    entry = tar.nextEntry
-                }
-            }
-        }
-        if (counting.count != lastReported) {
-            progress(InstallStage.UNPACKING, counting.count, ARCHIVE_SIZE_BYTES)
         }
     }
 

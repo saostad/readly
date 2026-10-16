@@ -8,9 +8,8 @@
     <string name="download_button">Download voice (320 MB)</string>
     <string name="download_help">Starts the one-time download. Afterwards reading works offline.</string>
     <string name="progress_desc">Voice download progress</string>
-    <string name="downloading_format">Downloading… %1$d of %2$d MB</string>
+    <string name="downloading_format">Downloading and unpacking… %1$d of %2$d MB</string>
     <string name="verifying_label">Checking the download…</string>
-    <string name="unpacking_label">Unpacking the voice…</string>
     <string name="cancel_button">Cancel</string>
     <string name="cancel_help">Stops the download. Nothing is installed until it finishes.</string>
     <string name="try_again">Try again</string>

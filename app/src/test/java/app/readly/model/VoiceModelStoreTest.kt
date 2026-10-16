@@ -7,6 +7,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicInteger
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream
@@ -33,7 +34,7 @@ class VoiceModelStoreTest {
     fun install_success_installsModelAndCleansUp() {
         val archive = fixtureArchive(modelEntries())
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive))
+        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), archive.size.toLong())
         assertFalse(store.isInstalled())
 
         val stages = mutableListOf<InstallStage>()
@@ -45,11 +46,9 @@ class VoiceModelStoreTest {
         assertTrue(File(base, "kokoro-en-v0_19/tokens.txt").isFile)
         assertTrue(File(base, "kokoro-en-v0_19/espeak-ng-data").isDirectory)
         assertTrue(File(base, "kokoro-en-v0_19/.complete").isFile)
-        assertFalse(File(base, "download.part").exists())
         assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertTrue(stages.contains(InstallStage.DOWNLOADING))
         assertTrue(stages.contains(InstallStage.VERIFYING))
-        assertTrue(stages.contains(InstallStage.UNPACKING))
     }
 
     @Test
@@ -58,7 +57,7 @@ class VoiceModelStoreTest {
         val actual = sha256(archive)
         val wrong = (if (actual[0] == '0') "1" else "0") + actual.substring(1)
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), wrong)
+        val store = VoiceModelStore(base, fakeOpener(archive), wrong, archive.size.toLong())
 
         try {
             store.install(progress = { _, _, _ -> }, cancelled = { false })
@@ -66,7 +65,6 @@ class VoiceModelStoreTest {
         } catch (e: IOException) {
             assertEquals("Voice download is corrupted: expected SHA-256 $wrong, got $actual", e.message)
         }
-        assertFalse(File(base, "download.part").exists())
         assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertFalse(store.isInstalled())
     }
@@ -75,7 +73,7 @@ class VoiceModelStoreTest {
     fun install_zipSlipEntry_rejectsAndCleansUp() {
         val archive = fixtureArchive(mapOf("../evil" to "evil".toByteArray()))
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive))
+        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), archive.size.toLong())
 
         try {
             store.install(progress = { _, _, _ -> }, cancelled = { false })
@@ -84,16 +82,19 @@ class VoiceModelStoreTest {
             assertEquals("Unsafe path in voice archive: ../evil", e.message)
         }
         assertFalse(File(temp.root, "evil").exists())
-        assertFalse(File(base, "download.part").exists())
         assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertFalse(store.isInstalled())
     }
 
     @Test
     fun install_cancelledMidDownload_throwsAndCleansUp() {
-        val archive = fixtureArchive(modelEntries())
+        // Big enough to cross the 256 KB progress threshold mid-stream, so the
+        // cancellation below fires while bytes are still being consumed.
+        val padding = ByteArray(300_000)
+        java.util.Random(42).nextBytes(padding)
+        val archive = fixtureArchive(modelEntries() + ("kokoro-en-v0_19/padding.bin" to padding))
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive))
+        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), archive.size.toLong())
 
         var progressCalls = 0
         try {
@@ -105,44 +106,97 @@ class VoiceModelStoreTest {
         } catch (e: CancellationException) {
             assertEquals("Voice download cancelled", e.message)
         }
-        assertFalse(File(base, "download.part").exists())
+        assertTrue("cancel fired mid-stream", progressCalls >= 1)
+        assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
+        assertFalse(store.isInstalled())
+    }
+
+    @Test
+    fun install_cancelledMidLargeEntry_abortsBeforeEntryEnds() {
+        // One entry over 1 MB, first in the archive: ~23 chunks of 64 KB.
+        val big = ByteArray(1_500_000)
+        java.util.Random(7).nextBytes(big)
+        val archive = fixtureArchive(
+            mapOf("kokoro-en-v0_19/model.onnx" to big) + modelEntries().filterKeys {
+                it != "kokoro-en-v0_19/model.onnx"
+            },
+        )
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), archive.size.toLong())
+
+        val checks = AtomicInteger()
+        try {
+            store.install(
+                progress = { _, _, _ -> },
+                cancelled = { checks.incrementAndGet() > 5 },
+            )
+            fail("expected CancellationException")
+        } catch (e: CancellationException) {
+            assertEquals("Voice download cancelled", e.message)
+        }
+        assertTrue("aborted inside the first entry: ${checks.get()}", checks.get() < 15)
+        assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
+        assertFalse(store.isInstalled())
+    }
+
+    @Test
+    fun install_truncatedStream_throwsIncompleteAndCleansUp() {
+        val archive = fixtureArchive(modelEntries())
+        val half = archive.copyOf(archive.size / 2)
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(base, fakeOpener(half), sha256(archive), archive.size.toLong())
+
+        try {
+            store.install(progress = { _, _, _ -> }, cancelled = { false })
+            fail("expected IOException")
+        } catch (e: IOException) {
+            assertEquals(
+                "Voice download is incomplete: expected ${archive.size} bytes, got ${half.size}",
+                e.message,
+            )
+        }
         assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertFalse(store.isInstalled())
     }
 
     @Test
     fun install_largeArchive_throttlesProgressTo256KBPlusEndOfStage() {
-        // ~300 KB of incompressible fixture data: big enough to cross one 256 KB
-        // threshold, small enough to stay under two.
-        val padding = ByteArray(300_000)
+        // ~1.2 MB of incompressible fixture data: spans two bzip2 blocks, so
+        // consumption (and progress) is spread across the download.
+        val padding = ByteArray(1_200_000)
         java.util.Random(42).nextBytes(padding)
         val archive = fixtureArchive(modelEntries() + ("kokoro-en-v0_19/padding.bin" to padding))
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive))
+        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), archive.size.toLong())
 
         val downloading = mutableListOf<Long>()
-        val unpacking = mutableListOf<Long>()
         val verifying = mutableListOf<Long>()
         store.install(
             progress = { stage, done, _ ->
                 when (stage) {
                     InstallStage.DOWNLOADING -> downloading.add(done)
                     InstallStage.VERIFYING -> verifying.add(done)
-                    InstallStage.UNPACKING -> unpacking.add(done)
                 }
             },
             cancelled = { false },
         )
 
         assertTrue(store.isInstalled())
-        // One mid-stage report (first 64 KB read past 256 KB) plus end-of-stage.
-        assertEquals(2, downloading.size)
+        assertTrue(downloading.isNotEmpty())
         assertEquals(archive.size.toLong(), downloading.last())
         assertEquals(1, verifying.size)
-        // Unpacking streams ~300 KB through bzip2: one mid-stage report at most
-        // (whether the decoder has buffered the tail by then), plus end-of-stage.
-        // Unthrottled this would be one report per entry (5).
-        assertTrue("unpacking reports: ${unpacking.size}", unpacking.size in 1..2)
+        // Throttled: every gap but the final end-of-stage tail is at least 256 KB.
+        // Unthrottled this would report per 64 KB write (~19 reports).
+        for (i in 1 until downloading.size - 1) {
+            assertTrue(
+                "gap $i too small: ${downloading[i] - downloading[i - 1]}",
+                downloading[i] - downloading[i - 1] >= 256L * 1024,
+            )
+        }
+        assertTrue(
+            "too many reports: ${downloading.size}",
+            downloading.size <= archive.size / (256 * 1024) + 2,
+        )
     }
 
     @Test
@@ -163,7 +217,6 @@ class VoiceModelStoreTest {
                 e.message,
             )
         }
-        assertFalse(File(base, "download.part").exists())
         assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertFalse(store.isInstalled())
     }
@@ -176,7 +229,13 @@ class VoiceModelStoreTest {
         legacy.mkdirs()
         File(legacy, "model.int8.onnx").writeText("old voice")
         val infos = mutableListOf<String>()
-        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), infos::add)
+        val store = VoiceModelStore(
+            base,
+            fakeOpener(archive),
+            sha256(archive),
+            archive.size.toLong(),
+            infos::add,
+        )
         assertTrue(store.hasLegacyModel())
 
         store.install(progress = { _, _, _ -> }, cancelled = { false })
