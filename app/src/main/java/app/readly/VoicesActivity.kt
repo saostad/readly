@@ -416,17 +416,42 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             val pack = VoiceCatalog.byId(selectedPackId) ?: return
             val installed = isInstalled(pack)
             val inUse = installed && pack.id == activeId
-            badge.visibility =
-                if (active != null && active.family == info.family && isInstalled(active)) {
-                    View.VISIBLE
-                } else {
-                    View.GONE
+            val langUse = if (installed && !inUse) {
+                langAssignment(pack)?.let { ReaderService.langName(it) }
+            } else {
+                null
+            }
+            val mainHere = active != null && active.family == info.family && isInstalled(active)
+            val langHereName = if (mainHere) {
+                null
+            } else {
+                listOf("fa", "ar").firstNotNullOfOrNull { bucket ->
+                    val assigned = ReaderService.packIdForLang(this@VoicesActivity, bucket)
+                        ?.let { VoiceCatalog.byId(it) }
+                    if (assigned != null && assigned.family == info.family && isInstalled(assigned)) {
+                        ReaderService.langName(bucket)
+                    } else {
+                        null
+                    }
                 }
-            statusText.text = "${pack.rtfNote} · ${getString(when {
-                inUse -> R.string.status_in_use
-                installed -> R.string.status_downloaded
-                else -> R.string.status_not_downloaded
-            })}"
+            }
+            when {
+                mainHere -> {
+                    badge.setText(R.string.in_use_badge)
+                    badge.visibility = View.VISIBLE
+                }
+                langHereName != null -> {
+                    badge.text = getString(R.string.in_use_for_format, langHereName)
+                    badge.visibility = View.VISIBLE
+                }
+                else -> badge.visibility = View.GONE
+            }
+            statusText.text = "${pack.rtfNote} · ${when {
+                inUse -> getString(R.string.status_in_use)
+                langUse != null -> getString(R.string.in_use_for_format, langUse)
+                installed -> getString(R.string.status_downloaded)
+                else -> getString(R.string.status_not_downloaded)
+            }}"
             sampleButton.setText(
                 when {
                     playingPackId != pack.id -> R.string.sample_button
@@ -441,6 +466,10 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 }
                 inUse -> {
                     mainButton.setText(R.string.in_use_badge)
+                    mainButton.isEnabled = false
+                }
+                langUse != null -> {
+                    mainButton.text = getString(R.string.in_use_for_format, langUse)
                     mainButton.isEnabled = false
                 }
                 installed -> {
@@ -525,9 +554,19 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 },
             )
+            val langUse = langAssignment(pack)
             if (pack.id == activeId) {
                 row.addView(
                     TextView(this).apply { setText(R.string.storage_in_use) },
+                )
+            } else if (langUse != null) {
+                row.addView(
+                    TextView(this).apply {
+                        text = getString(
+                            R.string.storage_in_use_for_format,
+                            ReaderService.langName(langUse),
+                        )
+                    },
                 )
             } else {
                 row.addView(
@@ -544,7 +583,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 storageNote.setText(R.string.storage_empty)
                 storageNote.visibility = View.VISIBLE
             }
-            installed.size == 1 && installed[0].id == activeId -> {
+            installed.none { it.id != activeId && langAssignment(it) == null } -> {
                 storageNote.setText(R.string.storage_only_active)
                 storageNote.visibility = View.VISIBLE
             }
@@ -690,14 +729,38 @@ class VoicesActivity : Activity(), InstallTask.Listener {
     // Switch + delete
     // ------------------------------------------------------------------
 
+    /**
+     * Language bucket this pack is assigned to (`"fa"`/`"ar"`), or null when it
+     * is the main voice or not assigned. Main takes precedence.
+     */
+    private fun langAssignment(pack: VoicePack): String? {
+        if (pack.id == ReaderService.activePackId(this)) return null
+        val bucket = ReaderService.bucketForPack(pack) ?: return null
+        return if (ReaderService.packIdForLang(this, bucket) == pack.id) bucket else null
+    }
+
     private fun usePack(pack: VoicePack) {
-        prefs.edit().putString(ReaderService.KEY_ACTIVE_PACK, pack.id).apply()
-        ReaderService.preload(this)
-        Toast.makeText(
-            this,
-            getString(R.string.use_voice_toast_format, pack.displayName),
-            Toast.LENGTH_LONG,
-        ).show()
+        val bucket = ReaderService.bucketForPack(pack)
+        if (bucket != null) {
+            ReaderService.setPackIdForLang(this, bucket, pack.id)
+            Toast.makeText(
+                this,
+                getString(
+                    R.string.use_lang_voice_toast_format,
+                    ReaderService.langName(bucket),
+                    pack.displayName,
+                ),
+                Toast.LENGTH_LONG,
+            ).show()
+        } else {
+            prefs.edit().putString(ReaderService.KEY_ACTIVE_PACK, pack.id).apply()
+            ReaderService.preload(this)
+            Toast.makeText(
+                this,
+                getString(R.string.use_voice_toast_format, pack.displayName),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
         refresh()
     }
 

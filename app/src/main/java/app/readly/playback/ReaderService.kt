@@ -29,9 +29,11 @@ import android.widget.Toast
 import app.readly.MainActivity
 import app.readly.input.ArticleFetcher
 import app.readly.model.VoiceCatalog
+import app.readly.model.VoiceFamily
 import app.readly.model.VoiceModelStore
 import app.readly.model.VoicePack
 import app.readly.text.Chunk
+import app.readly.text.LanguageDetector
 import app.readly.text.SentenceChunker
 import app.readly.text.SourceFormat
 import app.readly.text.TextSanitizer
@@ -89,6 +91,44 @@ class ReaderService : Service() {
 
         /** Per-pack speaker key. */
         fun speakerKey(packId: String): String = "speakerId.$packId"
+
+        /** Per-language voice key (`activePackId.fa`, `activePackId.ar`). */
+        fun langPackKey(lang: String): String = "$KEY_ACTIVE_PACK.$lang"
+
+        /**
+         * Pack id assigned to [lang] (`"fa"`/`"ar"`), or null when unset or
+         * unknown. Old Piper ids migrate to the generated catalog ids.
+         */
+        fun packIdForLang(context: Context, lang: String): String? {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val id = prefs.getString(langPackKey(lang), null) ?: return null
+            val canonical = VoiceCatalog.resolvePackId(id)
+            return if (VoiceCatalog.byId(canonical) != null) canonical else null
+        }
+
+        fun setPackIdForLang(context: Context, lang: String, packId: String) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(langPackKey(lang), packId).apply()
+        }
+
+        /** `"fa"` → `"Persian"`, `"ar"` → `"Arabic"`. */
+        fun langName(lang: String): String = when (lang) {
+            "fa" -> "Persian"
+            "ar" -> "Arabic"
+            else -> lang
+        }
+
+        /**
+         * Language bucket for [pack]: `"fa"` for Persian Piper packs (lang `fa`,
+         * `fa_IR`, `fa_en`), `"ar"` for Arabic ones, null for everything else
+         * (those are main-voice packs).
+         */
+        fun bucketForPack(pack: VoicePack): String? = when {
+            pack.family != VoiceFamily.PIPER || pack.lang == null -> null
+            pack.lang.startsWith("fa") -> "fa"
+            pack.lang.startsWith("ar") -> "ar"
+            else -> null
+        }
 
         /**
          * The active voice pack id. When unset: an existing Kokoro install keeps
@@ -165,15 +205,15 @@ class ReaderService : Service() {
         }
 
         /**
-         * True once the engine is loaded. Checked by [preload] so reopening the app
+         * True once any engine is loaded. Checked by [preload] so reopening the app
          * doesn't restart the service (and flash a notification) for nothing.
          */
         @Volatile
         var engineLoaded = false
 
-        /** Pack id of the loaded engine, or null when no engine is loaded. */
+        /** Pack ids with a loaded engine (at most [MAX_ENGINES], LRU). */
         @Volatile
-        var enginePackId: String? = null
+        var loadedPackIds: Set<String> = emptySet()
 
         /** Fetches [url] in the service, then reads the extracted article aloud. */
         fun readUrl(context: Context, url: String, titleHint: String?) {
@@ -187,7 +227,7 @@ class ReaderService : Service() {
 
         /** Loads the voice in the background so the next READ starts instantly. */
         fun preload(context: Context) {
-            if (engineLoaded && enginePackId == activePackId(context)) return
+            if (activePackId(context) in loadedPackIds) return
             context.startForegroundService(
                 Intent(context, ReaderService::class.java).setAction(ACTION_PRELOAD),
             )
@@ -198,6 +238,9 @@ class ReaderService : Service() {
 
         /** Idle grace after FINISHED / STOP before the service and engine shut down. */
         private const val IDLE_TIMEOUT_MS = 10L * 60 * 1000
+
+        /** Loaded engines kept: English↔Persian alternation stays cached. */
+        private const val MAX_ENGINES = 2
     }
 
     private lateinit var mainHandler: Handler
@@ -208,17 +251,20 @@ class ReaderService : Service() {
     private lateinit var audioManager: AudioManager
     private lateinit var mediaSession: MediaSession
 
-    /**
-     * The engine. Constructed, used and closed on `readly-tts` only; the volatile read
-     * from other threads is just the loaded check (construction is guarded on the
-     * thread, so a racing second load is impossible).
-     */
-    @Volatile
-    private var engine: SpeechEngine? = null
+    private data class EngineSlot(val engine: SpeechEngine, val rate: Int)
 
-    /** Sample rate of [engine]; written on `readly-tts` at load, read anywhere. */
+    /**
+     * Loaded engines by pack id, LRU (access order), at most [MAX_ENGINES].
+     * Touched on `readly-tts` ONLY; other threads use the [loadedPackIds] and
+     * [rateByPack] snapshots. A Piper engine holds about 70–120 MB of model
+     * weights, so the 2-engine cap matters: alternating documents stay cached
+     * without ballooning memory.
+     */
+    private val engines = LinkedHashMap<String, EngineSlot>(4, 0.75f, true)
+
+    /** Sample rate by loaded pack id; written on `readly-tts`, read anywhere. */
     @Volatile
-    private var engineRate = 0
+    private var rateByPack: Map<String, Int> = emptyMap()
 
     private val pipelineLock = Object()
 
@@ -235,6 +281,7 @@ class ReaderService : Service() {
 
     private var currentChunks: List<Chunk> = emptyList()
     private var currentTitle: String = ""
+    private var currentPackId: String = ""
 
     private val trackLock = Object()
     private var audioTrack: AudioTrack? = null
@@ -368,14 +415,15 @@ class ReaderService : Service() {
         try {
             runOnTtsThreadAndWait(
                 {
-                    try {
-                        engine?.close()
-                    } catch (e: Exception) {
-                        Log.w("Readly", "Closing the voice failed", e)
+                    for ((id, slot) in engines) {
+                        try {
+                            slot.engine.close()
+                        } catch (e: Exception) {
+                            Log.w("Readly", "Closing the $id voice failed", e)
+                        }
                     }
-                    engine = null
-                    engineLoaded = false
-                    enginePackId = null
+                    engines.clear()
+                    publishEngineSnapshot()
                 },
                 timeoutMs = 10_000,
             )
@@ -502,7 +550,10 @@ class ReaderService : Service() {
         stopPipeline()
         ReaderState.update { it.copy(notice = null) }
         val clean = TextSanitizer.sanitize(text, format)
-        val chunks = SentenceChunker.chunk(clean)
+        val lang = LanguageDetector.dominant(clean)
+        val langPack = installedLangPack(lang)
+        val docPack = langPack ?: activePack(this)
+        val chunks = SentenceChunker.chunk(clean, lang)
         if (chunks.isEmpty()) {
             val message =
                 "Nothing to read: the text was empty after removing formatting, " +
@@ -527,12 +578,35 @@ class ReaderService : Service() {
             goIdle()
             return
         }
-        startPipeline(chunks, title, 0, onRequestDone)
-        if (notice != null) {
-            ReaderState.update { it.copy(notice = notice) }
+        startPipeline(chunks, title, 0, docPack, onRequestDone)
+        // A fa/ar text with no voice picked for it is still read with the main
+        // voice, but never silently: the notice says where to pick one.
+        val langNotice = if ((lang == "fa" || lang == "ar") && langPack == null) {
+            val name = langName(lang)
+            Log.w("Readly", "Text looks $name but no $name voice is selected; using the main voice")
+            "This text looks $name, but no $name voice is selected. " +
+                "Open Change voice pack → Piper → Language: $name to pick one."
+        } else {
+            null
+        }
+        val combined = listOfNotNull(notice, langNotice).joinToString(" ").takeIf { it.isNotBlank() }
+        if (combined != null) {
+            ReaderState.update { it.copy(notice = combined) }
             mainHandler.post {
-                Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
+                Toast.makeText(this, combined, Toast.LENGTH_LONG).show()
             }
+        }
+    }
+
+    /** The installed pack assigned to [lang] (`"fa"`/`"ar"`), or null. */
+    private fun installedLangPack(lang: String): VoicePack? {
+        if (lang != "fa" && lang != "ar") return null
+        val id = packIdForLang(this, lang) ?: return null
+        val pack = VoiceCatalog.byId(id) ?: return null
+        return if (VoiceModelStore(pack, voicesDir(), VoiceModelStore::httpUrlOpener).isInstalled()) {
+            pack
+        } else {
+            null
         }
     }
 
@@ -544,9 +618,10 @@ class ReaderService : Service() {
     private fun preloadEngine() {
         try {
             if (destroyed) return
-            if (engine != null && enginePackId == activePackId(this)) return
+            val mainId = activePackId(this)
+            if (mainId in loadedPackIds) return
             try {
-                ensureEngineOrThrow()
+                ensureEngineOrThrow(mainId)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 return
@@ -559,7 +634,8 @@ class ReaderService : Service() {
             // slower than later ones, so run a throwaway synth now (discarded). Never
             // on the READ path, where it would add latency before the real first
             // chunk. A request landing mid-warm-up aborts it via the 0/1 callback.
-            val eng = engine ?: return
+            // This runs on `readly-tts`, so `engines` is touched directly.
+            val eng = engines[mainId]?.engine ?: return
             val pack = activePack(this)
             val warmSpeaker = speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
             try {
@@ -622,12 +698,15 @@ class ReaderService : Service() {
     private fun moveBy(delta: Int) {
         readerExecutor.execute {
             try {
-                val chunks = synchronized(pipelineLock) { currentChunks }
+                val (chunks, title, packId) = synchronized(pipelineLock) {
+                    Triple(currentChunks, currentTitle, currentPackId)
+                }
                 if (chunks.isEmpty()) return@execute
-                val title = synchronized(pipelineLock) { currentTitle }
+                // Same document, so the same voice (no re-detection).
+                val pack = VoiceCatalog.byId(packId) ?: activePack(this)
                 val target = (ReaderState.snapshot.index + delta).coerceIn(0, chunks.size - 1)
                 stopPipeline()
-                startPipeline(chunks, title, target)
+                startPipeline(chunks, title, target, pack)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
             } catch (e: Exception) {
@@ -645,6 +724,7 @@ class ReaderService : Service() {
                 synchronized(pipelineLock) {
                     currentChunks = emptyList()
                     currentTitle = ""
+                    currentPackId = ""
                 }
                 setNoisyRegistered(false)
                 ReaderState.update {
@@ -673,56 +753,63 @@ class ReaderService : Service() {
     // ------------------------------------------------------------------
 
     /**
-     * Returns the loaded engine, loading it on `readly-tts` first. When the active
-     * pack differs from the loaded one, the old engine is closed on `readly-tts`
-     * and the new one loads on this READ/PRELOAD. Throws on load failure (callers
-     * report via [postError] after settling their request); inline when already on
+     * Returns the loaded engine for [packId], loading it on `readly-tts` first.
+     * Up to [MAX_ENGINES] stay loaded (LRU), so English↔Persian alternation
+     * doesn't reload each time. Throws on load failure (callers report via
+     * [postError] after settling their request); inline when already on
      * `readly-tts`, otherwise waits FIFO behind any queued preload. Must not be
      * called on the main thread (it blocks).
      */
-    private fun ensureEngineOrThrow(): SpeechEngine {
-        engine?.let { if (enginePackId == activePackId(this)) return it }
-        // A fetch shows FETCHING until the engine load actually starts; only then
-        // does the status become LOADING_VOICE.
-        ReaderState.update { it.copy(status = ReaderStatus.LOADING_VOICE, errorMessage = null) }
-        updateNotification()
-        return runOnTtsThreadAndWait({
-            // Re-read inside: the setting may have changed while this was queued.
-            val current = activePackId(this)
-            if (engine != null && enginePackId != current) {
-                try {
-                    engine?.close()
-                } catch (e: Exception) {
-                    Log.w("Readly", "Closing the old voice failed", e)
-                }
-                engine = null
-                engineLoaded = false
-                enginePackId = null
+    private fun ensureEngineOrThrow(packId: String): SpeechEngine {
+        if (packId !in loadedPackIds) {
+            // A fetch shows FETCHING until the engine load actually starts; only
+            // then does the status become LOADING_VOICE.
+            ReaderState.update { it.copy(status = ReaderStatus.LOADING_VOICE, errorMessage = null) }
+            updateNotification()
+        }
+        return runOnTtsThreadAndWait({ engineFor(packId) })!!
+    }
+
+    /** Loads or returns the engine for [packId], evicting the LRU idle engine past the cap. Must run on `readly-tts`. */
+    private fun engineFor(packId: String): SpeechEngine {
+        engines[packId]?.let { return it.engine }
+        val pack = VoiceCatalog.byId(packId) ?: throw IllegalStateException("Unknown voice pack $packId")
+        val engine = SpeechEngine(VoiceModelStore(pack, voicesDir(), VoiceModelStore::httpUrlOpener))
+        engines[packId] = EngineSlot(engine, engine.sampleRate)
+        while (engines.size > MAX_ENGINES) {
+            val eldest = engines.entries.iterator().next()
+            engines.remove(eldest.key)
+            try {
+                eldest.value.engine.close()
+            } catch (e: Exception) {
+                Log.w("Readly", "Closing the idle ${eldest.key} voice failed", e)
             }
-            if (engine == null) {
-                val pack = VoiceCatalog.byId(current)!!
-                engine = SpeechEngine(
-                    VoiceModelStore(pack, voicesDir(), VoiceModelStore::httpUrlOpener),
-                )
-                enginePackId = current
-                engineRate = engine!!.sampleRate
-                engineLoaded = true
-            }
-            engine!!
-        })!!
+            Log.i("Readly", "Closed the idle ${eldest.key} voice (keeping at most $MAX_ENGINES loaded)")
+        }
+        publishEngineSnapshot()
+        return engine
+    }
+
+    /** Refreshes the cross-thread engine snapshots. Must run on `readly-tts`. */
+    private fun publishEngineSnapshot() {
+        loadedPackIds = engines.keys.toSet()
+        rateByPack = engines.mapValues { it.value.rate }
+        engineLoaded = engines.isNotEmpty()
     }
 
     private fun voicesDir(): File = File(noBackupFilesDir, "voices")
 
     /**
-     * Starts playback. [onRequestDone] settles the originating READ/READ_URL request
-     * (null for NEXT/PREVIOUS restarts, which own no request): it runs exactly once,
-     * before any error report and right after the pipeline starts.
+     * Starts playback with [docPack]'s voice. [onRequestDone] settles the
+     * originating READ/READ_URL request (null for NEXT/PREVIOUS restarts, which
+     * own no request): it runs exactly once, before any error report and right
+     * after the pipeline starts.
      */
     private fun startPipeline(
         chunks: List<Chunk>,
         title: String,
         startIndex: Int,
+        docPack: VoicePack,
         onRequestDone: (() -> Unit)? = null,
     ) {
         if (destroyed || Thread.currentThread().isInterrupted) {
@@ -730,8 +817,8 @@ class ReaderService : Service() {
             return
         }
         val rate = try {
-            ensureEngineOrThrow()
-            engineRate
+            ensureEngineOrThrow(docPack.id)
+            checkNotNull(rateByPack[docPack.id]) { "Voice ${docPack.id} unloaded mid-read" }
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             onRequestDone?.invoke()
@@ -756,7 +843,7 @@ class ReaderService : Service() {
             chunks = chunks,
             startIndex = startIndex,
             sampleRate = rate,
-            synth = { index, isStopped -> synthChunk(chunks[index].text, isStopped) },
+            synth = { index, isStopped -> synthChunk(chunks[index].text, isStopped, docPack) },
             sink = TrackSink(track),
             onChunkStarted = { index ->
                 // A stopped generation never calls back; this guard is belt and braces
@@ -807,6 +894,7 @@ class ReaderService : Service() {
             pipeline = mine
             currentChunks = chunks
             currentTitle = title
+            currentPackId = docPack.id
         }
         ReaderState.update {
             it.copy(
@@ -835,20 +923,24 @@ class ReaderService : Service() {
     }
 
     /**
-     * Synthesizes one chunk, reading voice and speed from settings every time so
-     * changes apply from the next sentence. Runs on the producer thread; the engine
-     * call itself runs on `readly-tts`.
+     * Synthesizes one chunk with [pack]'s voice, reading speaker and speed from
+     * settings every time so changes apply from the next sentence. Runs on the
+     * producer thread; the engine call itself runs on `readly-tts`.
      */
-    private fun synthChunk(text: String, isStopped: () -> Boolean): FloatArray {
-        val pack = activePack(this)
+    private fun synthChunk(text: String, isStopped: () -> Boolean, pack: VoicePack): FloatArray {
         val speakerId = speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
         val speed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
         val begin = SystemClock.elapsedRealtime()
-        val audio = runOnTtsThreadAndWait({ engine!!.synthesize(text, speakerId, speed, isStopped) })
-            ?: return FloatArray(0)
+        // engineFor (not a cached engine): a third pack's load may have evicted
+        // this one since the pipeline started; reloading is then silent and the
+        // status stays READING.
+        val audio = runOnTtsThreadAndWait({
+            engineFor(pack.id).synthesize(text, speakerId, speed, isStopped)
+        }) ?: return FloatArray(0)
         val synthMs = SystemClock.elapsedRealtime() - begin
-        val audioMs = if (engineRate > 0) audio.size * 1000.0 / engineRate else 0.0
+        val rate = rateByPack[pack.id] ?: 0
+        val audioMs = if (rate > 0) audio.size * 1000.0 / rate else 0.0
         val rtf = if (audioMs > 0) synthMs / audioMs else 0.0
         ReaderState.update { it.copy(lastRtf = rtf) }
         return audio

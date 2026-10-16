@@ -33,6 +33,7 @@
     <string name="speed_slow_format">This phone makes speech slower than it plays (%1$s×), so you may hear short gaps between sentences.</string>
     <string name="voice_section">Voice</string>
     <string name="voice_pack_format">Voice pack: %1$s</string>
+    <string name="persian_pack_format">Persian: %1$s</string>
     <string name="voice_help">Who reads to you. Changes apply from the next sentence.</string>
     <string name="speed_section">Speed</string>
     <string name="speed_label_format">Speed: %1$s×</string>
@@ -67,6 +68,9 @@
     <string name="storage_empty">No voices downloaded yet.</string>
     <string name="use_now_format">Use %1$s now?</string>
     <string name="use_voice_toast_format">Readly will read with %1$s from the next thing you share.</string>
+    <string name="use_lang_voice_toast_format">Readly will read %1$s with %2$s.</string>
+    <string name="in_use_for_format">In use for %1$s</string>
+    <string name="storage_in_use_for_format">in use for %1$s</string>
     <string name="delete_button">Delete</string>
     <string name="delete_pack_confirm_format">Delete %1$s? This frees %2$d MB. You can download it again later.</string>
     <string name="delete_error_format">Couldn\'t delete %1$s: %2$s: %3$s</string>

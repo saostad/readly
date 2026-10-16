@@ -83,6 +83,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var nextButton: Button
     private lateinit var stopButton: Button
     private lateinit var voicePackLabel: TextView
+    private lateinit var persianPackLabel: TextView
     private lateinit var changePackButton: Button
     private lateinit var voiceSpinner: Spinner
     private lateinit var singleVoiceNote: TextView
@@ -136,6 +137,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         nextButton = findViewById(R.id.nextButton)
         stopButton = findViewById(R.id.stopButton)
         voicePackLabel = findViewById(R.id.voicePackLabel)
+        persianPackLabel = findViewById(R.id.persianPackLabel)
         changePackButton = findViewById(R.id.changePackButton)
         voiceSpinner = findViewById(R.id.voiceSpinner)
         singleVoiceNote = findViewById(R.id.singleVoiceNote)
@@ -176,6 +178,7 @@ class MainActivity : Activity(), InstallTask.Listener {
             startActivity(Intent(this, VoicesActivity::class.java))
         }
         setupVoiceSpinner()
+        updatePersianLine()
         setupSpeedSeek()
 
         if (store.isInstalled()) {
@@ -229,6 +232,7 @@ class MainActivity : Activity(), InstallTask.Listener {
             refreshVoiceSection()
         }
         repaintSetupSampleButton()
+        updatePersianLine()
         syncSetupState()
         // Warm the engine while the user pastes so the first READ starts instantly.
         if (store.isInstalled() && ReaderState.snapshot.status == ReaderStatus.IDLE) {
@@ -313,7 +317,19 @@ class MainActivity : Activity(), InstallTask.Listener {
 
     private fun refreshVoiceSection() {
         voicePackLabel.text = getString(R.string.voice_pack_format, VoiceCatalog.shortName(store.pack))
+        updatePersianLine()
         setupVoiceSpinner()
+    }
+
+    /** `"Persian: <shortName>"` under the main voice line, when a Persian voice is set. */
+    private fun updatePersianLine() {
+        val fa = ReaderService.packIdForLang(this, "fa")?.let { VoiceCatalog.byId(it) }
+        if (fa != null) {
+            persianPackLabel.text = getString(R.string.persian_pack_format, VoiceCatalog.shortName(fa))
+            persianPackLabel.visibility = View.VISIBLE
+        } else {
+            persianPackLabel.visibility = View.GONE
+        }
     }
 
     private fun setupVoiceSpinner() {

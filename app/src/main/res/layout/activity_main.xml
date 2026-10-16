@@ -317,6 +317,12 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp" />
 
+            <TextView
+                android:id="@+id/persianPackLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone" />
+
             <Button
                 android:id="@+id/changePackButton"
                 android:layout_width="match_parent"
