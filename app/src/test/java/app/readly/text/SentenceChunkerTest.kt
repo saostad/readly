@@ -35,15 +35,54 @@ class SentenceChunkerTest {
     }
 
     @Test
-    fun chunk_firstChunk_isCutTo160Chars() {
+    fun chunk_firstChunk_isCutTo60Chars() {
         val first = ("word ".repeat(40).trim() + ".")
         assertEquals(200, first.length)
-        val chunks = SentenceChunker.chunk("$first Second sentence here.")
+        val input = "$first Second sentence here."
+        val chunks = SentenceChunker.chunk(input)
         assertEquals(3, chunks.size)
-        assertTrue(chunks[0].text.length <= 160)
+        assertTrue(chunks[0].text.length <= 60)
         assertTrue(chunks[0].text.endsWith("word"))
         assertEquals(first, chunks[0].text + " " + chunks[1].text)
         assertEquals("Second sentence here.", chunks[2].text)
+        for (chunk in chunks) {
+            assertEquals(chunk.text, input.substring(chunk.start, chunk.end).trim())
+        }
+    }
+
+    @Test
+    fun chunk_firstSentenceAt80Chars_staysWhole() {
+        val eighty = "a".repeat(79) + "."
+        assertEquals(80, eighty.length)
+        assertEquals(listOf(eighty), SentenceChunker.chunk(eighty).map { it.text })
+        val eightyOne = "a".repeat(80) + "."
+        assertEquals(2, SentenceChunker.chunk(eightyOne).size)
+    }
+
+    @Test
+    fun chunk_firstChunk_cutsAfterCommaInWindow() {
+        val first = "a".repeat(45) + ", " + "b".repeat(92) + "."
+        assertEquals(140, first.length)
+        val chunks = SentenceChunker.chunk(first)
+        assertEquals(2, chunks.size)
+        assertEquals("a".repeat(45) + ",", chunks[0].text)
+        assertEquals(first, chunks[0].text + " " + chunks[1].text)
+        for (chunk in chunks) {
+            assertEquals(chunk.text, first.substring(chunk.start, chunk.end).trim())
+        }
+    }
+
+    @Test
+    fun chunk_firstChunkWithoutSpace_hardCutsAt60() {
+        val first = "X" + "x".repeat(138) + "."
+        assertEquals(140, first.length)
+        val chunks = SentenceChunker.chunk(first)
+        assertEquals(2, chunks.size)
+        assertEquals(60, chunks[0].text.length)
+        assertEquals(first, chunks[0].text + chunks[1].text)
+        for (chunk in chunks) {
+            assertEquals(chunk.text, first.substring(chunk.start, chunk.end).trim())
+        }
     }
 
     @Test

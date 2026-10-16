@@ -14,7 +14,13 @@ data class Chunk(val text: String, val start: Int, val end: Int)
  */
 object SentenceChunker {
 
-    private const val FIRST_MAX = 160
+    /** First sentence this long or shorter is spoken whole, so audio starts fast. */
+    private const val FIRST_WHOLE_MAX = 80
+    /** Over-long first sentence: cut after the last `, ; : —` in this offset window. */
+    private const val FIRST_PUNCT_MIN = 25
+    private const val FIRST_PUNCT_MAX = 80
+    /** …else at the last space before this offset, else a hard cut here (~2 s of audio). */
+    private const val FIRST_FALLBACK_MAX = 60
     private const val MERGE_UNDER = 40
     private const val MERGE_MAX = 250
     private const val SPLIT_OVER = 300
@@ -34,7 +40,7 @@ object SentenceChunker {
             if (isFirst) {
                 isFirst = false
                 val (firstStart, firstEnd) = sentences[0]
-                if (firstEnd - firstStart > FIRST_MAX) {
+                if (firstEnd - firstStart > FIRST_WHOLE_MAX) {
                     val (head, rest) = cutFirst(input, firstStart, firstEnd)
                     out.add(Chunk(input.substring(head.first, head.second), head.first, head.second))
                     sentences = listOf(rest) + sentences.drop(1)
@@ -95,14 +101,31 @@ object SentenceChunker {
         titleEnd.containsMatchIn(current) ||
             (abbreviationEnd.containsMatchIn(current) && (nextFirst.isLowerCase() || nextFirst.isDigit()))
 
-    /** Cuts an over-long first sentence at the last space within 160 chars, else hard. */
+    /**
+     * Cuts an over-long first sentence: after the last `, ; : —` at offset 25..80
+     * (the chunk keeps the punctuation), else at the last space before 60, else a
+     * hard cut at 60. The rest becomes the start of chunk 2 under the normal rules.
+     */
     private fun cutFirst(input: String, start: Int, end: Int): Pair<Pair<Int, Int>, Pair<Int, Int>> {
-        val space = input.lastIndexOf(' ', start + FIRST_MAX)
-        if (space <= start) {
-            val cut = start + FIRST_MAX
-            return (start to trimEnd(input, start, cut)) to (trimStart(input, cut, end) to end)
+        val from = start + FIRST_PUNCT_MIN
+        val to = minOf(start + FIRST_PUNCT_MAX, end - 1)
+        var punct = -1
+        var i = from
+        while (i <= to) {
+            if (input[i] in splitPunct) punct = i
+            i++
         }
-        return (start to trimEnd(input, start, space)) to (trimStart(input, space + 1, end) to end)
+        if (punct >= from) {
+            return (start to trimEnd(input, start, punct + 1)) to
+                (trimStart(input, punct + 1, end) to end)
+        }
+        val space = input.lastIndexOf(' ', start + FIRST_FALLBACK_MAX - 1)
+        if (space > start) {
+            return (start to trimEnd(input, start, space)) to
+                (trimStart(input, space + 1, end) to end)
+        }
+        val cut = start + FIRST_FALLBACK_MAX
+        return (start to trimEnd(input, start, cut)) to (trimStart(input, cut, end) to end)
     }
 
     /** Splits a sentence over 300 chars at `, ; : —`, else the last space, else hard. */
