@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Readly</string>
+
+    <string name="setup_title">One-time voice download</string>
+    <string name="setup_body">Readly reads aloud with Kokoro, a natural-sounding voice that runs entirely on your phone. It needs a one-time 103 MB download. After that, reading works offline and nothing you read leaves your device.</string>
+    <string name="download_button">Download voice (103 MB)</string>
+    <string name="download_help">Starts the one-time download. Afterwards reading works offline.</string>
+    <string name="progress_desc">Voice download progress</string>
+    <string name="downloading_format">Downloading… %1$d of 103 MB</string>
+    <string name="verifying_label">Checking the download…</string>
+    <string name="unpacking_label">Unpacking the voice…</string>
+    <string name="cancel_button">Cancel</string>
+    <string name="cancel_help">Stops the download. Nothing is installed until it finishes.</string>
+    <string name="try_again">Try again</string>
+    <string name="retry_help">Tries the voice download again.</string>
+    <string name="error_format">Voice download failed: %1$s: %2$s</string>
+    <string name="ready_title">Voice ready</string>
+    <string name="ready_hint">To read something, open any app, tap Share, and choose Readly. Round 2 adds the reader.</string>
 </resources>
