@@ -41,21 +41,28 @@ interface DownloadConnection : Closeable {
  * @param urlOpener opens [ARCHIVE_URL]; production passes [httpUrlOpener].
  * @param expectedSha256 expected SHA-256 of the archive; a parameter so tests can inject
  *   fixture hashes (production uses [ARCHIVE_SHA256]).
+ * @param onInfo receives messages that production logs with `Log.i("Readly", …)`; injected
+ *   so JVM tests don't touch `android.util.Log`.
  */
 class VoiceModelStore(
     private val baseDir: File,
     private val urlOpener: (String) -> DownloadConnection,
     private val expectedSha256: String = ARCHIVE_SHA256,
+    private val onInfo: (String) -> Unit = { android.util.Log.i("Readly", it) },
 ) {
     companion object {
-        const val MODEL_NAME = "kokoro-int8-en-v0_19"
+        const val MODEL_NAME = "kokoro-en-v0_19"
         const val ARCHIVE_URL =
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/" +
-            "kokoro-int8-en-v0_19.tar.bz2"
-        const val ARCHIVE_SIZE_BYTES = 103248205L
+            "kokoro-en-v0_19.tar.bz2"
+        const val ARCHIVE_SIZE_BYTES = 319625534L
         const val ARCHIVE_SHA256 =
-            "c9f0dd393615805b0bab050c340834d5e684e732aec91c0e860cd30e982c08bd"
-        const val REQUIRED_FREE_BYTES = 400L * 1024 * 1024
+            "912804855a04745fa77a30be545b3f9a5d15c4d66db00b88cbcd4921df605ac7"
+        const val REQUIRED_FREE_BYTES = 800L * 1024 * 1024
+        /** Previous int8 voice dir, removed after a successful install of the fp32 voice. */
+        const val LEGACY_MODEL_NAME = "kokoro-int8-en-v0_19"
+        /** [ARCHIVE_SIZE_BYTES] in decimal MB, rounded; the progress label shows this total. */
+        val ARCHIVE_SIZE_MB: Int = ((ARCHIVE_SIZE_BYTES + 500_000) / 1_000_000).toInt()
 
         private const val PART_NAME = "download.part"
         private const val COMPLETE_MARKER = ".complete"
@@ -66,15 +73,18 @@ class VoiceModelStore(
         fun httpUrlOpener(url: String): DownloadConnection = HttpDownloadConnection(url)
     }
 
-    /** Installed model dir (`<base>/kokoro-int8-en-v0_19`); valid once [isInstalled]. */
+    /** Installed model dir (`<base>/kokoro-en-v0_19`); valid once [isInstalled]. */
     val modelDir: File
         get() = File(baseDir, MODEL_NAME)
+
+    /** True if the previous int8 voice dir is still present (pending migration). */
+    fun hasLegacyModel(): Boolean = File(baseDir, LEGACY_MODEL_NAME).exists()
 
     /** True only if the model dir holds the marker, the three files and the data dir. */
     fun isInstalled(): Boolean {
         val dir = File(baseDir, MODEL_NAME)
         return File(dir, COMPLETE_MARKER).isFile &&
-            File(dir, "model.int8.onnx").isFile &&
+            File(dir, "model.onnx").isFile &&
             File(dir, "voices.bin").isFile &&
             File(dir, "tokens.txt").isFile &&
             File(dir, "espeak-ng-data").isDirectory
@@ -93,7 +103,7 @@ class VoiceModelStore(
         val usable = baseDir.usableSpace
         if (usable < REQUIRED_FREE_BYTES) {
             throw IOException(
-                "Not enough free space: need 400 MB, have ${usable / 1024 / 1024} MB",
+                "Not enough free space: need 800 MB, have ${usable / 1024 / 1024} MB",
             )
         }
         if (cancelled()) throw CancellationException("Voice download cancelled")
@@ -114,6 +124,7 @@ class VoiceModelStore(
             if (!isInstalled()) {
                 throw IOException("Voice install failed: archive is missing model files")
             }
+            deleteLegacyModel()
         } finally {
             partFile.delete()
             tmpDir.deleteRecursively()
@@ -169,8 +180,17 @@ class VoiceModelStore(
         }
     }
 
+    /** Removes the previous int8 voice after a successful install, if still present. */
+    private fun deleteLegacyModel() {
+        val legacy = File(baseDir, LEGACY_MODEL_NAME)
+        if (legacy.exists()) {
+            legacy.deleteRecursively()
+            onInfo("Removed old voice model $LEGACY_MODEL_NAME")
+        }
+    }
+
     /**
-     * Extracts the archive into [tmpDir], stripping the `kokoro-int8-en-v0_19/` top dir so the
+     * Extracts the archive into [tmpDir], stripping the `kokoro-en-v0_19/` top dir so the
      * model files land directly in [tmpDir] (which is then renamed to the final dir).
      */
     private fun unpack(
@@ -214,7 +234,7 @@ class VoiceModelStore(
         }
     }
 
-    /** Strips the archive's single top dir (`kokoro-int8-en-v0_19/`); other names pass through. */
+    /** Strips the archive's single top dir (`kokoro-en-v0_19/`); other names pass through. */
     private fun stripTopDir(name: String): String {
         val clean = name.removePrefix("./")
         val prefix = "$MODEL_NAME/"

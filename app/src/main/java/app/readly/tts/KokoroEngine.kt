@@ -90,7 +90,7 @@ class KokoroEngine(store: VoiceModelStore) : Closeable {
 
     private fun buildConfig(dir: String): OfflineTtsConfig {
         val kokoro = OfflineTtsKokoroModelConfig(
-            model = "$dir/model.int8.onnx",
+            model = "$dir/model.onnx",
             voices = "$dir/voices.bin",
             tokens = "$dir/tokens.txt",
             dataDir = "$dir/espeak-ng-data",

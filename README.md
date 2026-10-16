@@ -34,6 +34,9 @@ In any app, tap **Share** and choose **Readly**, or select some text and choose
 **Read aloud**. Readly accepts links, plain text, Markdown and HTML, including
 shared `.md`, `.html` and `.txt` files.
 
+On first launch Readly downloads the Kokoro voice (a one-time 320 MB
+download); afterwards everything runs on the phone and reading works offline.
+
 Before anything is spoken, Readly cleans it up: Markdown and HTML formatting,
 links and bare URLs, footnotes, tables (read as comma-separated cells), code
 blocks (replaced with "Code block skipped.") and emoji are removed, so only

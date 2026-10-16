@@ -40,13 +40,13 @@ class VoiceModelStoreTest {
         store.install(progress = { stage, _, _ -> stages.add(stage) }, cancelled = { false })
 
         assertTrue(store.isInstalled())
-        assertTrue(File(base, "kokoro-int8-en-v0_19/model.int8.onnx").isFile)
-        assertTrue(File(base, "kokoro-int8-en-v0_19/voices.bin").isFile)
-        assertTrue(File(base, "kokoro-int8-en-v0_19/tokens.txt").isFile)
-        assertTrue(File(base, "kokoro-int8-en-v0_19/espeak-ng-data").isDirectory)
-        assertTrue(File(base, "kokoro-int8-en-v0_19/.complete").isFile)
+        assertTrue(File(base, "kokoro-en-v0_19/model.onnx").isFile)
+        assertTrue(File(base, "kokoro-en-v0_19/voices.bin").isFile)
+        assertTrue(File(base, "kokoro-en-v0_19/tokens.txt").isFile)
+        assertTrue(File(base, "kokoro-en-v0_19/espeak-ng-data").isDirectory)
+        assertTrue(File(base, "kokoro-en-v0_19/.complete").isFile)
         assertFalse(File(base, "download.part").exists())
-        assertFalse(File(base, "kokoro-int8-en-v0_19.tmp").exists())
+        assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertTrue(stages.contains(InstallStage.DOWNLOADING))
         assertTrue(stages.contains(InstallStage.VERIFYING))
         assertTrue(stages.contains(InstallStage.UNPACKING))
@@ -67,7 +67,7 @@ class VoiceModelStoreTest {
             assertEquals("Voice download is corrupted: expected SHA-256 $wrong, got $actual", e.message)
         }
         assertFalse(File(base, "download.part").exists())
-        assertFalse(File(base, "kokoro-int8-en-v0_19.tmp").exists())
+        assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertFalse(store.isInstalled())
     }
 
@@ -85,7 +85,7 @@ class VoiceModelStoreTest {
         }
         assertFalse(File(temp.root, "evil").exists())
         assertFalse(File(base, "download.part").exists())
-        assertFalse(File(base, "kokoro-int8-en-v0_19.tmp").exists())
+        assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertFalse(store.isInstalled())
     }
 
@@ -106,7 +106,7 @@ class VoiceModelStoreTest {
             assertEquals("Voice download cancelled", e.message)
         }
         assertFalse(File(base, "download.part").exists())
-        assertFalse(File(base, "kokoro-int8-en-v0_19.tmp").exists())
+        assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertFalse(store.isInstalled())
     }
 
@@ -116,7 +116,7 @@ class VoiceModelStoreTest {
         // threshold, small enough to stay under two.
         val padding = ByteArray(300_000)
         java.util.Random(42).nextBytes(padding)
-        val archive = fixtureArchive(modelEntries() + ("kokoro-int8-en-v0_19/padding.bin" to padding))
+        val archive = fixtureArchive(modelEntries() + ("kokoro-en-v0_19/padding.bin" to padding))
         val base = temp.newFolder("voices")
         val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive))
 
@@ -164,8 +164,32 @@ class VoiceModelStoreTest {
             )
         }
         assertFalse(File(base, "download.part").exists())
-        assertFalse(File(base, "kokoro-int8-en-v0_19.tmp").exists())
+        assertFalse(File(base, "kokoro-en-v0_19.tmp").exists())
         assertFalse(store.isInstalled())
+    }
+
+    @Test
+    fun install_success_deletesLegacyModelDir() {
+        val archive = fixtureArchive(modelEntries())
+        val base = temp.newFolder("voices")
+        val legacy = File(base, VoiceModelStore.LEGACY_MODEL_NAME)
+        legacy.mkdirs()
+        File(legacy, "model.int8.onnx").writeText("old voice")
+        val infos = mutableListOf<String>()
+        val store = VoiceModelStore(base, fakeOpener(archive), sha256(archive), infos::add)
+        assertTrue(store.hasLegacyModel())
+
+        store.install(progress = { _, _, _ -> }, cancelled = { false })
+
+        assertTrue(store.isInstalled())
+        assertFalse(legacy.exists())
+        assertFalse(store.hasLegacyModel())
+        assertEquals(1, infos.size)
+    }
+
+    @Test
+    fun archiveSizeMb_matchesDisplayedDownloadTotal() {
+        assertEquals(320, VoiceModelStore.ARCHIVE_SIZE_MB)
     }
 
     private fun fakeOpener(archive: ByteArray): (String) -> DownloadConnection =
@@ -181,10 +205,10 @@ class VoiceModelStoreTest {
     }
 
     private fun modelEntries(): Map<String, ByteArray> = mapOf(
-        "kokoro-int8-en-v0_19/model.int8.onnx" to "fake-model".toByteArray(),
-        "kokoro-int8-en-v0_19/voices.bin" to "fake-voices".toByteArray(),
-        "kokoro-int8-en-v0_19/tokens.txt" to "fake-tokens".toByteArray(),
-        "kokoro-int8-en-v0_19/espeak-ng-data/intonation" to "fake-data".toByteArray(),
+        "kokoro-en-v0_19/model.onnx" to "fake-model".toByteArray(),
+        "kokoro-en-v0_19/voices.bin" to "fake-voices".toByteArray(),
+        "kokoro-en-v0_19/tokens.txt" to "fake-tokens".toByteArray(),
+        "kokoro-en-v0_19/espeak-ng-data/intonation" to "fake-data".toByteArray(),
     )
 
     private fun fixtureArchive(entries: Map<String, ByteArray>): ByteArray {

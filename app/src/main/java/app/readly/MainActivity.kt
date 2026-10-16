@@ -44,6 +44,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var readerContainer: LinearLayout
     private lateinit var title: TextView
     private lateinit var body: TextView
+    private lateinit var migrationNote: TextView
     private lateinit var downloadButton: Button
     private lateinit var downloadHelp: TextView
     private lateinit var progressBar: ProgressBar
@@ -88,6 +89,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         readerContainer = findViewById(R.id.readerContainer)
         title = findViewById(R.id.title)
         body = findViewById(R.id.body)
+        migrationNote = findViewById(R.id.migrationNote)
         downloadButton = findViewById(R.id.downloadButton)
         downloadHelp = findViewById(R.id.downloadHelp)
         progressBar = findViewById(R.id.progressBar)
@@ -391,7 +393,11 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun updateProgress(stage: InstallStage, bytesDone: Long, bytesTotal: Long) {
         progressLabel.text = when (stage) {
             InstallStage.DOWNLOADING ->
-                getString(R.string.downloading_format, bytesDone / 1024 / 1024)
+                getString(
+                    R.string.downloading_format,
+                    bytesDone / 1024 / 1024,
+                    VoiceModelStore.ARCHIVE_SIZE_MB,
+                )
             InstallStage.VERIFYING -> getString(R.string.verifying_label)
             InstallStage.UNPACKING -> getString(R.string.unpacking_label)
         }
@@ -437,6 +443,8 @@ class MainActivity : Activity(), InstallTask.Listener {
         val v = if (visible) View.VISIBLE else View.GONE
         title.visibility = v
         body.visibility = v
+        migrationNote.visibility =
+            if (visible && !store.isInstalled() && store.hasLegacyModel()) View.VISIBLE else View.GONE
         downloadButton.visibility = v
         downloadHelp.visibility = v
     }
