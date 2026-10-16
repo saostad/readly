@@ -21,7 +21,6 @@ import android.media.MediaMetadata
 import android.net.ConnectivityManager
 import android.os.Build
 import android.os.Handler
-import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
@@ -43,28 +42,26 @@ import app.readly.text.LanguageDetector
 import app.readly.text.SentenceChunker
 import app.readly.text.SourceFormat
 import app.readly.text.TextSanitizer
-import app.readly.tts.SpeechEngine
+import app.readly.tts.EngineManager
 import java.io.File
 import java.io.IOException
 import java.net.URI
 import java.util.Locale
-import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Background playback service: owns the [SpeechEngine], runs the [ChunkPipeline] and
- * publishes state to [ReaderState].
+ * Background playback service: synthesizes through the app-level [EngineManager], runs
+ * the [ChunkPipeline] and publishes state to [ReaderState].
  *
- * Threading: the engine lives on the single `readly-tts` thread for the whole service
- * life; pipeline `synth` calls are posted there and waited on. PRELOAD loads the engine
- * by posting directly to `readly-tts`, so it never blocks document handling. Document
- * handling (READ / READ_URL / NEXT / PREVIOUS / STOP) runs on the single `readly-read`
+ * Threading: engines live on the single `readly-tts` thread inside [EngineManager];
+ * pipeline `synth` calls block on it. PRELOAD loads the engine from the dedicated
+ * `readly-preload` thread, so it never blocks document handling. Document handling
+ * (READ / READ_URL / NEXT / PREVIOUS / STOP) runs on the single `readly-read`
  * executor so stop-and-join never blocks the main thread. PAUSE / PLAY / TOGGLE are
  * instant and run on the main thread.
  */
@@ -105,7 +102,7 @@ class ReaderService : Service() {
         const val KEY_AUTO_DOWNLOAD = "autoDownloadVoices"
 
         /** Per-pack RTF EMA key (`rtf.<packId>`, float). */
-        fun rtfKey(packId: String): String = "rtf.$packId"
+        fun rtfKey(packId: String): String = EngineManager.rtfKey(packId)
 
         fun isSmartOn(context: Context): Boolean =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -235,17 +232,6 @@ class ReaderService : Service() {
             )
         }
 
-        /**
-         * True once any engine is loaded. Checked by [preload] so reopening the app
-         * doesn't restart the service (and flash a notification) for nothing.
-         */
-        @Volatile
-        var engineLoaded = false
-
-        /** Pack ids with a loaded engine (at most [MAX_ENGINES], LRU). */
-        @Volatile
-        var loadedPackIds: Set<String> = emptySet()
-
         /** Fetches [url] in the service, then reads the extracted article aloud. */
         fun readUrl(context: Context, url: String, titleHint: String?) {
             context.startForegroundService(
@@ -256,9 +242,14 @@ class ReaderService : Service() {
             )
         }
 
-        /** Loads the voice in the background so the next READ starts instantly. */
+        /**
+         * Loads the voice in the background so the next READ starts instantly. Skips
+         * when the pack is already loaded, so reopening the app doesn't restart the
+         * service (and flash a notification) for nothing.
+         */
         fun preload(context: Context) {
-            if (activePackId(context) in loadedPackIds) return
+            val engines = (context.applicationContext as? ReadlyApp)?.engines
+            if (engines != null && engines.isLoaded(activePackId(context))) return
             context.startForegroundService(
                 Intent(context, ReaderService::class.java).setAction(ACTION_PRELOAD),
             )
@@ -267,35 +258,17 @@ class ReaderService : Service() {
         private const val NOTIF_ID = 1
         private const val CHANNEL_ID = "playback"
 
-        /** Idle grace after FINISHED / STOP before the service and engine shut down. */
+        /** Idle grace after FINISHED / STOP before the service shuts down. */
         private const val IDLE_TIMEOUT_MS = 10L * 60 * 1000
-
-        /** Loaded engines kept: English↔Persian alternation stays cached. */
-        private const val MAX_ENGINES = 2
     }
 
     private lateinit var mainHandler: Handler
-    private lateinit var ttsThread: HandlerThread
-    private lateinit var ttsHandler: Handler
     private lateinit var readerExecutor: ExecutorService
+    private lateinit var preloadExecutor: ExecutorService
+    private val engines: EngineManager by lazy { (application as ReadlyApp).engines }
     private lateinit var notificationManager: NotificationManager
     private lateinit var audioManager: AudioManager
     private lateinit var mediaSession: MediaSession
-
-    private data class EngineSlot(val engine: SpeechEngine, val rate: Int)
-
-    /**
-     * Loaded engines by pack id, LRU (access order), at most [MAX_ENGINES].
-     * Touched on `readly-tts` ONLY; other threads use the [loadedPackIds] and
-     * [rateByPack] snapshots. A Piper engine holds about 70–120 MB of model
-     * weights, so the 2-engine cap matters: alternating documents stay cached
-     * without ballooning memory.
-     */
-    private val engines = LinkedHashMap<String, EngineSlot>(4, 0.75f, true)
-
-    /** Sample rate by loaded pack id; written on `readly-tts`, read anywhere. */
-    @Volatile
-    private var rateByPack: Map<String, Int> = emptyMap()
 
     private val pipelineLock = Object()
 
@@ -388,9 +361,8 @@ class ReaderService : Service() {
     override fun onCreate() {
         super.onCreate()
         mainHandler = Handler(Looper.getMainLooper())
-        ttsThread = HandlerThread("readly-tts").also { it.start() }
-        ttsHandler = Handler(ttsThread.looper)
         readerExecutor = Executors.newSingleThreadExecutor { Thread(it, "readly-read") }
+        preloadExecutor = Executors.newSingleThreadExecutor { Thread(it, "readly-preload") }
         notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Reading aloud", NotificationManager.IMPORTANCE_LOW),
@@ -432,10 +404,10 @@ class ReaderService : Service() {
                     intent.getStringExtra(EXTRA_TITLE_HINT),
                 )
             }
-            // Straight to readly-tts: posting through readerExecutor would block the
-            // page fetch behind the whole model load. A READ's ensureEngineOrThrow() then
-            // waits behind this on the same FIFO queue.
-            ACTION_PRELOAD -> ttsHandler.post(::preloadEngine)
+            // On its own thread: going through readerExecutor would block the page
+            // fetch behind the whole model load. A READ's ensureEngineOrThrow() then
+            // waits behind this on the EngineManager's FIFO queue.
+            ACTION_PRELOAD -> preloadExecutor.execute(::preloadEngine)
             ACTION_TOGGLE -> toggleReading()
             ACTION_PAUSE -> pauseReading()
             ACTION_PLAY -> resumeReading()
@@ -454,35 +426,12 @@ class ReaderService : Service() {
         destroyed = true
         mainHandler.removeCallbacks(idleShutdown)
         readerExecutor.shutdownNow()
+        preloadExecutor.shutdownNow()
         // Join playback first: the producer may be inside a synth call on readly-tts,
-        // and the engine must not close under it.
+        // and the engine must not close under it. The readly-tts thread itself is
+        // app-owned and stays alive for the system TTS service.
         stopPipeline()
-        try {
-            runOnTtsThreadAndWait(
-                {
-                    for ((id, slot) in engines) {
-                        try {
-                            slot.engine.close()
-                        } catch (e: Exception) {
-                            Log.w("Readly", "Closing the $id voice failed", e)
-                        }
-                    }
-                    engines.clear()
-                    publishEngineSnapshot()
-                },
-                timeoutMs = 10_000,
-            )
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-        } catch (e: Exception) {
-            Log.w("Readly", "Engine shutdown was interrupted", e)
-        }
-        ttsThread.quitSafely()
-        try {
-            ttsThread.join(5000)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-        }
+        engines.closeAll()
         synchronized(trackLock) {
             try {
                 audioTrack?.release()
@@ -916,15 +865,6 @@ class ReaderService : Service() {
         }.toMap()
     }
 
-    /** Updates the per-pack RTF EMA (α = 0.3) after each synthesized chunk. */
-    private fun updateRtf(packId: String, rtf: Double) {
-        if (rtf <= 0 || !rtf.isFinite()) return
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val old = prefs.getFloat(rtfKey(packId), -1f)
-        val ema = if (old < 0) rtf.toFloat() else (old * 0.7f + rtf.toFloat() * 0.3f)
-        prefs.edit().putFloat(rtfKey(packId), ema).apply()
-    }
-
     /** True when another screen or download currently owns the shared install task. */
     private fun isInstallRunning(): Boolean =
         (application as ReadlyApp).installTask?.isDone == false
@@ -938,17 +878,17 @@ class ReaderService : Service() {
     }
 
     /**
-     * Loads the engine on `readly-tts` (posted directly from [onStartCommand], never
-     * through `readly-read`, so the fetch and the load run in parallel). A concurrent
-     * READ waits behind this on the same FIFO queue via [ensureEngineOrThrow].
+     * Loads the engine from `readly-preload` (never through `readly-read`, so the
+     * fetch and the load run in parallel). A concurrent READ waits behind this on
+     * the EngineManager's FIFO queue via [ensureEngineOrThrow].
      */
     private fun preloadEngine() {
         try {
             if (destroyed) return
             val mainId = activePackId(this)
-            if (mainId in loadedPackIds) return
+            if (engines.isLoaded(mainId)) return
             try {
-                ensureEngineOrThrow(mainId)
+                engines.preload(mainId)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 return
@@ -961,17 +901,19 @@ class ReaderService : Service() {
             // slower than later ones, so run a throwaway synth now (discarded). Never
             // on the READ path, where it would add latency before the real first
             // chunk. A request landing mid-warm-up aborts it via the 0/1 callback.
-            // This runs on `readly-tts`, so `engines` is touched directly.
-            val eng = engines[mainId]?.engine ?: return
+            // The throwaway stays out of the RTF EMA (recordRtf = false).
             val pack = activePack(this)
             val warmSpeaker = speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
             try {
                 val warmStart = SystemClock.elapsedRealtime()
-                eng.synthesize(
+                engines.synthesize(
+                    mainId,
                     "Hello.",
                     speakerId = warmSpeaker,
                     speed = 1.0f,
+                    lang = "en",
                     isStopped = { pendingRequests.get() > 0 },
+                    recordRtf = false,
                 )
                 Log.i("Readly", "Voice warm-up took ${SystemClock.elapsedRealtime() - warmStart} ms")
             } catch (e: Exception) {
@@ -1089,48 +1031,18 @@ class ReaderService : Service() {
     // ------------------------------------------------------------------
 
     /**
-     * Returns the loaded engine for [packId], loading it on `readly-tts` first.
-     * Up to [MAX_ENGINES] stay loaded (LRU), so English↔Persian alternation
-     * doesn't reload each time. Throws on load failure (callers report via
-     * [postError] after settling their request); inline when already on
-     * `readly-tts`, otherwise waits FIFO behind any queued preload. Must not be
-     * called on the main thread (it blocks).
+     * Returns the sample rate for [packId], loading its engine first. Throws on load
+     * failure (callers report via [postError] after settling their request). Must
+     * not be called on the main thread (it blocks).
      */
-    private fun ensureEngineOrThrow(packId: String): SpeechEngine {
-        if (packId !in loadedPackIds) {
+    private fun ensureEngineOrThrow(packId: String): Int {
+        if (!engines.isLoaded(packId)) {
             // A fetch shows FETCHING until the engine load actually starts; only
             // then does the status become LOADING_VOICE.
             ReaderState.update { it.copy(status = ReaderStatus.LOADING_VOICE, errorMessage = null) }
             updateNotification()
         }
-        return runOnTtsThreadAndWait({ engineFor(packId) })!!
-    }
-
-    /** Loads or returns the engine for [packId], evicting the LRU idle engine past the cap. Must run on `readly-tts`. */
-    private fun engineFor(packId: String): SpeechEngine {
-        engines[packId]?.let { return it.engine }
-        val pack = VoiceCatalog.byId(packId) ?: throw IllegalStateException("Unknown voice pack $packId")
-        val engine = SpeechEngine(VoiceModelStore(pack, voicesDir(), VoiceModelStore::httpUrlOpener))
-        engines[packId] = EngineSlot(engine, engine.sampleRate)
-        while (engines.size > MAX_ENGINES) {
-            val eldest = engines.entries.iterator().next()
-            engines.remove(eldest.key)
-            try {
-                eldest.value.engine.close()
-            } catch (e: Exception) {
-                Log.w("Readly", "Closing the idle ${eldest.key} voice failed", e)
-            }
-            Log.i("Readly", "Closed the idle ${eldest.key} voice (keeping at most $MAX_ENGINES loaded)")
-        }
-        publishEngineSnapshot()
-        return engine
-    }
-
-    /** Refreshes the cross-thread engine snapshots. Must run on `readly-tts`. */
-    private fun publishEngineSnapshot() {
-        loadedPackIds = engines.keys.toSet()
-        rateByPack = engines.mapValues { it.value.rate }
-        engineLoaded = engines.isNotEmpty()
+        return engines.preload(packId)
     }
 
     private fun voicesDir(): File = File(noBackupFilesDir, "voices")
@@ -1155,7 +1067,6 @@ class ReaderService : Service() {
         }
         val rate = try {
             ensureEngineOrThrow(docPack.id)
-            checkNotNull(rateByPack[docPack.id]) { "Voice ${docPack.id} unloaded mid-read" }
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             onRequestDone?.invoke()
@@ -1263,7 +1174,8 @@ class ReaderService : Service() {
     /**
      * Synthesizes one chunk with [pack]'s voice for 2-letter [lang], reading speaker
      * and speed from settings every time so changes apply from the next sentence.
-     * Runs on the producer thread; the engine call itself runs on `readly-tts`.
+     * Runs on the producer thread; the engine call itself runs on `readly-tts`
+     * inside [EngineManager] (which also records the per-pack RTF EMA).
      */
     private fun synthChunk(
         text: String,
@@ -1275,36 +1187,12 @@ class ReaderService : Service() {
         val speed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
         val begin = SystemClock.elapsedRealtime()
-        // engineFor (not a cached engine): a third pack's load may have evicted
-        // this one since the pipeline started; reloading is then silent and the
-        // status stays READING.
-        val audio = runOnTtsThreadAndWait({
-            engineFor(pack.id).synthesize(text, speakerId, speed, isStopped, lang)
-        }) ?: return FloatArray(0)
+        val audio = engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped)
         val synthMs = SystemClock.elapsedRealtime() - begin
-        val rate = rateByPack[pack.id] ?: 0
+        val rate = engines.sampleRateIfLoaded(pack.id) ?: 0
         val audioMs = if (rate > 0) audio.size * 1000.0 / rate else 0.0
-        val rtf = if (audioMs > 0) synthMs / audioMs else 0.0
-        ReaderState.update { it.copy(lastRtf = rtf) }
-        updateRtf(pack.id, rtf)
+        ReaderState.update { it.copy(lastRtf = if (audioMs > 0) synthMs / audioMs else 0.0) }
         return audio
-    }
-
-    /** Posts [block] to `readly-tts` and waits. Rethrows the cause unwrapped. */
-    private fun <T> runOnTtsThreadAndWait(block: () -> T, timeoutMs: Long = 0): T? {
-        if (Looper.myLooper() == ttsThread.looper) return block()
-        val task = FutureTask(Callable(block))
-        if (!ttsHandler.post(task)) {
-            throw IllegalStateException("TTS thread is gone")
-        }
-        try {
-            return if (timeoutMs > 0) task.get(timeoutMs, TimeUnit.MILLISECONDS) else task.get()
-        } catch (e: InterruptedException) {
-            throw e
-        } catch (e: Exception) {
-            val cause = (e as? java.util.concurrent.ExecutionException)?.cause ?: e
-            throw cause
-        }
     }
 
     // ------------------------------------------------------------------

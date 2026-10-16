@@ -53,7 +53,8 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
     /**
      * Synthesizes [text] to mono float PCM. Generation stops early (returning audio so far)
      * once [isStopped] returns true. [lang] is the 2-letter document language, used
-     * only by Supertonic 3 (`extra["lang"]`); Supertonic 2 stays `"en"`.
+     * only by Supertonic 3 (`extra["lang"]`); Supertonic 2 stays `"en"`. [onChunk]
+     * streams partial audio from sherpa's callback (for the system TTS service).
      */
     fun synthesize(
         text: String,
@@ -61,6 +62,7 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
         speed: Float,
         isStopped: () -> Boolean,
         lang: String = "en",
+        onChunk: ((FloatArray) -> Unit)? = null,
     ): FloatArray {
         val speakers = pack.speakers
         require(speakerId in speakers.indices) {
@@ -69,6 +71,8 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
         }
         if (text.isBlank()) return FloatArray(0)
         val startMs = SystemClock.elapsedRealtime()
+        val callback: (FloatArray) -> Int =
+            if (onChunk != null) StreamingCallback(isStopped, onChunk) else StopCallback(isStopped)
         val audio = if (pack.family == VoiceFamily.SUPERTONIC) {
             // sherpa's own Supertonic example passes the language this way; numSteps
             // stays at its default. Only v3 is multilingual; v2 stays "en".
@@ -78,9 +82,9 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
                 speed = speed,
                 extra = mapOf("lang" to supertonicLang),
             )
-            tts.generateWithConfigAndCallback(text, config, StopCallback(isStopped))
+            tts.generateWithConfigAndCallback(text, config, callback)
         } else {
-            tts.generateWithCallback(text, speakerId, speed, StopCallback(isStopped))
+            tts.generateWithCallback(text, speakerId, speed, callback)
         }
         val synthMs = SystemClock.elapsedRealtime() - startMs
         val audioMs = if (audio.sampleRate > 0) audio.samples.size * 1000.0 / audio.sampleRate else 0.0
@@ -173,4 +177,20 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
  */
 internal class StopCallback(private val isStopped: () -> Boolean) : (FloatArray) -> Int {
     override fun invoke(samples: FloatArray): Int = if (isStopped()) 0 else 1
+}
+
+/**
+ * Streaming JNI callback for [OfflineTts] synthesis. The same named-class rule as
+ * [StopCallback] applies (sherpa-onnx looks up `invoke([F)Ljava/lang/Integer;` by
+ * name, so this must never become a lambda). Forwards every partial chunk to
+ * [onChunk] and stops generation once [isStopped] returns true.
+ */
+internal class StreamingCallback(
+    private val isStopped: () -> Boolean,
+    private val onChunk: (FloatArray) -> Unit,
+) : (FloatArray) -> Int {
+    override fun invoke(samples: FloatArray): Int {
+        onChunk(samples)
+        return if (isStopped()) 0 else 1
+    }
 }
