@@ -20,6 +20,7 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import app.readly.model.InstallStage
+import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
 import app.readly.playback.ReaderService
 import app.readly.playback.ReaderSnapshot
@@ -143,9 +144,9 @@ class MainActivity : Activity(), InstallTask.Listener {
         val pack = ReaderService.activePack(this)
         store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
         prefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
-        body.text = getString(R.string.setup_body, pack.displayName, pack.sizeMb)
+        body.text = getString(R.string.setup_body, setupVoiceName(), pack.sizeMb)
         downloadButton.text = getString(R.string.download_button, pack.sizeMb)
-        voicePackLabel.text = getString(R.string.voice_pack_format, pack.displayName)
+        voicePackLabel.text = getString(R.string.voice_pack_format, VoiceCatalog.shortName(pack))
         updateSetupEstimate(pack.sizeMb)
 
         setupSampleButton.setOnClickListener { toggleSetupSample() }
@@ -219,7 +220,7 @@ class MainActivity : Activity(), InstallTask.Listener {
             task = null
             lastSetupError = null
             store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
-            body.text = getString(R.string.setup_body, pack.displayName, pack.sizeMb)
+            body.text = getString(R.string.setup_body, setupVoiceName(), pack.sizeMb)
             downloadButton.text = getString(R.string.download_button, pack.sizeMb)
             updateSetupEstimate(pack.sizeMb)
             refreshVoiceSection()
@@ -308,7 +309,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     }
 
     private fun refreshVoiceSection() {
-        voicePackLabel.text = getString(R.string.voice_pack_format, store.pack.displayName)
+        voicePackLabel.text = getString(R.string.voice_pack_format, VoiceCatalog.shortName(store.pack))
         setupVoiceSpinner()
     }
 
@@ -484,6 +485,12 @@ class MainActivity : Activity(), InstallTask.Listener {
             e.message ?: "(no details)",
         )
         showError()
+    }
+
+    /** Setup voice name from the family card title + variant (e.g. "Supertonic v2"). */
+    private fun setupVoiceName(): String {
+        val pack = store.pack
+        return "${VoiceCatalog.familyInfo(pack.family).title} ${pack.variant}"
     }
 
     /** Download estimate from the measured rate (320 MB took ~3 min on a Pixel). */
