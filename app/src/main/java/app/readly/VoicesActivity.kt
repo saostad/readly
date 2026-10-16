@@ -224,13 +224,13 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         var piperLangSpinner: Spinner? = null
         var piperSpinner: Spinner? = null
         val statusText = TextView(this@VoicesActivity)
-        val sampleButton = Button(this@VoicesActivity).apply {
+        val sampleButton = Button(this@VoicesActivity, null, 0, R.style.Btn_Ghost).apply {
             setText(R.string.sample_button)
             setOnClickListener {
                 VoiceCatalog.byId(selectedPackId)?.let { toggleSample(it) }
             }
         }
-        val mainButton = Button(this@VoicesActivity).apply {
+        val mainButton = Button(this@VoicesActivity, null, 0, R.style.Btn_Primary).apply {
             setOnClickListener { onMainButton() }
         }
         val noteText = TextView(this@VoicesActivity).apply {
@@ -251,7 +251,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             visibility = View.GONE
         }
         val errorText = TextView(this@VoicesActivity).apply {
-            setTextColor(getColor(android.R.color.holo_red_dark))
+            setTextColor(getColor(R.color.error))
             visibility = View.GONE
         }
 
@@ -413,16 +413,11 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             chips.setOnCheckedChangeListener(null)
             chips.removeAllViews()
             for (pack in chipPacks()) {
-                val chip = RadioButton(this@VoicesActivity).apply {
+                val chip = RadioButton(this@VoicesActivity, null, 0, R.style.Chip).apply {
                     id = View.generateViewId()
                     tag = pack.id
                     text = getString(R.string.chip_format, pack.variant, pack.sizeMb)
                     buttonDrawable = null
-                    setBackgroundResource(R.drawable.chip_background)
-                    setTextColor(getColorStateList(R.color.chip_text))
-                    val h = dp(12)
-                    val v = dp(8)
-                    setPadding(h, v, h, v)
                     layoutParams = RadioGroup.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -657,7 +652,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         }
         cardsBox.addView(systemSpinner)
         cardsBox.addView(
-            Button(this).apply {
+            Button(this, null, 0, R.style.Btn_Ghost).apply {
                 text = getString(R.string.system_voice_settings_button)
                 setOnClickListener { openTtsSettings() }
                 layoutParams = LinearLayout.LayoutParams(
@@ -724,7 +719,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 )
             } else {
                 row.addView(
-                    Button(this).apply {
+                    Button(this, null, 0, R.style.Btn_Text).apply {
                         setText(R.string.delete_button)
                         setOnClickListener { confirmDelete(pack) }
                     },

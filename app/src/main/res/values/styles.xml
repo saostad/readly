@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Every button and chip style below carries the one-line rule
+         (maxLines=1, ellipsize=end, uniform auto-size down to 11sp), so no
+         button text ever wraps to two lines. ButtonOneLineTest enforces it. -->
+
+    <style name="Btn" parent="@android:style/Widget.Material.Button">
+        <item name="android:background">@drawable/btn_ghost</item>
+        <item name="android:textColor">@color/btn_ghost_text</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:autoSizeTextType">uniform</item>
+        <item name="android:autoSizeMinTextSize">@dimen/autosize_min</item>
+        <item name="android:autoSizeMaxTextSize">@dimen/text_body</item>
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingEnd">14dp</item>
+    </style>
+
+    <style name="Btn.Primary">
+        <item name="android:background">@drawable/btn_primary</item>
+        <item name="android:textColor">@color/btn_primary_text</item>
+    </style>
+
+    <style name="Btn.Ghost" />
+
+    <style name="Btn.Text">
+        <item name="android:background">@drawable/btn_text</item>
+        <item name="android:textColor">@color/btn_text_text</item>
+        <item name="android:minHeight">40dp</item>
+    </style>
+
+    <style name="Chip">
+        <item name="android:background">@drawable/chip_background</item>
+        <item name="android:textColor">@color/chip_text</item>
+        <item name="android:button">@null</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:autoSizeTextType">uniform</item>
+        <item name="android:autoSizeMinTextSize">@dimen/autosize_min</item>
+        <item name="android:autoSizeMaxTextSize">12sp</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:gravity">center</item>
+        <item name="android:minHeight">34dp</item>
+        <item name="android:paddingStart">11dp</item>
+        <item name="android:paddingEnd">11dp</item>
+        <item name="android:paddingTop">7dp</item>
+        <item name="android:paddingBottom">7dp</item>
+    </style>
+
+    <style name="Chip.Selected">
+        <item name="android:background">@drawable/chip_selected_background</item>
+        <item name="android:textColor">@color/accent</item>
+    </style>
+
+    <style name="Segment" parent="Chip">
+        <item name="android:background">@drawable/segment_background</item>
+        <item name="android:textColor">@color/segment_text</item>
+        <item name="android:autoSizeMaxTextSize">@dimen/text_small</item>
+        <item name="android:textSize">@dimen/text_small</item>
+        <item name="android:minHeight">30dp</item>
+    </style>
+
+    <style name="Title">
+        <item name="android:textSize">@dimen/text_title</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <style name="CardTitle">
+        <item name="android:textSize">@dimen/text_card_title</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <style name="Body">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <style name="Small">
+        <item name="android:textSize">@dimen/text_small</item>
+        <item name="android:textColor">@color/text2</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <style name="SectionLabel">
+        <item name="android:textSize">@dimen/text_section</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:textColor">@color/text3</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <style name="SheetSwitch" parent="@android:style/Widget.Material.CompoundButton.Switch">
+        <item name="android:thumbTint">@color/switch_thumb</item>
+        <item name="android:trackTint">@color/switch_track</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <style name="CalmSeekBar" parent="@android:style/Widget.Material.SeekBar">
+        <item name="android:progressDrawable">@drawable/seekbar_progress</item>
+        <item name="android:thumb">@drawable/seekbar_thumb</item>
+    </style>
+
+    <style name="BoxEdit" parent="@android:style/Widget.Material.EditText">
+        <item name="android:background">@drawable/input_background</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textColorHint">@color/text3</item>
+        <item name="android:padding">12dp</item>
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <style name="IconButton">
+        <item name="android:background">@drawable/icon_circle_background</item>
+        <item name="android:scaleType">center</item>
+        <item name="android:tint">@color/text2</item>
+    </style>
+
+    <style name="IconButton.Accent">
+        <item name="android:background">@drawable/icon_circle_accent</item>
+        <item name="android:tint">@color/onAccent</item>
+    </style>
+</resources>
