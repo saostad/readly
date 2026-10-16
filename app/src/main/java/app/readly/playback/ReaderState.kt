@@ -8,6 +8,7 @@ import android.util.Log
 enum class ReaderStatus {
     IDLE,
     LOADING_VOICE,
+    FETCHING,
     READING,
     PAUSED,
     FINISHED,

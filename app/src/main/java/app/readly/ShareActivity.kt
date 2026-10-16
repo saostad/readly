@@ -45,9 +45,15 @@ class ShareActivity : Activity() {
                     ReaderService.readUrl(this, request.url, request.titleHint)
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: IllegalArgumentException) {
+            // ShareInput's own user messages (and the shared-file message) are
+            // already readable; show them as they are.
             val message = e.message ?: e.javaClass.name
             Log.e("Readly", "Couldn't handle the shared item: $message", e)
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            val message = "Couldn't open the shared item: ${e.javaClass.name}: ${e.message}"
+            Log.e("Readly", message, e)
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         }
         finish()

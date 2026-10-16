@@ -295,6 +295,11 @@ class MainActivity : Activity(), InstallTask.Listener {
                 statusLine.setText(R.string.loading_voice)
                 statusLine.setTextColor(defaultTextColor)
             }
+            ReaderStatus.FETCHING -> {
+                statusLine.visibility = View.VISIBLE
+                statusLine.text = snap.currentText.ifBlank { "Opening…" }
+                statusLine.setTextColor(defaultTextColor)
+            }
             ReaderStatus.ERROR -> {
                 statusLine.visibility = View.VISIBLE
                 statusLine.text = snap.errorMessage

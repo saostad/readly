@@ -42,16 +42,19 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Background playback service: owns the [KokoroEngine], runs the [ChunkPipeline] and
  * publishes state to [ReaderState].
  *
  * Threading: the engine lives on the single `readly-tts` thread for the whole service
- * life; pipeline `synth` calls are posted there and waited on. Document handling (READ /
- * NEXT / PREVIOUS / STOP / PRELOAD) runs on the single `readly-read` executor so
- * stop-and-join never blocks the main thread. PAUSE / PLAY / TOGGLE are instant and run
- * on the main thread.
+ * life; pipeline `synth` calls are posted there and waited on. PRELOAD loads the engine
+ * by posting directly to `readly-tts`, so it never blocks document handling. Document
+ * handling (READ / READ_URL / NEXT / PREVIOUS / STOP) runs on the single `readly-read`
+ * executor so stop-and-join never blocks the main thread. PAUSE / PLAY / TOGGLE are
+ * instant and run on the main thread.
  */
 class ReaderService : Service() {
 
@@ -141,6 +144,14 @@ class ReaderService : Service() {
     private var engineRate = 0
 
     private val pipelineLock = Object()
+
+    /**
+     * READ/READ_URL requests accepted but not yet started, failed or emptied.
+     * Incremented in [onStartCommand], decremented exactly once per request before its
+     * terminal state change. Guards [preloadEngine]'s idle path and [goIdle] so a
+     * concurrent preload or an older completion can't detach while a request is live.
+     */
+    private val pendingRequests = AtomicInteger(0)
 
     @Volatile
     private var pipeline: ChunkPipeline? = null
@@ -234,19 +245,30 @@ class ReaderService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // The single foreground entry point: every command starts foreground here, on
+        // the main thread, so worker paths only ever call updateNotification().
         ensureForeground()
         mainHandler.removeCallbacks(idleShutdown)
         when (intent?.action) {
-            ACTION_READ -> handleRead(
-                intent.getStringExtra(EXTRA_TEXT) ?: "",
-                intent.getStringExtra(EXTRA_TITLE) ?: "",
-                intent.getStringExtra(EXTRA_FORMAT) ?: SourceFormat.PLAIN.name,
-            )
-            ACTION_READ_URL -> handleReadUrl(
-                intent.getStringExtra(EXTRA_URL) ?: "",
-                intent.getStringExtra(EXTRA_TITLE_HINT),
-            )
-            ACTION_PRELOAD -> readerExecutor.execute(::preloadEngine)
+            ACTION_READ -> {
+                pendingRequests.incrementAndGet()
+                handleRead(
+                    intent.getStringExtra(EXTRA_TEXT) ?: "",
+                    intent.getStringExtra(EXTRA_TITLE) ?: "",
+                    intent.getStringExtra(EXTRA_FORMAT) ?: SourceFormat.PLAIN.name,
+                )
+            }
+            ACTION_READ_URL -> {
+                pendingRequests.incrementAndGet()
+                handleReadUrl(
+                    intent.getStringExtra(EXTRA_URL) ?: "",
+                    intent.getStringExtra(EXTRA_TITLE_HINT),
+                )
+            }
+            // Straight to readly-tts: posting through readerExecutor would block the
+            // page fetch behind the whole model load. A READ's ensureEngineOrThrow() then
+            // waits behind this on the same FIFO queue.
+            ACTION_PRELOAD -> ttsHandler.post(::preloadEngine)
             ACTION_TOGGLE -> toggleReading()
             ACTION_PAUSE -> pauseReading()
             ACTION_PLAY -> resumeReading()
@@ -314,24 +336,37 @@ class ReaderService : Service() {
 
     private fun handleRead(text: String, title: String, formatName: String) {
         readerExecutor.execute {
+            val finished = AtomicBoolean(false)
+            fun finish() {
+                if (finished.compareAndSet(false, true)) pendingRequests.decrementAndGet()
+            }
             try {
                 val format = try {
                     SourceFormat.valueOf(formatName)
                 } catch (e: IllegalArgumentException) {
+                    finish()
                     postError(e)
                     return@execute
                 }
-                startReading(title, text, format, notice = null)
+                startReading(title, text, format, notice = null, onRequestDone = ::finish)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
+                finish()
             } catch (e: Exception) {
+                finish()
                 postError(e)
+            } finally {
+                finish()
             }
         }
     }
 
     private fun handleReadUrl(url: String, titleHint: String?) {
         readerExecutor.execute {
+            val finished = AtomicBoolean(false)
+            fun finish() {
+                if (finished.compareAndSet(false, true)) pendingRequests.decrementAndGet()
+            }
             try {
                 stopPipeline()
                 val host = try {
@@ -339,10 +374,11 @@ class ReaderService : Service() {
                 } catch (_: Exception) {
                     url
                 }
-                ensureForeground()
+                // Foreground was already entered in onStartCommand; a worker-side
+                // startForeground here could run after a concurrent goIdle() detached.
                 ReaderState.update {
                     it.copy(
-                        status = ReaderStatus.LOADING_VOICE,
+                        status = ReaderStatus.FETCHING,
                         title = titleHint.orEmpty(),
                         currentText = "Opening $host…",
                         index = 0,
@@ -360,11 +396,15 @@ class ReaderService : Service() {
                 } else {
                     titleHint?.takeIf { it.isNotBlank() } ?: doc.title
                 }
-                startReading(title, doc.text, doc.format, doc.notice)
+                startReading(title, doc.text, doc.format, doc.notice, ::finish)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
+                finish()
             } catch (e: Exception) {
+                finish()
                 postError(e)
+            } finally {
+                finish()
             }
         }
     }
@@ -372,9 +412,16 @@ class ReaderService : Service() {
     /**
      * Sanitizes [text], chunks it and starts the pipeline, replacing any current
      * reading. Runs on `readly-read`. [notice] is shown on the main screen and
-     * Toasted once reading starts.
+     * Toasted once reading starts. [onRequestDone] is invoked exactly once when the
+     * request starts a pipeline or ends empty (before any idle transition).
      */
-    private fun startReading(title: String, text: String, format: SourceFormat, notice: String?) {
+    private fun startReading(
+        title: String,
+        text: String,
+        format: SourceFormat,
+        notice: String?,
+        onRequestDone: () -> Unit,
+    ) {
         stopPipeline()
         ReaderState.update { it.copy(notice = null) }
         val clean = TextSanitizer.sanitize(text, format)
@@ -399,10 +446,11 @@ class ReaderService : Service() {
                 Toast.makeText(this, message, Toast.LENGTH_LONG).show()
             }
             updateNotification()
+            onRequestDone()
             goIdle()
             return
         }
-        startPipeline(chunks, title, 0)
+        startPipeline(chunks, title, 0, onRequestDone)
         if (notice != null) {
             ReaderState.update { it.copy(notice = notice) }
             mainHandler.post {
@@ -411,10 +459,24 @@ class ReaderService : Service() {
         }
     }
 
+    /**
+     * Loads the engine on `readly-tts` (posted directly from [onStartCommand], never
+     * through `readly-read`, so the fetch and the load run in parallel). A concurrent
+     * READ waits behind this on the same FIFO queue via [ensureEngineOrThrow].
+     */
     private fun preloadEngine() {
         try {
             if (engine != null || destroyed) return
-            ensureEngine() ?: return
+            try {
+                ensureEngineOrThrow()
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            } catch (e: Exception) {
+                postError(e)
+                return
+            }
+            if (pendingRequests.get() > 0) return
             val active = synchronized(pipelineLock) { pipeline != null }
             if (!active && ReaderState.snapshot.status == ReaderStatus.LOADING_VOICE) {
                 ReaderState.update { it.copy(status = ReaderStatus.IDLE) }
@@ -513,38 +575,64 @@ class ReaderService : Service() {
     // ------------------------------------------------------------------
 
     /**
-     * Returns the loaded engine, loading it on `readly-tts` first. Posts ERROR and
-     * returns null on failure. Must not be called on the main thread (it blocks).
+     * Returns the loaded engine, loading it on `readly-tts` first. Throws on load
+     * failure (callers report via [postError] after settling their request); inline
+     * when already on `readly-tts`, otherwise waits FIFO behind any queued preload.
+     * Must not be called on the main thread (it blocks).
      */
-    private fun ensureEngine(): KokoroEngine? {
+    private fun ensureEngineOrThrow(): KokoroEngine {
         engine?.let { return it }
+        // A fetch shows FETCHING until the engine load actually starts; only then
+        // does the status become LOADING_VOICE.
         ReaderState.update { it.copy(status = ReaderStatus.LOADING_VOICE, errorMessage = null) }
         updateNotification()
         return runOnTtsThreadAndWait({
-            try {
-                if (engine == null) {
-                    engine = KokoroEngine(store)
-                    engineRate = engine!!.sampleRate
-                    engineLoaded = true
-                }
-                engine
-            } catch (e: Exception) {
-                postError(e)
-                null
+            if (engine == null) {
+                engine = KokoroEngine(store)
+                engineRate = engine!!.sampleRate
+                engineLoaded = true
             }
-        })
+            engine!!
+        })!!
     }
 
-    private fun startPipeline(chunks: List<Chunk>, title: String, startIndex: Int) {
-        if (destroyed || Thread.currentThread().isInterrupted) return
-        val rate = ensureEngine()?.let { engineRate } ?: return
-        val track = try {
-            ensureTrack(rate)
+    /**
+     * Starts playback. [onRequestDone] settles the originating READ/READ_URL request
+     * (null for NEXT/PREVIOUS restarts, which own no request): it runs exactly once,
+     * before any error report and right after the pipeline starts.
+     */
+    private fun startPipeline(
+        chunks: List<Chunk>,
+        title: String,
+        startIndex: Int,
+        onRequestDone: (() -> Unit)? = null,
+    ) {
+        if (destroyed || Thread.currentThread().isInterrupted) {
+            onRequestDone?.invoke()
+            return
+        }
+        val rate = try {
+            ensureEngineOrThrow()
+            engineRate
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            onRequestDone?.invoke()
+            return
         } catch (e: Exception) {
+            onRequestDone?.invoke()
             postError(e)
             return
         }
-        ensureForeground()
+        val track = try {
+            ensureTrack(rate)
+        } catch (e: Exception) {
+            onRequestDone?.invoke()
+            postError(e)
+            return
+        }
+        // No ensureForeground(): onStartCommand entered the foreground on the main
+        // thread for this command already. A worker-side startForeground here could
+        // throw ForegroundServiceStartNotAllowedException after a goIdle() detach.
         lateinit var mine: ChunkPipeline
         mine = ChunkPipeline(
             chunks = chunks,
@@ -616,6 +704,7 @@ class ReaderService : Service() {
         setNoisyRegistered(true)
         updateNotification()
         mine.start()
+        onRequestDone?.invoke()
     }
 
     private fun stopPipeline() {
@@ -802,9 +891,14 @@ class ReaderService : Service() {
         }
     }
 
-    /** Leaves the foreground and schedules the idle shutdown. */
+    /**
+     * Leaves the foreground and schedules the idle shutdown. Does nothing while a
+     * READ/READ_URL request is still live, so an older completion can't detach
+     * under a newer fetch or engine load.
+     */
     private fun goIdle() {
         mainHandler.post {
+            if (pendingRequests.get() > 0) return@post
             val status = ReaderState.snapshot.status
             val quiet = status == ReaderStatus.IDLE || status == ReaderStatus.FINISHED
             if (inForeground) {
@@ -909,6 +1003,7 @@ class ReaderService : Service() {
         )
         val statusLine = when (snap.status) {
             ReaderStatus.LOADING_VOICE -> "Loading voice…"
+            ReaderStatus.FETCHING -> snap.currentText.ifBlank { "Opening…" }
             ReaderStatus.READING -> "Reading…"
             ReaderStatus.PAUSED -> "Paused"
             ReaderStatus.FINISHED -> "Finished."
@@ -924,7 +1019,8 @@ class ReaderService : Service() {
             .setOngoing(
                 snap.status == ReaderStatus.READING ||
                     snap.status == ReaderStatus.PAUSED ||
-                    snap.status == ReaderStatus.LOADING_VOICE,
+                    snap.status == ReaderStatus.LOADING_VOICE ||
+                    snap.status == ReaderStatus.FETCHING,
             )
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .addAction(
@@ -969,7 +1065,7 @@ class ReaderService : Service() {
         val state = when (snap.status) {
             ReaderStatus.READING -> PlaybackState.STATE_PLAYING
             ReaderStatus.PAUSED -> PlaybackState.STATE_PAUSED
-            ReaderStatus.LOADING_VOICE -> PlaybackState.STATE_BUFFERING
+            ReaderStatus.LOADING_VOICE, ReaderStatus.FETCHING -> PlaybackState.STATE_BUFFERING
             ReaderStatus.FINISHED, ReaderStatus.IDLE -> PlaybackState.STATE_STOPPED
             ReaderStatus.ERROR -> PlaybackState.STATE_ERROR
         }
