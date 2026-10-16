@@ -52,9 +52,16 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
 
     /**
      * Synthesizes [text] to mono float PCM. Generation stops early (returning audio so far)
-     * once [isStopped] returns true.
+     * once [isStopped] returns true. [lang] is the 2-letter document language, used
+     * only by Supertonic 3 (`extra["lang"]`); Supertonic 2 stays `"en"`.
      */
-    fun synthesize(text: String, speakerId: Int, speed: Float, isStopped: () -> Boolean): FloatArray {
+    fun synthesize(
+        text: String,
+        speakerId: Int,
+        speed: Float,
+        isStopped: () -> Boolean,
+        lang: String = "en",
+    ): FloatArray {
         val speakers = pack.speakers
         require(speakerId in speakers.indices) {
             "Unknown speaker id $speakerId: ${pack.displayName} has ${speakers.size} speakers " +
@@ -64,11 +71,12 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
         val startMs = SystemClock.elapsedRealtime()
         val audio = if (pack.family == VoiceFamily.SUPERTONIC) {
             // sherpa's own Supertonic example passes the language this way; numSteps
-            // stays at its default.
+            // stays at its default. Only v3 is multilingual; v2 stays "en".
+            val supertonicLang = if (pack.id == "supertonic-3") lang else "en"
             val config = GenerationConfig(
                 sid = speakerId,
                 speed = speed,
-                extra = mapOf("lang" to "en"),
+                extra = mapOf("lang" to supertonicLang),
             )
             tts.generateWithConfigAndCallback(text, config, StopCallback(isStopped))
         } else {

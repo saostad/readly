@@ -54,4 +54,27 @@ class LanguageDetectorTest {
         assertEquals("en", LanguageDetector.dominant(""))
         assertEquals("en", LanguageDetector.dominant("123 … !!!"))
     }
+
+    @Test
+    fun dominant_russianParagraph_returnsRu() {
+        assertEquals(
+            "ru",
+            LanguageDetector.dominant(
+                "Это русский текст, который должен быть распознан правильно. " +
+                    "Русский язык использует кириллический алфавит для письма.",
+            ),
+        )
+    }
+
+    @Test
+    fun dominant_englishWithRussianQuote_returnsEn() {
+        assertEquals(
+            "en",
+            LanguageDetector.dominant(
+                "The reporter quoted the sign at length. Witnesses in the crowd read it " +
+                    "aloud, and the translation spread quickly through the evening news. " +
+                    "Это цитата.",
+            ),
+        )
+    }
 }

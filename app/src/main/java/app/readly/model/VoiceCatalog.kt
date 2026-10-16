@@ -64,6 +64,17 @@ data class VoicePack(
     /** Base name of the sample clip in `res/raw` (`.ogg` suffix not included). */
     val sampleName: String
         get() = "sample_" + id.replace('-', '_')
+
+    /** 2-letter ISO languages this pack can read, for Smart voice ranking. */
+    fun languages(): Set<String> {
+        if (family == VoiceFamily.PIPER) {
+            val code = lang ?: return emptySet()
+            if (code == "fa_en") return setOf("fa", "en")
+            return setOf(code.substringBefore("_"))
+        }
+        if (id == "supertonic-3") return VoiceCatalog.SUPERTONIC3_LANGS
+        return setOf("en")
+    }
 }
 
 /**
@@ -79,6 +90,13 @@ object VoiceCatalog {
 
     /** The only pack before pack switching; kept as the default when already installed. */
     const val KOKORO_ID = "kokoro-en"
+
+    /** The 31 language codes Supertonic 3 covers (sherpa's example list). */
+    val SUPERTONIC3_LANGS: Set<String> = setOf(
+        "en", "ko", "ja", "ar", "bg", "cs", "da", "de", "el", "es", "et",
+        "fi", "fr", "hi", "hr", "hu", "id", "it", "lt", "lv", "nl", "pl",
+        "pt", "ro", "ru", "sk", "sl", "sv", "tr", "uk", "vi",
+    )
 
     private fun numberedVoices(n: Int): List<String> = (1..n).map { "Voice $it" }
 

@@ -248,4 +248,41 @@ class VoiceCatalogTest {
             VoiceCatalog.byId("piper-fa_IR-ganji_adabi-medium")!!.voiceName,
         )
     }
+
+    @Test
+    fun languages_englishOnlyPacks_coverEn() {
+        for (id in listOf("supertonic-2", "kokoro-en", "kokoro-en-compact", "kitten-mini")) {
+            assertEquals(id, setOf("en"), VoiceCatalog.byId(id)!!.languages())
+        }
+    }
+
+    @Test
+    fun languages_supertonic3_matchesSpecList() {
+        assertEquals(
+            setOf(
+                "en", "ko", "ja", "ar", "bg", "cs", "da", "de", "el", "es", "et",
+                "fi", "fr", "hi", "hr", "hu", "id", "it", "lt", "lv", "nl", "pl",
+                "pt", "ro", "ru", "sk", "sl", "sv", "tr", "uk", "vi",
+            ),
+            VoiceCatalog.SUPERTONIC3_LANGS,
+        )
+        assertEquals(31, VoiceCatalog.SUPERTONIC3_LANGS.size)
+        assertEquals(
+            VoiceCatalog.SUPERTONIC3_LANGS,
+            VoiceCatalog.byId("supertonic-3")!!.languages(),
+        )
+    }
+
+    @Test
+    fun languages_piper_usesLangPrefix() {
+        fun langs(id: String) = VoiceCatalog.byId(id)!!.languages()
+        assertEquals(setOf("en"), langs("piper-en_US-lessac-medium"))
+        assertEquals(setOf("en"), langs("piper-en_GB-alba-medium"))
+        assertEquals(setOf("fa"), langs("piper-fa_IR-amir-medium"))
+        assertEquals(setOf("fa"), langs("piper-fa-haaniye-low"))
+        assertEquals(setOf("fa", "en"), langs("piper-fa_en-rezahedayatfar-ibrahimwalk-medium"))
+        assertEquals(setOf("es"), langs("piper-es_ES-davefx-medium"))
+        assertEquals(setOf("ar"), langs("piper-ar_JO-kareem-low"))
+        assertEquals(setOf("ru"), langs("piper-ru_RU-dmitri-medium"))
+    }
 }
