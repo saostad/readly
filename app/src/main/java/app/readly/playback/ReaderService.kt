@@ -29,6 +29,7 @@ import android.util.Log
 import android.widget.Toast
 import app.readly.InstallTask
 import app.readly.MainActivity
+import app.readly.R
 import app.readly.ReadlyApp
 import app.readly.VoicesActivity
 import app.readly.input.ArticleFetcher
@@ -596,7 +597,7 @@ class ReaderService : Service() {
     ) {
         stopPipeline()
         pendingAsk = null
-        ReaderState.update { it.copy(notice = null) }
+        ReaderState.update { it.copy(notice = null, smartLine = null) }
         val clean = TextSanitizer.sanitize(text, format)
         val detected = LanguageDetector.detect(this, clean)
         val lang = detected.lang
@@ -624,8 +625,10 @@ class ReaderService : Service() {
                 "→ ${describe(choice, mainPack)}",
         )
         when (choice) {
-            is SmartVoice.Choice.Use ->
+            is SmartVoice.Choice.Use -> {
+                setSmartLine(lang, choice.pack)
                 startWithPack(title, clean, lang, choice.pack, notice, onRequestDone)
+            }
             SmartVoice.Choice.MainVoice -> {
                 val langNotice = if (!smartOn && (lang == "fa" || lang == "ar") && explicit == null) {
                     val name = langName(lang)
@@ -685,6 +688,7 @@ class ReaderService : Service() {
                 total = 0,
                 errorMessage = message,
                 notice = null,
+                smartLine = null,
             )
         }
         mainHandler.post {
@@ -700,6 +704,12 @@ class ReaderService : Service() {
         is SmartVoice.Choice.AutoDownload -> "AutoDownload ${choice.pack.id}"
         is SmartVoice.Choice.Ask -> "Ask ${choice.pack?.id ?: "none"}"
         SmartVoice.Choice.MainVoice -> "MainVoice ${mainPack.id}"
+    }
+
+    /** Shows `Smart voice: <Language> → <shortName>` on the main screen. */
+    private fun setSmartLine(lang: String, pack: VoicePack) {
+        val line = getString(R.string.smart_line_format, languageName(lang), VoiceCatalog.shortName(pack))
+        ReaderState.update { it.copy(smartLine = line) }
     }
 
     /**
@@ -742,6 +752,7 @@ class ReaderService : Service() {
             showAsk(title, text, format, notice, lang, pack, onRequestDone)
             return
         }
+        setSmartLine(lang, pack)
         startPipeline(chunks, title, 0, pack, lang, onRequestDone)
         if (!notice.isNullOrBlank()) {
             ReaderState.update { it.copy(notice = notice) }
@@ -840,6 +851,7 @@ class ReaderService : Service() {
                 total = 0,
                 errorMessage = null,
                 notice = combined,
+                smartLine = null,
             )
         }
         mainHandler.post {
@@ -1059,6 +1071,7 @@ class ReaderService : Service() {
                         total = 0,
                         errorMessage = null,
                         notice = null,
+                        smartLine = null,
                     )
                 }
                 updateNotification()

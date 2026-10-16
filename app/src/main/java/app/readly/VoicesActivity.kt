@@ -87,6 +87,51 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         cardsBox.addView(storageTotal)
         cardsBox.addView(storageRows)
         cardsBox.addView(storageNote)
+        applyPreselect()
+    }
+
+    /** Honors the Smart voice Ask notification's preselect extras, if present. */
+    private fun applyPreselect() {
+        val packId = intent.getStringExtra(EXTRA_PRESELECT_PACK)
+        val pack = packId?.let { VoiceCatalog.byId(it) }
+        if (pack != null) {
+            cardForPack(pack.id).selectPack(pack)
+            return
+        }
+        val family = intent.getStringExtra(EXTRA_PRESELECT_FAMILY)?.let {
+            try {
+                VoiceFamily.valueOf(it)
+            } catch (_: IllegalArgumentException) {
+                null
+            }
+        } ?: return
+        val card = cards.firstOrNull { it.info.family == family } ?: return
+        if (family == VoiceFamily.PIPER) {
+            intent.getStringExtra(EXTRA_PRESELECT_LANG)?.let { lang ->
+                if (lang in VoiceCatalog.piperLangs()) {
+                    card.piperLang = lang
+                    card.piperLangSpinner?.setSelection(
+                        VoiceCatalog.piperLangs().indexOf(lang).coerceAtLeast(0),
+                    )
+                }
+            }
+            intent.getStringExtra(EXTRA_PRESELECT_VOICE)?.let { voice ->
+                val lang = card.piperLang ?: return@let
+                if (voice in VoiceCatalog.piperVoices(lang)) card.piperVoice = voice
+            }
+            card.rebuildVoiceSpinner()
+            card.rebuildChips()
+            card.selectedPackId = card.chipPacks().firstOrNull()?.id ?: card.selectedPackId
+            // Re-check the chip for the new selection.
+            for (i in 0 until card.chips.childCount) {
+                val chip = card.chips.getChildAt(i) as android.widget.RadioButton
+                if (chip.tag == card.selectedPackId) {
+                    card.chips.check(chip.id)
+                    break
+                }
+            }
+        }
+        card.update()
     }
 
     override fun onResume() {

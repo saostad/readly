@@ -83,4 +83,9 @@
     <string name="choose_voice_help">Compare all voices before downloading.</string>
     <string name="change_pack_help">Pick a different voice, or download a smaller or more natural one.</string>
     <string name="single_voice_note">This voice pack has one voice.</string>
+    <string name="smart_voice_label">Smart voice</string>
+    <string name="smart_voice_help">Picks the best downloaded voice for each text\'s language.</string>
+    <string name="auto_download_label">Download voices automatically on Wi-Fi</string>
+    <string name="auto_download_help">Up to 70 MB per language. Never on mobile data.</string>
+    <string name="smart_line_format">Smart voice: %1$s → %2$s</string>
 </resources>

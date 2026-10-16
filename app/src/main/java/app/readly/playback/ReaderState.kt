@@ -29,6 +29,8 @@ data class ReaderSnapshot(
     val lastRtf: Double = 0.0,
     /** One-shot note about the current reading (e.g. whole-page fallback), if any. */
     val notice: String? = null,
+    /** Smart voice pick for the current reading (e.g. `Smart voice: Spanish → …`), if any. */
+    val smartLine: String? = null,
 )
 
 /**

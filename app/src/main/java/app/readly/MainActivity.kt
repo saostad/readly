@@ -17,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.Spinner
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import app.readly.model.InstallStage
@@ -76,6 +77,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var nowProgress: TextView
     private lateinit var statusLine: TextView
     private lateinit var speedLine: TextView
+    private lateinit var smartLine: TextView
     private lateinit var noticeText: TextView
     private lateinit var needVoiceBanner: TextView
     private lateinit var prevButton: Button
@@ -87,6 +89,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var changePackButton: Button
     private lateinit var voiceSpinner: Spinner
     private lateinit var singleVoiceNote: TextView
+    private lateinit var smartSwitch: Switch
+    private lateinit var autoDownloadSwitch: Switch
     private lateinit var speedLabel: TextView
     private lateinit var speedSeek: SeekBar
 
@@ -127,6 +131,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         nowProgress = findViewById(R.id.nowProgress)
         statusLine = findViewById(R.id.statusLine)
         speedLine = findViewById(R.id.speedLine)
+        smartLine = findViewById(R.id.smartLine)
         noticeText = findViewById(R.id.noticeText)
         needVoiceBanner = findViewById(R.id.needVoiceBanner)
         if (intent?.getBooleanExtra(EXTRA_NEED_VOICE, false) == true) {
@@ -141,6 +146,8 @@ class MainActivity : Activity(), InstallTask.Listener {
         changePackButton = findViewById(R.id.changePackButton)
         voiceSpinner = findViewById(R.id.voiceSpinner)
         singleVoiceNote = findViewById(R.id.singleVoiceNote)
+        smartSwitch = findViewById(R.id.smartSwitch)
+        autoDownloadSwitch = findViewById(R.id.autoDownloadSwitch)
         speedLabel = findViewById(R.id.speedLabel)
         speedSeek = findViewById(R.id.speedSeek)
         defaultTextColor = statusLine.currentTextColor
@@ -179,6 +186,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         }
         setupVoiceSpinner()
         updatePersianLine()
+        setupSmartSwitches()
         setupSpeedSeek()
 
         if (store.isInstalled()) {
@@ -361,6 +369,17 @@ class MainActivity : Activity(), InstallTask.Listener {
         }
     }
 
+    private fun setupSmartSwitches() {
+        smartSwitch.isChecked = prefs.getBoolean(ReaderService.KEY_SMART_VOICE, true)
+        smartSwitch.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean(ReaderService.KEY_SMART_VOICE, checked).apply()
+        }
+        autoDownloadSwitch.isChecked = prefs.getBoolean(ReaderService.KEY_AUTO_DOWNLOAD, true)
+        autoDownloadSwitch.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean(ReaderService.KEY_AUTO_DOWNLOAD, checked).apply()
+        }
+    }
+
     private fun setupSpeedSeek() {
         val speed = prefs.getFloat(ReaderService.KEY_SPEED, 1.0f)
         speedSeek.progress = speedToProgress(speed)
@@ -438,6 +457,12 @@ class MainActivity : Activity(), InstallTask.Listener {
             }
         } else {
             speedLine.visibility = View.GONE
+        }
+        if (!snap.smartLine.isNullOrBlank()) {
+            smartLine.visibility = View.VISIBLE
+            smartLine.text = snap.smartLine
+        } else {
+            smartLine.visibility = View.GONE
         }
         if (!snap.notice.isNullOrBlank()) {
             noticeText.visibility = View.VISIBLE
