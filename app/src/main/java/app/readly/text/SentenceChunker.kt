@@ -28,20 +28,30 @@ object SentenceChunker {
     private val titleEnd = Regex("""\b(Mr|Mrs|Ms|Dr|Prof|St|Sr|Jr|Mt|No)\.$""")
     private val abbreviationEnd = Regex("""(?i)\b(e\.g|i\.e|vs|etc)\.$""")
     private val paragraphBreak = Regex("""\r?\n[ \t]*\r?\n""")
-    private val splitPunct = setOf(',', ';', ':', '—')
+    private val splitPunctEn = setOf(',', ';', ':', '—')
 
-    fun chunk(input: String): List<Chunk> {
+    /**
+     * @param lang BCP 47 language (`en`, `fa`, `ar`): picks the sentence-break
+     *   locale, adds `،` as a split point for fa/ar, and disables the English
+     *   abbreviation glue for other languages.
+     */
+    fun chunk(input: String, lang: String = "en"): List<Chunk> {
         if (input.isBlank()) return emptyList()
+        val splitPunct = if (lang == "fa" || lang == "ar") {
+            splitPunctEn + '،'
+        } else {
+            splitPunctEn
+        }
         val out = mutableListOf<Chunk>()
         var isFirst = true
         for ((paraStart, paraEnd) in paragraphs(input)) {
-            var sentences = splitSentences(input, paraStart, paraEnd)
+            var sentences = splitSentences(input, paraStart, paraEnd, lang)
             if (sentences.isEmpty()) continue
             if (isFirst) {
                 isFirst = false
                 val (firstStart, firstEnd) = sentences[0]
                 if (firstEnd - firstStart > FIRST_WHOLE_MAX) {
-                    val (head, rest) = cutFirst(input, firstStart, firstEnd)
+                    val (head, rest) = cutFirst(input, firstStart, firstEnd, splitPunct)
                     out.add(Chunk(input.substring(head.first, head.second), head.first, head.second))
                     sentences = listOf(rest) + sentences.drop(1)
                 } else {
@@ -49,7 +59,7 @@ object SentenceChunker {
                     sentences = sentences.drop(1)
                 }
             }
-            val pieces = sentences.flatMap { splitLong(input, it.first, it.second) }
+            val pieces = sentences.flatMap { splitLong(input, it.first, it.second, splitPunct) }
             for ((start, end) in merge(pieces)) {
                 out.add(Chunk(input.substring(start, end), start, end))
             }
@@ -68,14 +78,36 @@ object SentenceChunker {
         return out
     }
 
-    private fun splitSentences(input: String, paraStart: Int, paraEnd: Int): List<Pair<Int, Int>> {
+    private fun splitSentences(
+        input: String,
+        paraStart: Int,
+        paraEnd: Int,
+        lang: String,
+    ): List<Pair<Int, Int>> {
         val raw = mutableListOf<Pair<Int, Int>>()
-        val iterator = BreakIterator.getSentenceInstance(Locale.US)
+        val locale = if (lang == "en") Locale.US else Locale.forLanguageTag(lang)
+        val iterator = BreakIterator.getSentenceInstance(locale)
         iterator.setText(input.substring(paraStart, paraEnd))
         var start = iterator.first()
         var end = iterator.next()
         while (end != BreakIterator.DONE) {
-            trimAdd(input, paraStart + start, paraStart + end, raw)
+            if (lang == "fa" || lang == "ar") {
+                // ICU breaks at `.` but not at `؟`/`؛` (probed on the host JVM),
+                // so split those explicitly, keeping the mark with its sentence.
+                var cut = paraStart + start
+                val segEnd = paraStart + end
+                var i = cut
+                while (i < segEnd) {
+                    if (input[i] == '؟' || input[i] == '؛') {
+                        trimAdd(input, cut, i + 1, raw)
+                        cut = i + 1
+                    }
+                    i++
+                }
+                trimAdd(input, cut, segEnd, raw)
+            } else {
+                trimAdd(input, paraStart + start, paraStart + end, raw)
+            }
             start = end
             end = iterator.next()
         }
@@ -86,7 +118,7 @@ object SentenceChunker {
         while (i < raw.size) {
             var (startOffset, endOffset) = raw[i]
             while (i + 1 < raw.size &&
-                shouldGlue(input.substring(startOffset, endOffset), input[raw[i + 1].first])
+                shouldGlue(input.substring(startOffset, endOffset), input[raw[i + 1].first], lang)
             ) {
                 endOffset = raw[i + 1].second
                 i++
@@ -97,16 +129,24 @@ object SentenceChunker {
         return out
     }
 
-    private fun shouldGlue(current: String, nextFirst: Char): Boolean =
-        titleEnd.containsMatchIn(current) ||
-            (abbreviationEnd.containsMatchIn(current) && (nextFirst.isLowerCase() || nextFirst.isDigit()))
+    private fun shouldGlue(current: String, nextFirst: Char, lang: String): Boolean =
+        lang == "en" && (
+            titleEnd.containsMatchIn(current) ||
+                (abbreviationEnd.containsMatchIn(current) && (nextFirst.isLowerCase() || nextFirst.isDigit()))
+            )
 
     /**
-     * Cuts an over-long first sentence: after the last `, ; : —` at offset 25..80
-     * (the chunk keeps the punctuation), else at the last space before 60, else a
-     * hard cut at 60. The rest becomes the start of chunk 2 under the normal rules.
+     * Cuts an over-long first sentence: after the last `, ; : —` (plus `،` for
+     * fa/ar) at offset 25..80 (the chunk keeps the punctuation), else at the last
+     * space before 60, else a hard cut at 60. The rest becomes the start of chunk 2
+     * under the normal rules.
      */
-    private fun cutFirst(input: String, start: Int, end: Int): Pair<Pair<Int, Int>, Pair<Int, Int>> {
+    private fun cutFirst(
+        input: String,
+        start: Int,
+        end: Int,
+        splitPunct: Set<Char>,
+    ): Pair<Pair<Int, Int>, Pair<Int, Int>> {
         val from = start + FIRST_PUNCT_MIN
         val to = minOf(start + FIRST_PUNCT_MAX, end - 1)
         var punct = -1
@@ -128,8 +168,13 @@ object SentenceChunker {
         return (start to trimEnd(input, start, cut)) to (trimStart(input, cut, end) to end)
     }
 
-    /** Splits a sentence over 300 chars at `, ; : —`, else the last space, else hard. */
-    private fun splitLong(input: String, start: Int, end: Int): List<Pair<Int, Int>> {
+    /** Splits a sentence over 300 chars at `, ; : —` (plus `،` for fa/ar), else the last space, else hard. */
+    private fun splitLong(
+        input: String,
+        start: Int,
+        end: Int,
+        splitPunct: Set<Char>,
+    ): List<Pair<Int, Int>> {
         val out = mutableListOf<Pair<Int, Int>>()
         var current = start
         while (end - current > SPLIT_OVER) {

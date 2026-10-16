@@ -317,4 +317,21 @@ class TextSanitizerTest {
             TextSanitizer.sanitize("<p>Photo time pic.x.com/abc.</p>", SourceFormat.HTML),
         )
     }
+
+    @Test
+    fun sanitize_persianMarkdown_keepsLettersZwnjPunctuationAndDigits() {
+        // ZWNJ (U+200C) joins Persian words; it must survive sanitizing.
+        val joined = "می\u200Cخواهم"
+        val input = "# عنوان\n\nاین یک متن **فارسی** است؟ بله، عدد ۱۲۳ است.\n\n$joined بروم."
+        assertEquals(
+            "عنوان.\n\nاین یک متن فارسی است؟ بله، عدد ۱۲۳ است.\n\n$joined بروم.",
+            TextSanitizer.sanitize(input, SourceFormat.MARKDOWN),
+        )
+    }
+
+    @Test
+    fun sanitize_zwj_stillRemoved() {
+        // ZWJ (U+200D) removal stays: it only ever joins emoji.
+        assertEquals("ab", TextSanitizer.sanitize("a\u200Db", SourceFormat.PLAIN))
+    }
 }

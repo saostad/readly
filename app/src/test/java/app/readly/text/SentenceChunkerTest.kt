@@ -165,4 +165,66 @@ class SentenceChunkerTest {
         )
         assertTrue(chunks.none { '\n' in it.text })
     }
+
+    @Test
+    fun chunk_fa_splitsAtQuestionMarkAndPeriod() {
+        val first = "آیا این یک جمله فارسی طولانی برای آزمایش است؟"
+        val second = "این جمله دوم است که کمی طولانی‌تر می‌باشد."
+        val input = "$first $second"
+        val chunks = SentenceChunker.chunk(input, "fa")
+        assertEquals(listOf(first, second), chunks.map { it.text })
+        for (chunk in chunks) {
+            assertEquals(chunk.text, input.substring(chunk.start, chunk.end).trim())
+        }
+    }
+
+    @Test
+    fun chunk_fa_splitsAtSemicolon() {
+        val chunks = SentenceChunker.chunk("او آمد؛ نشست.", "fa")
+        assertEquals(listOf("او آمد؛", "نشست."), chunks.map { it.text })
+    }
+
+    @Test
+    fun chunk_fa_longSentence_splitsAfterArabicComma() {
+        val long = "ا".repeat(289) + "، ب" + "ب".repeat(50) + "."
+        val input = "مقدمه. $long"
+        val chunks = SentenceChunker.chunk(input, "fa")
+        assertEquals(3, chunks.size)
+        assertEquals("مقدمه.", chunks[0].text)
+        assertTrue(chunks[1].text.endsWith("،"))
+        assertTrue(chunks[1].text.length <= 300)
+        assertEquals(long, chunks[1].text + " " + chunks[2].text)
+        for (chunk in chunks) {
+            assertEquals(chunk.text, input.substring(chunk.start, chunk.end).trim())
+        }
+    }
+
+    @Test
+    fun chunk_fa_firstChunk_cutsAfterArabicCommaInWindow() {
+        val first = "ا".repeat(45) + "، " + "ب".repeat(92) + "."
+        assertEquals(140, first.length)
+        val chunks = SentenceChunker.chunk(first, "fa")
+        assertEquals(2, chunks.size)
+        assertEquals("ا".repeat(45) + "،", chunks[0].text)
+        assertEquals(first, chunks[0].text + " " + chunks[1].text)
+        for (chunk in chunks) {
+            assertEquals(chunk.text, first.substring(chunk.start, chunk.end).trim())
+        }
+    }
+
+    @Test
+    fun chunk_abbreviationGlue_appliesOnlyToEnglish() {
+        // Uppercase Z: BreakIterator splits after "Mr." in both locales (it never
+        // splits before lowercase), so only the glue differs. Too long to re-merge.
+        val long = "Z".repeat(250) + "."
+        val input = "Intro here.\n\nMr. $long"
+        assertEquals(
+            listOf("Intro here.", "Mr. $long"),
+            SentenceChunker.chunk(input, "en").map { it.text },
+        )
+        assertEquals(
+            listOf("Intro here.", "Mr.", long),
+            SentenceChunker.chunk(input, "fa").map { it.text },
+        )
+    }
 }
