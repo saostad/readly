@@ -46,6 +46,7 @@ android {
 
 dependencies {
     implementation(libs.commons.compress)
+    implementation(libs.jsoup)
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     testImplementation(libs.junit)
 }

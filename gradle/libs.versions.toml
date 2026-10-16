@@ -2,10 +2,12 @@
 agp = "8.13.2"
 kotlin = "2.2.20"
 commonsCompress = "1.28.0"
+jsoup = "1.23.2"
 junit = "4.13.2"
 
 [libraries]
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonsCompress" }
+jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]

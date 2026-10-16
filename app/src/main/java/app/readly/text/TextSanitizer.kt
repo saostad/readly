@@ -1,0 +1,440 @@
+package app.readly.text
+
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
+import org.jsoup.nodes.Node
+import org.jsoup.nodes.TextNode
+
+/** Input format for [TextSanitizer]. PLAIN gets the same Markdown rules as MARKDOWN. */
+enum class SourceFormat {
+    PLAIN,
+    MARKDOWN,
+    HTML,
+}
+
+/**
+ * Strips everything that must never be spoken (markup, links, code, tags, entities, emoji)
+ * so only readable prose reaches the voice.
+ *
+ * Pure Kotlin (jsoup for HTML). Output is paragraphs separated by `"\n\n"`, single spaces
+ * inside paragraphs, no leading or trailing whitespace.
+ */
+object TextSanitizer {
+
+    fun sanitize(input: String, format: SourceFormat): String {
+        val paras = when (format) {
+            SourceFormat.HTML -> htmlParagraphs(input)
+            SourceFormat.PLAIN, SourceFormat.MARKDOWN -> markdownParagraphs(input)
+        }
+        return paras.mapNotNull { cleanup(it) }.joinToString("\n\n")
+    }
+
+    private data class Para(val text: String, val punctuate: Boolean)
+
+    // ------------------------------------------------------------------
+    // Shared cleanup (all formats)
+    // ------------------------------------------------------------------
+
+    private val bareUrl = Regex("""https?://\S+|www\.\S+""")
+    private val urlTrailingPunct = setOf(')', '.', ',', ';', ':', '!', '?', '"', '\'')
+    private val spaceBeforePunct = Regex("""\s+([,.;:!?])""")
+    private val entity = Regex("""&(amp|lt|gt|quot|apos|nbsp);|&#(\d+);|&#x([0-9a-fA-F]+);""")
+    private val runOfSame = Regex("""(.)\1\1+""")
+    private val symbolToken = Regex("""^[#*_`|~^=+<>]+$""")
+    private val keptSingleSymbol = setOf('*', '=', '+', '<', '>')
+    private const val PUNCT_END = ".!?:;"
+
+    private fun cleanup(para: Para): String? {
+        var text = removeUrls(para.text)
+        text = decodeEntities(text)
+        text = stripEmoji(text)
+        text = runOfSame.replace(text) { m ->
+            if (m.value[0].isLetterOrDigit()) m.value else ""
+        }
+        // Unmatched backticks are markup residue, never prose.
+        text = text.replace("`", "")
+        text = stripSymbolTokens(text).trim()
+        if (text.isEmpty()) return null
+        if (para.punctuate && text.last() !in PUNCT_END) text += "."
+        if (!text.any { it.isLetterOrDigit() }) return null
+        return text
+    }
+
+    private fun removeUrls(text: String): String {
+        var result = bareUrl.replace(text) { m ->
+            var cut = m.value.length
+            while (cut > 0 && m.value[cut - 1] in urlTrailingPunct) cut--
+            m.value.substring(cut)
+        }
+        result = spaceBeforePunct.replace(result, "$1")
+        return result
+    }
+
+    private fun decodeEntities(text: String): String = entity.replace(text) { m ->
+        val named = m.groups[1]?.value
+        if (named != null) {
+            when (named) {
+                "amp" -> "&"
+                "lt" -> "<"
+                "gt" -> ">"
+                "quot" -> "\""
+                "apos" -> "'"
+                else -> " " // nbsp
+            }
+        } else {
+            val code = m.groups[2]?.value?.toIntOrNull()
+                ?: m.groups[3]?.value?.toIntOrNull(16)
+            if (code != null && code in 1..0x10FFFF && (code < 0xD800 || code > 0xDFFF)) {
+                String(Character.toChars(code))
+            } else {
+                ""
+            }
+        }
+    }
+
+    private fun stripEmoji(text: String): String {
+        val out = StringBuilder(text.length)
+        var i = 0
+        while (i < text.length) {
+            val cp = text.codePointAt(i)
+            val type = Character.getType(cp)
+            val drop = type == Character.OTHER_SYMBOL.toInt() ||
+                type == Character.SURROGATE.toInt() ||
+                cp == 0xFE0E || cp == 0xFE0F || cp == 0x200D || cp == 0x20E3 ||
+                cp in 0x1F3FB..0x1F3FF || // skin-tone modifiers
+                cp in 0x1F1E6..0x1F1FF || // regional indicators
+                cp in 0xE0020..0xE007F // tag characters
+            if (!drop) out.appendCodePoint(cp)
+            i += Character.charCount(cp)
+        }
+        return out.toString()
+    }
+
+    private fun stripSymbolTokens(text: String): String = text.split(Regex("""\s+"""))
+        .filter { token ->
+            token.isEmpty() || !symbolToken.matches(token) ||
+                (token.length == 1 && token[0] in keptSingleSymbol)
+        }
+        .joinToString(" ")
+
+    // ------------------------------------------------------------------
+    // Markdown / plain text
+    // ------------------------------------------------------------------
+
+    private val htmlComment = Regex("""<!--.*?-->""", RegexOption.DOT_MATCHES_ALL)
+    private val atx = Regex("""^(#{1,6})\s+(.*)$""")
+    private val atxTrailing = Regex("""\s+#+\s*$""")
+    private val refDef = Regex("""^\[[^\]]+\]:""")
+    private val footnoteDef = Regex("""^\[\^[^\]]*\]:""")
+    private val quoteMarker = Regex("""^\s*(?:>\s?)+""")
+    private val listMarker = Regex("""^\s*(?:[-*+]\s+|\d{1,9}[.)]\s+)""")
+    private val taskBox = Regex("""^\[([ xX])\]\s*""")
+    private val codeSpan = Regex("""`([^`]+)`""")
+    private val codePlaceholder = Regex("\u0000(\\d+)\u0000")
+    private val tag = Regex("""</?[A-Za-z][^>]*>""")
+    private val image = Regex("""!\[([^\]]*)\]\([^)]*\)""")
+    private val link = Regex("""\[([^\]]*)\]\([^)]*\)""")
+    private val refLink = Regex("""\[([^\]]*)\]\[[^\]]*\]""")
+    private val autolink = Regex("""<(?:https?://|www\.)[^<>\s]+>""")
+    private val footnoteRef = Regex("""\[\^[^\]]*\]""")
+    private val boldStar = Regex("""\*\*(.+?)\*\*""")
+    private val boldUnder = Regex("""(?<!\w)__(.+?)__(?!\w)""")
+    private val strike = Regex("""~~(.+?)~~""")
+    private val italStar = Regex("""(?<!\w)\*([^*\n]+?)\*(?!\w)""")
+    private val italUnder = Regex("""(?<!\w)_([^_\n]+?)_(?!\w)""")
+
+    private fun markdownParagraphs(input: String): List<Para> {
+        var text = input.replace("\r\n", "\n").replace('\r', '\n')
+        text = text.removePrefix("\uFEFF")
+        text = stripFrontMatter(text)
+        text = htmlComment.replace(text, "")
+        val paras = mutableListOf<Para>()
+        val current = mutableListOf<String>()
+        fun flush() {
+            if (current.isNotEmpty()) {
+                paras.add(Para(inline(current.joinToString("\n")), punctuate = false))
+                current.clear()
+            }
+        }
+        val lines = text.split("\n")
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+            val stripped = line.trim()
+            if (stripped.isEmpty()) {
+                flush(); i++; continue
+            }
+            val fence = fenceMarker(stripped)
+            if (fence != null) {
+                flush()
+                i = skipFence(lines, i, fence)
+                paras.add(Para("Code block skipped.", punctuate = false))
+                continue
+            }
+            if (stripped.isNotEmpty() && stripped.all { it == '=' }) {
+                if (current.isNotEmpty()) {
+                    paras.add(Para(inline(current.joinToString("\n")), punctuate = true))
+                    current.clear()
+                }
+                i++; continue
+            }
+            if (stripped.isNotEmpty() && stripped.all { it == '-' }) {
+                // Setext level 2 when text precedes it, else a horizontal rule.
+                if (current.isNotEmpty()) {
+                    paras.add(Para(inline(current.joinToString("\n")), punctuate = true))
+                    current.clear()
+                }
+                i++; continue
+            }
+            if (isHorizontalRule(stripped)) {
+                flush(); i++; continue
+            }
+            val heading = atxHeading(stripped)
+            if (heading != null) {
+                flush()
+                if (heading.isNotEmpty()) paras.add(Para(inline(heading), punctuate = true))
+                i++; continue
+            }
+            if (refDef.containsMatchIn(stripped) || footnoteDef.containsMatchIn(stripped)) {
+                i++; continue
+            }
+            var content = line
+            if (quoteMarker.containsMatchIn(line)) {
+                content = quoteMarker.replace(line, "")
+                if (content.trim().isEmpty()) {
+                    flush(); i++; continue
+                }
+                val quoteHeading = atxHeading(content.trim())
+                if (quoteHeading != null) {
+                    flush()
+                    if (quoteHeading.isNotEmpty()) {
+                        paras.add(Para(inline(quoteHeading), punctuate = true))
+                    }
+                    i++; continue
+                }
+            }
+            val item = listItem(content)
+            if (item != null) {
+                flush()
+                if (item.trim().isNotEmpty()) {
+                    paras.add(Para(inline(item.trim()), punctuate = true))
+                }
+                i++; continue
+            }
+            val trimmed = content.trim()
+            if (isTableSeparator(trimmed)) {
+                flush(); i++; continue
+            }
+            if ('|' in trimmed) {
+                flush()
+                paras.add(Para(tableRow(trimmed), punctuate = true))
+                i++; continue
+            }
+            current.add(trimmed)
+            i++
+        }
+        flush()
+        return paras
+    }
+
+    private fun stripFrontMatter(text: String): String {
+        val lines = text.split("\n")
+        if (lines.isEmpty() || lines[0].trim() != "---") return text
+        for (i in 1 until lines.size) {
+            if (lines[i].trim() == "---") return lines.drop(i + 1).joinToString("\n")
+        }
+        return text
+    }
+
+    private fun fenceMarker(stripped: String): Char? = when {
+        stripped.startsWith("```") -> '`'
+        stripped.startsWith("~~~") -> '~'
+        else -> null
+    }
+
+    private fun skipFence(lines: List<String>, from: Int, fence: Char): Int {
+        var i = from + 1
+        while (i < lines.size) {
+            val trimmed = lines[i].trim()
+            if (trimmed.length >= 3 && trimmed.all { it == fence }) return i + 1
+            i++
+        }
+        return i
+    }
+
+    private fun isHorizontalRule(stripped: String): Boolean {
+        val markers = stripped.replace(" ", "").replace("\t", "")
+        return markers.length >= 3 && markers.all { it == markers[0] } && markers[0] in "-*_"
+    }
+
+    private fun atxHeading(stripped: String): String? {
+        val match = atx.matchEntire(stripped) ?: return null
+        return atxTrailing.replace(match.groups[2]!!.value, "").trim()
+    }
+
+    private fun listItem(content: String): String? {
+        if (!listMarker.containsMatchIn(content)) return null
+        return taskBox.replace(listMarker.replace(content, ""), "")
+    }
+
+    private fun isTableSeparator(trimmed: String): Boolean {
+        if ('-' !in trimmed) return false
+        return trimmed.all { it == '|' || it == '-' || it == ':' || it == ' ' || it == '\t' }
+    }
+
+    /** Inline Markdown (links, emphasis, …) with code spans protected from every rule. */
+    private fun inline(text: String): String {
+        val codes = mutableListOf<String>()
+        val masked = codeSpan.replace(text) { m ->
+            codes.add(m.groups[1]!!.value)
+            "\u0000${codes.size - 1}\u0000"
+        }
+        return restoreCodes(structureInline(masked), codes)
+    }
+
+    private fun tableRow(trimmed: String): String {
+        val codes = mutableListOf<String>()
+        val masked = codeSpan.replace(trimmed) { m ->
+            codes.add(m.groups[1]!!.value)
+            "\u0000${codes.size - 1}\u0000"
+        }
+        val joined = masked.split('|').map { it.trim() }.filter { it.isNotEmpty() }
+            .joinToString(", ")
+        return restoreCodes(structureInline(joined), codes)
+    }
+
+    private fun structureInline(text: String): String {
+        var result = tag.replace(text, "")
+        result = image.replace(result, "$1")
+        result = link.replace(result, "$1")
+        result = refLink.replace(result, "$1")
+        result = autolink.replace(result, "")
+        result = footnoteRef.replace(result, "")
+        result = boldStar.replace(result, "$1")
+        result = boldUnder.replace(result, "$1")
+        result = strike.replace(result, "$1")
+        result = italStar.replace(result, "$1")
+        result = italUnder.replace(result, "$1")
+        return result
+    }
+
+    private fun restoreCodes(text: String, codes: List<String>): String =
+        codePlaceholder.replace(text) { m ->
+            codes.getOrNull(m.groups[1]!!.value.toIntOrNull() ?: -1) ?: m.value
+        }
+
+    // ------------------------------------------------------------------
+    // HTML
+    // ------------------------------------------------------------------
+
+    private const val HTML_REMOVE =
+        "script, style, noscript, template, svg, canvas, iframe, " +
+            "nav, header, footer, aside, form, button"
+    private val htmlBlocks = setOf("p", "div", "blockquote", "section", "article")
+    private val htmlHeadings = setOf("h1", "h2", "h3", "h4", "h5", "h6")
+
+    private fun htmlParagraphs(input: String): List<Para> {
+        val doc = Jsoup.parse(input)
+        doc.select(HTML_REMOVE).remove()
+        doc.select("figure > img").remove()
+        doc.select("img").forEach { img ->
+            val alt = img.attr("alt")
+            if (alt.isNotBlank()) img.replaceWith(TextNode(" $alt ")) else img.remove()
+        }
+        val paras = mutableListOf<Para>()
+        val inlineText = StringBuilder()
+        fun flush() {
+            if (inlineText.isNotBlank()) {
+                paras.add(Para(inlineText.toString(), punctuate = false))
+            }
+            inlineText.clear()
+        }
+        collectHtml(doc.body() ?: return paras, paras, inlineText, ::flush)
+        flush()
+        return paras
+    }
+
+    private fun collectHtml(
+        node: Node,
+        paras: MutableList<Para>,
+        inlineText: StringBuilder,
+        flush: () -> Unit,
+    ) {
+        for (child in node.childNodes()) {
+            when (child) {
+                is TextNode -> inlineText.append(child.wholeText)
+                is Element -> when (child.tagName().lowercase()) {
+                    "br", "hr" -> flush()
+                    "pre" -> {
+                        flush()
+                        paras.add(prePara(child))
+                    }
+                    "tr" -> {
+                        flush()
+                        paras.add(tableRowPara(child))
+                    }
+                    "li" -> {
+                        flush()
+                        paras.addAll(listParas(child))
+                    }
+                    in htmlHeadings -> {
+                        flush()
+                        val text = child.text().trim()
+                        if (text.isNotEmpty()) paras.add(Para(text, punctuate = true))
+                    }
+                    "code" -> {
+                        val raw = child.wholeText().trim()
+                        if ('\n' in raw || '\r' in raw) {
+                            flush()
+                            paras.add(Para("Code block skipped.", punctuate = false))
+                        } else {
+                            inlineText.append(child.text())
+                        }
+                    }
+                    in htmlBlocks -> {
+                        flush()
+                        collectHtml(child, paras, inlineText, flush)
+                        flush()
+                    }
+                    else -> collectHtml(child, paras, inlineText, flush)
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    private fun prePara(pre: Element): Para {
+        val raw = pre.wholeText().trim()
+        return if ('\n' in raw || '\r' in raw) {
+            Para("Code block skipped.", punctuate = false)
+        } else {
+            Para(raw, punctuate = false)
+        }
+    }
+
+    private fun tableRowPara(tr: Element): Para {
+        val cells = tr.children()
+            .filter { it.tagName().lowercase() == "td" || it.tagName().lowercase() == "th" }
+            .map { it.text().trim() }
+            .filter { it.isNotEmpty() }
+        return Para(cells.joinToString(", "), punctuate = true)
+    }
+
+    private fun listParas(li: Element): List<Para> {
+        val paras = mutableListOf<Para>()
+        ownListText(li)?.let { paras.add(it) }
+        // select() includes the element itself, so skip it to avoid doubling.
+        for (nested in li.select("li")) {
+            if (nested === li) continue
+            ownListText(nested)?.let { paras.add(it) }
+        }
+        return paras
+    }
+
+    private fun ownListText(li: Element): Para? {
+        val clone = li.clone()
+        clone.select("ul, ol").remove()
+        val own = clone.text().trim()
+        return if (own.isEmpty()) null else Para(own, punctuate = true)
+    }
+}
