@@ -28,6 +28,20 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 For wireless debugging, pair then connect:
 `adb pair <ip:port>` then `adb connect <ip:port>`.
 
+## Updating the voice list
+
+The Piper voices (`app/src/main/assets/piper_voices.json`, every
+`vits-piper-*.tar.bz2` archive in the sherpa-onnx `tts-models` release except
+`-fp16`, which failed to load on-device) are generated from the GitHub API:
+
+```sh
+python3 scripts/gen_piper_catalog.py
+```
+
+It needs network access (the release listing plus `checksum.txt` for the few
+assets uploaded before GitHub tracked digests). Re-run it when new Piper
+voices appear; the Kotlin test `PiperCatalogJsonTest` validates the file.
+
 ## Use
 
 In any app, tap **Share** and choose **Readly**, or select some text and choose

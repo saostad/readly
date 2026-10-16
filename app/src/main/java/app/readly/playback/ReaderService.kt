@@ -94,8 +94,15 @@ class ReaderService : Service() {
          */
         fun activePackId(context: Context): String {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            prefs.getString(KEY_ACTIVE_PACK, null)?.let {
-                if (VoiceCatalog.byId(it) != null) return it
+            prefs.getString(KEY_ACTIVE_PACK, null)?.let { stored ->
+                // Old Piper ids migrate to the generated catalog ids (same install dir).
+                val canonical = VoiceCatalog.resolvePackId(stored)
+                if (VoiceCatalog.byId(canonical) != null) {
+                    if (canonical != stored) {
+                        prefs.edit().putString(KEY_ACTIVE_PACK, canonical).apply()
+                    }
+                    return canonical
+                }
             }
             val base = File(context.noBackupFilesDir, "voices")
             val kokoro = VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!
@@ -124,12 +131,23 @@ class ReaderService : Service() {
                 }
                 prefs.edit().remove(KEY_SPEAKER_ID).apply()
             }
-            return prefs.getInt(speakerKey(packId), 0)
+            val canonical = VoiceCatalog.resolvePackId(packId)
+            if (prefs.contains(speakerKey(canonical))) {
+                return prefs.getInt(speakerKey(canonical), 0)
+            }
+            // A speaker setting stored under an old Piper id moves with the pack.
+            for ((old, target) in VoiceCatalog.PIPER_ALIASES) {
+                if (target == canonical && prefs.contains(speakerKey(old))) {
+                    return prefs.getInt(speakerKey(old), 0)
+                }
+            }
+            return 0
         }
 
         fun setSpeakerId(context: Context, packId: String, id: Int) {
+            val canonical = VoiceCatalog.resolvePackId(packId)
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit().putInt(speakerKey(packId), id).apply()
+                .edit().putInt(speakerKey(canonical), id).apply()
         }
 
         /** Reads [text] aloud. [format] is the [SourceFormat] name (default PLAIN). */

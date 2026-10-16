@@ -250,8 +250,32 @@ object VoiceCatalog {
         ),
     )
 
-    /** The pack with [id], or null when unknown. */
-    fun byId(id: String): VoicePack? = ALL.find { it.id == id }
+    /**
+     * Old hand-written Piper ids → generated ids (round 15). The archives, sizes,
+     * hashes and install dirs are identical, so installed voices keep working.
+     */
+    val PIPER_ALIASES: Map<String, String> = mapOf(
+        "piper-lessac" to "piper-en_US-lessac-medium",
+        "piper-ryan" to "piper-en_US-ryan-medium",
+        "piper-amy" to "piper-en_US-amy-medium",
+        "piper-alba" to "piper-en_GB-alba-medium",
+        "piper-lessac-high" to "piper-en_US-lessac-high",
+        "piper-lessac-compact" to "piper-en_US-lessac-medium-compact",
+    )
+
+    /**
+     * Canonical id for [id]: follows [PIPER_ALIASES] when the target exists in the
+     * catalog, otherwise [id] unchanged.
+     */
+    fun resolvePackId(id: String): String {
+        val target = PIPER_ALIASES[id] ?: return id
+        return if (ALL.any { it.id == target }) target else id
+    }
+
+    /** The pack with [id], following [PIPER_ALIASES]; null when unknown. */
+    fun byId(id: String): VoicePack? =
+        ALL.find { it.id == id }
+            ?: PIPER_ALIASES[id]?.let { target -> ALL.find { it.id == target } }
 
     /** Family cards in display order. */
     val FAMILIES: List<VoiceFamilyInfo> = listOf(
