@@ -102,4 +102,11 @@
     <string name="system_voice_automatic">Automatic (fastest voice for each language)</string>
     <string name="system_voice_settings_button">Open phone text-to-speech settings</string>
     <string name="tts_settings_path">Settings → System → Languages → Text-to-speech output</string>
+    <string name="phone_voice_title">Phone voice</string>
+    <string name="phone_voice_make_button">Make Readly your phone\'s voice</string>
+    <string name="phone_voice_change_button">Change</string>
+    <string name="phone_voice_help_other">Make Readly your phone\'s voice so TalkBack, Maps and other apps read with your Readly voices.</string>
+    <string name="phone_voice_help_ours">Apps that read aloud use your System voice setting (Change voice pack → System voice).</string>
+    <string name="phone_voice_toast">Tap Preferred engine, then choose Readly.</string>
+    <string name="phone_voice_fallback_toast">Open System → Languages → Text-to-speech output → Preferred engine → Readly.</string>
 </resources>

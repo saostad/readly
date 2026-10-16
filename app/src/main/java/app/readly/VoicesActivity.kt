@@ -2,12 +2,9 @@ package app.readly
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Typeface
 import android.os.Bundle
-import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
 import android.view.View
@@ -692,12 +689,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
     }
 
     private fun openTtsSettings() {
-        try {
-            startActivity(Intent("com.android.settings.TTS_SETTINGS"))
-        } catch (_: ActivityNotFoundException) {
-            startActivity(Intent(Settings.ACTION_SETTINGS))
-            Toast.makeText(this, R.string.tts_settings_path, Toast.LENGTH_LONG).show()
-        }
+        PhoneVoiceSettings.open(this, null, getString(R.string.tts_settings_path))
     }
 
     private fun refreshStorage() {

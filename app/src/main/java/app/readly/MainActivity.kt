@@ -7,6 +7,7 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.widget.AdapterView
@@ -95,6 +96,10 @@ class MainActivity : Activity(), InstallTask.Listener {
     private var speakerTouched = false
     private lateinit var smartSwitch: Switch
     private lateinit var autoDownloadSwitch: Switch
+    private lateinit var phoneVoiceText: TextView
+    private lateinit var phoneVoiceHelp: TextView
+    private lateinit var phoneVoiceButton: Button
+    private lateinit var phoneVoiceChange: Button
     private lateinit var speedLabel: TextView
     private lateinit var speedSeek: SeekBar
 
@@ -155,6 +160,10 @@ class MainActivity : Activity(), InstallTask.Listener {
         singleVoiceNote = findViewById(R.id.singleVoiceNote)
         smartSwitch = findViewById(R.id.smartSwitch)
         autoDownloadSwitch = findViewById(R.id.autoDownloadSwitch)
+        phoneVoiceText = findViewById(R.id.phoneVoiceText)
+        phoneVoiceHelp = findViewById(R.id.phoneVoiceHelp)
+        phoneVoiceButton = findViewById(R.id.phoneVoiceButton)
+        phoneVoiceChange = findViewById(R.id.phoneVoiceChange)
         speedLabel = findViewById(R.id.speedLabel)
         speedSeek = findViewById(R.id.speedSeek)
         defaultTextColor = statusLine.currentTextColor
@@ -194,6 +203,16 @@ class MainActivity : Activity(), InstallTask.Listener {
         setupVoiceSpinner()
         updatePersianLine()
         setupSmartSwitches()
+        phoneVoiceButton.setOnClickListener {
+            PhoneVoiceSettings.open(
+                this,
+                getString(R.string.phone_voice_toast),
+                getString(R.string.phone_voice_fallback_toast),
+            )
+        }
+        phoneVoiceChange.setOnClickListener {
+            PhoneVoiceSettings.open(this, null, getString(R.string.phone_voice_fallback_toast))
+        }
         setupSpeedSeek()
 
         if (store.isInstalled()) {
@@ -254,6 +273,49 @@ class MainActivity : Activity(), InstallTask.Listener {
             ReaderService.preload(this)
         }
         updateNotifRow()
+        updatePhoneVoice()
+    }
+
+    /**
+     * Shows which engine is the phone's default TTS voice. The views live in
+     * the reader container, so setup never shows them.
+     */
+    private fun updatePhoneVoice() {
+        val defaultEngine: String? = try {
+            Settings.Secure.getString(contentResolver, Settings.Secure.TTS_DEFAULT_SYNTH)
+        } catch (e: Exception) {
+            Log.w("Readly", "Couldn't read the default TTS engine setting", e)
+            null
+        }
+        val label = if (defaultEngine != null && defaultEngine != packageName) {
+            try {
+                val info = if (Build.VERSION.SDK_INT >= 33) {
+                    packageManager.getApplicationInfo(
+                        defaultEngine,
+                        PackageManager.ApplicationInfoFlags.of(0),
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.getApplicationInfo(defaultEngine, 0)
+                }
+                packageManager.getApplicationLabel(info).toString()
+            } catch (e: Exception) {
+                Log.w("Readly", "Couldn't resolve the TTS engine label for $defaultEngine", e)
+                defaultEngine
+            }
+        } else {
+            ""
+        }
+        phoneVoiceText.text = PhoneVoiceSettings.statusText(defaultEngine, packageName, label)
+        if (defaultEngine == packageName) {
+            phoneVoiceHelp.setText(R.string.phone_voice_help_ours)
+            phoneVoiceButton.visibility = View.GONE
+            phoneVoiceChange.visibility = View.VISIBLE
+        } else {
+            phoneVoiceHelp.setText(R.string.phone_voice_help_other)
+            phoneVoiceButton.visibility = View.VISIBLE
+            phoneVoiceChange.visibility = View.GONE
+        }
     }
 
     /**
