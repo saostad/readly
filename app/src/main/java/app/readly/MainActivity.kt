@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -81,6 +82,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var voiceChip: Button
     private lateinit var speedChip: Button
     private lateinit var autoChip: Button
+    private lateinit var tipSection: TextView
     private lateinit var tipCard: LinearLayout
     private lateinit var tipSetup: Button
     private lateinit var needVoiceBanner: TextView
@@ -126,6 +128,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         voiceChip = findViewById(R.id.voiceChip)
         speedChip = findViewById(R.id.speedChip)
         autoChip = findViewById(R.id.autoChip)
+        tipSection = findViewById(R.id.tipSection)
         tipCard = findViewById(R.id.tipCard)
         tipSetup = findViewById(R.id.tipSetup)
         miniBar = findViewById(R.id.miniBar)
@@ -245,11 +248,14 @@ class MainActivity : Activity(), InstallTask.Listener {
 
     /**
      * Shows the phone-voice tip card unless Readly is already the default. The
-     * views live in the reader container, so setup never shows them.
+     * section label hides with the card, so it never stands alone. The views
+     * live in the reader container, so setup never shows them.
      */
     private fun updateTip() {
-        tipCard.visibility =
+        val visibility =
             if (PhoneVoiceSettings.status(this).isOurs) View.GONE else View.VISIBLE
+        tipSection.visibility = visibility
+        tipCard.visibility = visibility
     }
 
     /**
@@ -388,12 +394,16 @@ class MainActivity : Activity(), InstallTask.Listener {
             String.format(Locale.US, "%.1f", speed),
         )
         val smartOn = prefs.getBoolean(ReaderService.KEY_SMART_VOICE, true)
-        autoChip.setCompoundDrawablesWithIntrinsicBounds(
-            if (smartOn) R.drawable.ic_check else 0,
-            0,
-            0,
-            0,
-        )
+        if (smartOn) {
+            // Drawable and tint are both set here: the XML tint alone left the
+            // icon invisible on the device (round 21).
+            autoChip.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_check, 0, 0, 0)
+            autoChip.compoundDrawableTintList = ColorStateList.valueOf(getColor(R.color.accent))
+            autoChip.setTextColor(getColorStateList(R.color.chip_text))
+        } else {
+            autoChip.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
+            autoChip.setTextColor(getColor(R.color.text3))
+        }
     }
 
     /** The reading notices render as one dismissible card above the voice chips. */
