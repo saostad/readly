@@ -42,4 +42,5 @@
     <string name="notif_note">Allow notifications so you can pause and skip from the notification shade and lock screen.</string>
     <string name="notif_note_denied">Allow notifications so you can pause and skip from the notification shade and lock screen. Reading still works without them.</string>
     <string name="allow_button">Allow</string>
+    <string name="need_voice_banner">Download the voice first, then share again.</string>
 </resources>

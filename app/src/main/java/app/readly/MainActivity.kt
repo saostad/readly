@@ -66,6 +66,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var nowProgress: TextView
     private lateinit var statusLine: TextView
     private lateinit var speedLine: TextView
+    private lateinit var noticeText: TextView
+    private lateinit var needVoiceBanner: TextView
     private lateinit var prevButton: Button
     private lateinit var pausePlayButton: Button
     private lateinit var nextButton: Button
@@ -108,6 +110,11 @@ class MainActivity : Activity(), InstallTask.Listener {
         nowProgress = findViewById(R.id.nowProgress)
         statusLine = findViewById(R.id.statusLine)
         speedLine = findViewById(R.id.speedLine)
+        noticeText = findViewById(R.id.noticeText)
+        needVoiceBanner = findViewById(R.id.needVoiceBanner)
+        if (intent?.getBooleanExtra(EXTRA_NEED_VOICE, false) == true) {
+            needVoiceBanner.visibility = View.VISIBLE
+        }
         prevButton = findViewById(R.id.prevButton)
         pausePlayButton = findViewById(R.id.pausePlayButton)
         nextButton = findViewById(R.id.nextButton)
@@ -313,6 +320,12 @@ class MainActivity : Activity(), InstallTask.Listener {
         } else {
             speedLine.visibility = View.GONE
         }
+        if (!snap.notice.isNullOrBlank()) {
+            noticeText.visibility = View.VISIBLE
+            noticeText.text = snap.notice
+        } else {
+            noticeText.visibility = View.GONE
+        }
         pausePlayButton.setText(
             if (snap.status == ReaderStatus.PAUSED) R.string.play_button else R.string.pause_button,
         )
@@ -440,5 +453,8 @@ class MainActivity : Activity(), InstallTask.Listener {
 
     companion object {
         private const val NOTIF_REQUEST = 1
+
+        /** Boolean extra: a share arrived before the voice was installed. */
+        const val EXTRA_NEED_VOICE = "needVoice"
     }
 }

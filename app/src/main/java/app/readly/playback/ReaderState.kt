@@ -24,6 +24,8 @@ data class ReaderSnapshot(
     val errorMessage: String? = null,
     /** synthesis ms / audio ms of the last chunk (0 when unknown). Lower is faster. */
     val lastRtf: Double = 0.0,
+    /** One-shot note about the current reading (e.g. whole-page fallback), if any. */
+    val notice: String? = null,
 )
 
 /**

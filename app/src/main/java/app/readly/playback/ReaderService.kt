@@ -27,6 +27,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
 import app.readly.MainActivity
+import app.readly.input.ArticleFetcher
 import app.readly.model.VoiceModelStore
 import app.readly.text.Chunk
 import app.readly.text.SentenceChunker
@@ -35,6 +36,7 @@ import app.readly.text.TextSanitizer
 import app.readly.tts.KokoroEngine
 import java.io.File
 import java.io.IOException
+import java.net.URI
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -62,10 +64,13 @@ class ReaderService : Service() {
         const val ACTION_NEXT = "app.readly.NEXT"
         const val ACTION_PREVIOUS = "app.readly.PREVIOUS"
         const val ACTION_STOP = "app.readly.STOP"
+        const val ACTION_READ_URL = "app.readly.READ_URL"
 
         const val EXTRA_TEXT = "text"
         const val EXTRA_TITLE = "title"
         const val EXTRA_FORMAT = "format"
+        const val EXTRA_URL = "url"
+        const val EXTRA_TITLE_HINT = "titleHint"
 
         const val PREFS_NAME = "settings"
         const val KEY_SPEAKER_ID = "speakerId"
@@ -88,6 +93,16 @@ class ReaderService : Service() {
          */
         @Volatile
         var engineLoaded = false
+
+        /** Fetches [url] in the service, then reads the extracted article aloud. */
+        fun readUrl(context: Context, url: String, titleHint: String?) {
+            context.startForegroundService(
+                Intent(context, ReaderService::class.java)
+                    .setAction(ACTION_READ_URL)
+                    .putExtra(EXTRA_URL, url)
+                    .putExtra(EXTRA_TITLE_HINT, titleHint),
+            )
+        }
 
         /** Loads the voice in the background so the next READ starts instantly. */
         fun preload(context: Context) {
@@ -227,6 +242,10 @@ class ReaderService : Service() {
                 intent.getStringExtra(EXTRA_TITLE) ?: "",
                 intent.getStringExtra(EXTRA_FORMAT) ?: SourceFormat.PLAIN.name,
             )
+            ACTION_READ_URL -> handleReadUrl(
+                intent.getStringExtra(EXTRA_URL) ?: "",
+                intent.getStringExtra(EXTRA_TITLE_HINT),
+            )
             ACTION_PRELOAD -> readerExecutor.execute(::preloadEngine)
             ACTION_TOGGLE -> toggleReading()
             ACTION_PAUSE -> pauseReading()
@@ -302,36 +321,92 @@ class ReaderService : Service() {
                     postError(e)
                     return@execute
                 }
-                stopPipeline()
-                val clean = TextSanitizer.sanitize(text, format)
-                val chunks = SentenceChunker.chunk(clean)
-                if (chunks.isEmpty()) {
-                    val message =
-                        "Nothing to read: the text was empty after removing formatting, " +
-                        "links and symbols."
-                    Log.w("Readly", "READ produced no chunks (${text.length} chars in)")
-                    ReaderState.update {
-                        it.copy(
-                            status = ReaderStatus.ERROR,
-                            title = title,
-                            currentText = "",
-                            index = 0,
-                            total = 0,
-                            errorMessage = message,
-                        )
-                    }
-                    mainHandler.post {
-                        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-                    }
-                    updateNotification()
-                    goIdle()
-                    return@execute
-                }
-                startPipeline(chunks, title, 0)
+                startReading(title, text, format, notice = null)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
             } catch (e: Exception) {
                 postError(e)
+            }
+        }
+    }
+
+    private fun handleReadUrl(url: String, titleHint: String?) {
+        readerExecutor.execute {
+            try {
+                stopPipeline()
+                val host = try {
+                    URI(url).host ?: url
+                } catch (_: Exception) {
+                    url
+                }
+                ensureForeground()
+                ReaderState.update {
+                    it.copy(
+                        status = ReaderStatus.LOADING_VOICE,
+                        title = titleHint.orEmpty(),
+                        currentText = "Opening $host…",
+                        index = 0,
+                        total = 0,
+                        errorMessage = null,
+                        notice = null,
+                    )
+                }
+                updateNotification()
+                val doc = ArticleFetcher(ArticleFetcher::httpUrlOpener).fetch(url)
+                // Articles bring their own title; fetched text/markdown falls back
+                // to the shared headline when there is one.
+                val title = if (doc.format == SourceFormat.HTML) {
+                    doc.title
+                } else {
+                    titleHint?.takeIf { it.isNotBlank() } ?: doc.title
+                }
+                startReading(title, doc.text, doc.format, doc.notice)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (e: Exception) {
+                postError(e)
+            }
+        }
+    }
+
+    /**
+     * Sanitizes [text], chunks it and starts the pipeline, replacing any current
+     * reading. Runs on `readly-read`. [notice] is shown on the main screen and
+     * Toasted once reading starts.
+     */
+    private fun startReading(title: String, text: String, format: SourceFormat, notice: String?) {
+        stopPipeline()
+        ReaderState.update { it.copy(notice = null) }
+        val clean = TextSanitizer.sanitize(text, format)
+        val chunks = SentenceChunker.chunk(clean)
+        if (chunks.isEmpty()) {
+            val message =
+                "Nothing to read: the text was empty after removing formatting, " +
+                "links and symbols."
+            Log.w("Readly", "READ produced no chunks (${text.length} chars in)")
+            ReaderState.update {
+                it.copy(
+                    status = ReaderStatus.ERROR,
+                    title = title,
+                    currentText = "",
+                    index = 0,
+                    total = 0,
+                    errorMessage = message,
+                    notice = null,
+                )
+            }
+            mainHandler.post {
+                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            }
+            updateNotification()
+            goIdle()
+            return
+        }
+        startPipeline(chunks, title, 0)
+        if (notice != null) {
+            ReaderState.update { it.copy(notice = notice) }
+            mainHandler.post {
+                Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -420,6 +495,7 @@ class ReaderService : Service() {
                         index = 0,
                         total = 0,
                         errorMessage = null,
+                        notice = null,
                     )
                 }
                 updateNotification()

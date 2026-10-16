@@ -9,6 +9,15 @@
         android:orientation="vertical"
         android:padding="24dp">
 
+        <TextView
+            android:id="@+id/needVoiceBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:text="@string/need_voice_banner"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
         <LinearLayout
             android:id="@+id/setupContainer"
             android:layout_width="match_parent"
@@ -207,6 +216,14 @@
                     android:id="@+id/speedLine"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:textAppearance="?android:attr/textAppearanceSmall"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/noticeText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
                     android:textAppearance="?android:attr/textAppearanceSmall"
                     android:visibility="gone" />
 
