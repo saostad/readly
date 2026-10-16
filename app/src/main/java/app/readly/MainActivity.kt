@@ -248,9 +248,9 @@ class MainActivity : Activity(), InstallTask.Listener {
     }
 
     private fun setupSpeedSeek() {
-        updateSpeedLabel(progressToSpeed(speedSeek.progress))
-        speedSeek.progress =
-            speedToProgress(prefs.getFloat(ReaderService.KEY_SPEED, 1.0f))
+        val speed = prefs.getFloat(ReaderService.KEY_SPEED, 1.0f)
+        speedSeek.progress = speedToProgress(speed)
+        updateSpeedLabel(speed)
         speedSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
                 val speed = progressToSpeed(progress)
