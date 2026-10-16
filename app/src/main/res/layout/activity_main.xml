@@ -35,8 +35,7 @@
                 android:id="@+id/body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/setup_body" />
+                android:layout_marginTop="8dp" />
 
             <TextView
                 android:id="@+id/migrationNote"
@@ -50,8 +49,7 @@
                 android:id="@+id/downloadButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/download_button" />
+                android:layout_marginTop="16dp" />
 
             <TextView
                 android:id="@+id/downloadHelp"
@@ -288,6 +286,12 @@
                 android:layout_marginTop="16dp"
                 android:text="@string/voice_section"
                 android:textAppearance="?android:attr/textAppearanceMedium" />
+
+            <TextView
+                android:id="@+id/voicePackLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" />
 
             <Spinner
                 android:id="@+id/voiceSpinner"

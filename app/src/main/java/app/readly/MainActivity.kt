@@ -19,7 +19,6 @@ import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import app.readly.model.InstallStage
-import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
 import app.readly.playback.ReaderService
 import app.readly.playback.ReaderSnapshot
@@ -73,6 +72,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var pausePlayButton: Button
     private lateinit var nextButton: Button
     private lateinit var stopButton: Button
+    private lateinit var voicePackLabel: TextView
     private lateinit var voiceSpinner: Spinner
     private lateinit var speedLabel: TextView
     private lateinit var speedSeek: SeekBar
@@ -121,14 +121,18 @@ class MainActivity : Activity(), InstallTask.Listener {
         pausePlayButton = findViewById(R.id.pausePlayButton)
         nextButton = findViewById(R.id.nextButton)
         stopButton = findViewById(R.id.stopButton)
+        voicePackLabel = findViewById(R.id.voicePackLabel)
         voiceSpinner = findViewById(R.id.voiceSpinner)
         speedLabel = findViewById(R.id.speedLabel)
         speedSeek = findViewById(R.id.speedSeek)
         defaultTextColor = statusLine.currentTextColor
 
-        val pack = VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!
+        val pack = ReaderService.activePack(this)
         store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
         prefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
+        body.text = getString(R.string.setup_body, pack.displayName, pack.sizeMb)
+        downloadButton.text = getString(R.string.download_button, pack.sizeMb)
+        voicePackLabel.text = getString(R.string.voice_pack_format, pack.displayName)
 
         downloadButton.setOnClickListener { startInstall() }
         retryButton.setOnClickListener { startInstall() }
@@ -229,12 +233,12 @@ class MainActivity : Activity(), InstallTask.Listener {
     }
 
     private fun setupVoiceSpinner() {
-        val names = store.pack.speakers
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, names)
+        val pack = store.pack
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, pack.speakers)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         voiceSpinner.adapter = adapter
         voiceSpinner.setSelection(
-            prefs.getInt(ReaderService.KEY_SPEAKER_ID, 0).coerceIn(names.indices),
+            ReaderService.speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices),
         )
         voiceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(
@@ -243,7 +247,7 @@ class MainActivity : Activity(), InstallTask.Listener {
                 position: Int,
                 id: Long,
             ) {
-                prefs.edit().putInt(ReaderService.KEY_SPEAKER_ID, position).apply()
+                ReaderService.setSpeakerId(this@MainActivity, pack.id, position)
             }
 
             override fun onNothingSelected(parent: AdapterView<*>) = Unit

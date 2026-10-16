@@ -3,9 +3,9 @@
     <string name="app_name">Readly</string>
 
     <string name="setup_title">One-time voice download</string>
-    <string name="setup_body">Readly reads aloud with Kokoro, a natural-sounding voice that runs entirely on your phone. It needs a one-time 320 MB download. After that, reading works offline and nothing you read leaves your device. Setup takes about 3 minutes on Wi-Fi.</string>
+    <string name="setup_body">Readly reads aloud with %1$s, a natural-sounding voice that runs entirely on your phone. It needs a one-time %2$d MB download. After that, reading works offline and nothing you read leaves your device.</string>
     <string name="migration_note">Readly now uses a faster version of the voice. The old one (103 MB) is removed after this download.</string>
-    <string name="download_button">Download voice (320 MB)</string>
+    <string name="download_button">Download voice (%1$d MB)</string>
     <string name="download_help">Starts the one-time download. Afterwards reading works offline.</string>
     <string name="progress_desc">Voice download progress</string>
     <string name="downloading_format">Downloading and unpacking… %1$d of %2$d MB</string>
@@ -33,6 +33,7 @@
     <string name="speed_fast_format">This phone makes speech %1$s× faster than it plays.</string>
     <string name="speed_slow_format">This phone makes speech slower than it plays (%1$s×), so you may hear short gaps between sentences.</string>
     <string name="voice_section">Voice</string>
+    <string name="voice_pack_format">Voice pack: %1$s</string>
     <string name="voice_help">Who reads to you. Changes apply from the next sentence.</string>
     <string name="speed_section">Speed</string>
     <string name="speed_label_format">Speed: %1$s×</string>

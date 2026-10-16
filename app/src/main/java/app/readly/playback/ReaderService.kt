@@ -30,6 +30,7 @@ import app.readly.MainActivity
 import app.readly.input.ArticleFetcher
 import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
+import app.readly.model.VoicePack
 import app.readly.text.Chunk
 import app.readly.text.SentenceChunker
 import app.readly.text.SourceFormat
@@ -77,8 +78,59 @@ class ReaderService : Service() {
         const val EXTRA_TITLE_HINT = "titleHint"
 
         const val PREFS_NAME = "settings"
+        const val KEY_ACTIVE_PACK = "activePackId"
+
+        /** Legacy single speaker key; migrated to [speakerKey] once (see [speakerIdFor]). */
         const val KEY_SPEAKER_ID = "speakerId"
         const val KEY_SPEED = "speed"
+
+        /** Per-pack speaker key. */
+        fun speakerKey(packId: String): String = "speakerId.$packId"
+
+        /**
+         * The active voice pack id. When unset: an existing Kokoro install keeps
+         * working (no re-download); otherwise the catalog default. Persisted on
+         * first use.
+         */
+        fun activePackId(context: Context): String {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.getString(KEY_ACTIVE_PACK, null)?.let {
+                if (VoiceCatalog.byId(it) != null) return it
+            }
+            val base = File(context.noBackupFilesDir, "voices")
+            val kokoro = VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!
+            val id =
+                if (VoiceModelStore.isPackInstalled(base, kokoro)) kokoro.id
+                else VoiceCatalog.DEFAULT_ID
+            prefs.edit().putString(KEY_ACTIVE_PACK, id).apply()
+            return id
+        }
+
+        /** The active [VoicePack]. */
+        fun activePack(context: Context): VoicePack =
+            VoiceCatalog.byId(activePackId(context))!!
+
+        /**
+         * Speaker id for [packId], migrating the legacy `speakerId` setting to
+         * `speakerId.kokoro-en` the first time it is read.
+         */
+        fun speakerIdFor(context: Context, packId: String): Int {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            if (prefs.contains(KEY_SPEAKER_ID)) {
+                val old = prefs.getInt(KEY_SPEAKER_ID, 0)
+                val kokoroKey = speakerKey(VoiceCatalog.KOKORO_ID)
+                if (!prefs.contains(kokoroKey)) {
+                    prefs.edit().putInt(kokoroKey, old).apply()
+                }
+                prefs.edit().remove(KEY_SPEAKER_ID).apply()
+            }
+            return prefs.getInt(speakerKey(packId), 0)
+        }
+
+        fun setSpeakerId(context: Context, packId: String, id: Int) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putInt(speakerKey(packId), id).apply()
+        }
 
         /** Reads [text] aloud. [format] is the [SourceFormat] name (default PLAIN). */
         fun read(context: Context, text: String, title: String, format: SourceFormat) {
@@ -98,6 +150,10 @@ class ReaderService : Service() {
         @Volatile
         var engineLoaded = false
 
+        /** Pack id of the loaded engine, or null when no engine is loaded. */
+        @Volatile
+        var enginePackId: String? = null
+
         /** Fetches [url] in the service, then reads the extracted article aloud. */
         fun readUrl(context: Context, url: String, titleHint: String?) {
             context.startForegroundService(
@@ -110,7 +166,7 @@ class ReaderService : Service() {
 
         /** Loads the voice in the background so the next READ starts instantly. */
         fun preload(context: Context) {
-            if (engineLoaded) return
+            if (engineLoaded && enginePackId == activePackId(context)) return
             context.startForegroundService(
                 Intent(context, ReaderService::class.java).setAction(ACTION_PRELOAD),
             )
@@ -127,7 +183,6 @@ class ReaderService : Service() {
     private lateinit var ttsThread: HandlerThread
     private lateinit var ttsHandler: Handler
     private lateinit var readerExecutor: ExecutorService
-    private lateinit var store: VoiceModelStore
     private lateinit var notificationManager: NotificationManager
     private lateinit var audioManager: AudioManager
     private lateinit var mediaSession: MediaSession
@@ -224,8 +279,6 @@ class ReaderService : Service() {
         ttsThread = HandlerThread("readly-tts").also { it.start() }
         ttsHandler = Handler(ttsThread.looper)
         readerExecutor = Executors.newSingleThreadExecutor { Thread(it, "readly-read") }
-        val pack = VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!
-        store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
         notificationManager = getSystemService(NotificationManager::class.java)
         notificationManager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Reading aloud", NotificationManager.IMPORTANCE_LOW),
@@ -301,6 +354,7 @@ class ReaderService : Service() {
                     }
                     engine = null
                     engineLoaded = false
+                    enginePackId = null
                 },
                 timeoutMs = 10_000,
             )
@@ -468,7 +522,8 @@ class ReaderService : Service() {
      */
     private fun preloadEngine() {
         try {
-            if (engine != null || destroyed) return
+            if (destroyed) return
+            if (engine != null && enginePackId == activePackId(this)) return
             try {
                 ensureEngineOrThrow()
             } catch (e: InterruptedException) {
@@ -484,9 +539,8 @@ class ReaderService : Service() {
             // on the READ path, where it would add latency before the real first
             // chunk. A request landing mid-warm-up aborts it via the 0/1 callback.
             val eng = engine ?: return
-            val warmSpeaker = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getInt(KEY_SPEAKER_ID, 0)
-                .coerceIn(0, store.pack.speakers.size - 1)
+            val pack = activePack(this)
+            val warmSpeaker = speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
             try {
                 val warmStart = SystemClock.elapsedRealtime()
                 eng.synthesize(
@@ -598,26 +652,46 @@ class ReaderService : Service() {
     // ------------------------------------------------------------------
 
     /**
-     * Returns the loaded engine, loading it on `readly-tts` first. Throws on load
-     * failure (callers report via [postError] after settling their request); inline
-     * when already on `readly-tts`, otherwise waits FIFO behind any queued preload.
-     * Must not be called on the main thread (it blocks).
+     * Returns the loaded engine, loading it on `readly-tts` first. When the active
+     * pack differs from the loaded one, the old engine is closed on `readly-tts`
+     * and the new one loads on this READ/PRELOAD. Throws on load failure (callers
+     * report via [postError] after settling their request); inline when already on
+     * `readly-tts`, otherwise waits FIFO behind any queued preload. Must not be
+     * called on the main thread (it blocks).
      */
     private fun ensureEngineOrThrow(): SpeechEngine {
-        engine?.let { return it }
+        engine?.let { if (enginePackId == activePackId(this)) return it }
         // A fetch shows FETCHING until the engine load actually starts; only then
         // does the status become LOADING_VOICE.
         ReaderState.update { it.copy(status = ReaderStatus.LOADING_VOICE, errorMessage = null) }
         updateNotification()
         return runOnTtsThreadAndWait({
+            // Re-read inside: the setting may have changed while this was queued.
+            val current = activePackId(this)
+            if (engine != null && enginePackId != current) {
+                try {
+                    engine?.close()
+                } catch (e: Exception) {
+                    Log.w("Readly", "Closing the old voice failed", e)
+                }
+                engine = null
+                engineLoaded = false
+                enginePackId = null
+            }
             if (engine == null) {
-                engine = SpeechEngine(store)
+                val pack = VoiceCatalog.byId(current)!!
+                engine = SpeechEngine(
+                    VoiceModelStore(pack, voicesDir(), VoiceModelStore::httpUrlOpener),
+                )
+                enginePackId = current
                 engineRate = engine!!.sampleRate
                 engineLoaded = true
             }
             engine!!
         })!!
     }
+
+    private fun voicesDir(): File = File(noBackupFilesDir, "voices")
 
     /**
      * Starts playback. [onRequestDone] settles the originating READ/READ_URL request
@@ -745,10 +819,10 @@ class ReaderService : Service() {
      * call itself runs on `readly-tts`.
      */
     private fun synthChunk(text: String, isStopped: () -> Boolean): FloatArray {
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val speakerId = prefs.getInt(KEY_SPEAKER_ID, 0)
-            .coerceIn(0, store.pack.speakers.size - 1)
-        val speed = prefs.getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
+        val pack = activePack(this)
+        val speakerId = speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
+        val speed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
         val begin = SystemClock.elapsedRealtime()
         val audio = runOnTtsThreadAndWait({ engine!!.synthesize(text, speakerId, speed, isStopped) })
             ?: return FloatArray(0)
