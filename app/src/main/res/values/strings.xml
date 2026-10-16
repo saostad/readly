@@ -54,6 +54,8 @@
     <string name="voice_label">Voice:</string>
     <string name="sample_button">▶ Sample</string>
     <string name="stop_sample_button">■ Stop</string>
+    <string name="sample_loading">Loading…</string>
+    <string name="language_label">Language:</string>
     <string name="use_button">Use</string>
     <string name="in_use_badge">✓ In use</string>
     <string name="download_variant_format">Download %1$d MB</string>

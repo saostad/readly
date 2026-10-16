@@ -15,6 +15,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -24,7 +25,13 @@ class VoiceModelStoreTest {
     @get:Rule
     val temp = TemporaryFolder()
 
-    private val kokoro = VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!
+    private lateinit var kokoro: VoicePack
+
+    @Before
+    fun loadCatalog() {
+        TestVoices.loadCatalog()
+        kokoro = VoiceCatalog.byId(VoiceCatalog.KOKORO_ID)!!
+    }
 
     private val piperTestPack = VoicePack(
         id = "test-piper",
@@ -304,7 +311,7 @@ class VoiceModelStoreTest {
         touch(base, "sherpa-onnx-supertonic-tts-int8-2026-03-06/tts.json")
 
         assertEquals(
-            listOf("kokoro-en", "piper-lessac"),
+            listOf("kokoro-en", "piper-en_US-lessac-medium"),
             VoiceModelStore.installedIds(base),
         )
     }

@@ -44,6 +44,38 @@ class SamplePlayer {
         }
     }
 
+    /**
+     * Stops any current clip, then streams [url] (a generated Piper pack's official
+     * sample). Returns null once preparing starts; [onPrepared] runs when playback
+     * begins (callers show "Loading…" until then), async failures go to
+     * [onAsyncError], [onDone] runs on completion.
+     */
+    fun playUrl(
+        url: String,
+        onPrepared: () -> Unit,
+        onDone: () -> Unit,
+        onAsyncError: (String) -> Unit,
+    ): String? {
+        stop()
+        return try {
+            val mp = MediaPlayer()
+            player = mp
+            mp.setOnPreparedListener { it.start(); onPrepared() }
+            mp.setOnCompletionListener { stop(); onDone() }
+            mp.setOnErrorListener { _, what, extra ->
+                stop()
+                onAsyncError("MediaPlayer error $what,$extra")
+                true
+            }
+            mp.setDataSource(url)
+            mp.prepareAsync()
+            null
+        } catch (e: Exception) {
+            stop()
+            "${e.javaClass.name}: ${e.message}"
+        }
+    }
+
     fun stop() {
         val mp = player
         player = null

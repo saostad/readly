@@ -21,6 +21,7 @@ import android.widget.TextView
 import android.widget.Toast
 import app.readly.model.InstallStage
 import app.readly.model.VoiceCatalog
+import app.readly.model.VoiceFamily
 import app.readly.model.VoiceModelStore
 import app.readly.playback.ReaderService
 import app.readly.playback.ReaderSnapshot
@@ -44,6 +45,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private var lastSetupError: Exception? = null
     private val setupSamples = SamplePlayer()
     private var setupPlaying = false
+    private var setupLoading = false
 
     private lateinit var setupContainer: LinearLayout
     private lateinit var readerContainer: LinearLayout
@@ -208,6 +210,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         ReaderState.removeListener(readerListener)
         setupSamples.release()
         setupPlaying = false
+        setupLoading = false
         super.onStop()
     }
 
@@ -487,10 +490,17 @@ class MainActivity : Activity(), InstallTask.Listener {
         showError()
     }
 
-    /** Setup voice name from the family card title + variant (e.g. "Supertonic v2"). */
+    /**
+     * Setup voice name from the family card title + variant (e.g. "Supertonic v2").
+     * Piper packs use the short name ("Piper Lessac") so the voice is named.
+     */
     private fun setupVoiceName(): String {
         val pack = store.pack
-        return "${VoiceCatalog.familyInfo(pack.family).title} ${pack.variant}"
+        return if (pack.family == VoiceFamily.PIPER) {
+            VoiceCatalog.shortName(pack)
+        } else {
+            "${VoiceCatalog.familyInfo(pack.family).title} ${pack.variant}"
+        }
     }
 
     /** Download estimate from the measured rate (320 MB took ~3 min on a Pixel). */
@@ -507,34 +517,58 @@ class MainActivity : Activity(), InstallTask.Listener {
         if (setupPlaying) {
             setupSamples.stop()
             setupPlaying = false
+            setupLoading = false
             repaintSetupSampleButton()
             return
         }
-        val reason = setupSamples.play(
-            this,
-            store.pack.sampleRes,
-            onDone = {
-                setupPlaying = false
-                repaintSetupSampleButton()
-            },
-            onAsyncError = { asyncReason -> setupSampleError(asyncReason) },
-        )
+        val url = store.pack.sampleUrl
+        val reason = if (url != null) {
+            setupSamples.playUrl(
+                url,
+                onPrepared = {
+                    setupLoading = false
+                    repaintSetupSampleButton()
+                },
+                onDone = {
+                    setupPlaying = false
+                    setupLoading = false
+                    repaintSetupSampleButton()
+                },
+                onAsyncError = { asyncReason -> setupSampleError(asyncReason) },
+            )
+        } else {
+            setupSamples.play(
+                this,
+                store.pack.sampleRes,
+                onDone = {
+                    setupPlaying = false
+                    repaintSetupSampleButton()
+                },
+                onAsyncError = { asyncReason -> setupSampleError(asyncReason) },
+            )
+        }
         if (reason != null) {
             setupSampleError(reason)
         } else {
             setupPlaying = true
+            setupLoading = url != null
         }
         repaintSetupSampleButton()
     }
 
     private fun repaintSetupSampleButton() {
         setupSampleButton.setText(
-            if (setupPlaying) R.string.stop_button else R.string.play_sample_button,
+            when {
+                setupLoading -> R.string.sample_loading
+                setupPlaying -> R.string.stop_button
+                else -> R.string.play_sample_button
+            },
         )
     }
 
     private fun setupSampleError(reason: String) {
         setupPlaying = false
+        setupLoading = false
         val message = getString(R.string.sample_error_format, reason)
         Log.e("Readly", "$message (${store.pack.id})")
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()

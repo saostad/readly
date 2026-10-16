@@ -80,6 +80,9 @@ class ReaderService : Service() {
         const val PREFS_NAME = "settings"
         const val KEY_ACTIVE_PACK = "activePackId"
 
+        /** Most recently selected Piper language (the card's default). */
+        const val KEY_PIPER_LANG = "piperLang"
+
         /** Legacy single speaker key; migrated to [speakerKey] once (see [speakerIdFor]). */
         const val KEY_SPEAKER_ID = "speakerId"
         const val KEY_SPEED = "speed"

@@ -45,6 +45,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
     private lateinit var storageNote: TextView
     private val samples = SamplePlayer()
     private var playingPackId: String? = null
+    private var sampleLoading = false
     private var task: InstallTask? = null
 
     /** Download/sample errors by pack id; each card shows its selected pack's error. */
@@ -101,6 +102,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
     override fun onStop() {
         samples.release()
         playingPackId = null
+        sampleLoading = false
         super.onStop()
     }
 
@@ -127,10 +129,16 @@ class VoicesActivity : Activity(), InstallTask.Listener {
     // ------------------------------------------------------------------
 
     private inner class Card(val info: VoiceFamilyInfo) {
+        /** Piper language; default is the active pack's, else the most recently picked. */
+        var piperLang: String? =
+            if (info.family == VoiceFamily.PIPER) defaultPiperLang() else null
+
+        /** Default voice: the default pack's voice within [piperLang]. */
+        var piperVoice: String? = piperLang?.let { defaultIn(langPacks(it)).voiceName }
+
         /** Default: the active pack if it's in this family, else the first downloaded pack, else the first pack. */
         var selectedPackId: String =
-            defaultIn(VoiceCatalog.packsFor(info.family)).id
-        var piperVoice: String? = VoiceCatalog.byId(selectedPackId)?.voiceName
+            defaultIn(if (info.family == VoiceFamily.PIPER) chipPacks() else VoiceCatalog.packsFor(info.family)).id
 
         val root: LinearLayout = LinearLayout(this@VoicesActivity).apply {
             orientation = LinearLayout.VERTICAL
@@ -153,6 +161,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             )
         }
+        var piperLangSpinner: Spinner? = null
         var piperSpinner: Spinner? = null
         val statusText = TextView(this@VoicesActivity)
         val sampleButton = Button(this@VoicesActivity).apply {
@@ -203,51 +212,36 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 TextView(this@VoicesActivity).apply { text = info.tagline },
             )
             if (info.family == VoiceFamily.PIPER) {
-                val row = LinearLayout(this@VoicesActivity).apply {
-                    orientation = LinearLayout.HORIZONTAL
+                val langs = VoiceCatalog.piperLangs()
+                piperLangSpinner = labeledSpinner(
+                    R.string.language_label,
+                    langs.map { VoiceCatalog.langDisplay(it) },
+                    langs.indexOf(piperLang).coerceAtLeast(0),
+                ) { position ->
+                    val lang = VoiceCatalog.piperLangs()[position]
+                    if (lang == piperLang) return@labeledSpinner
+                    piperLang = lang
+                    prefs.edit().putString(ReaderService.KEY_PIPER_LANG, lang).apply()
+                    piperVoice = defaultIn(langPacks(lang)).voiceName
+                    selectedPackId = defaultIn(chipPacks()).id
+                    rebuildVoiceSpinner()
+                    rebuildChips()
+                    update()
                 }
-                row.addView(
-                    TextView(this@VoicesActivity).apply {
-                        setText(R.string.voice_label)
-                        layoutParams = LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ).apply { rightMargin = dp(8) }
-                    },
-                )
-                val spinner = Spinner(this@VoicesActivity)
-                val adapter = ArrayAdapter(
-                    this@VoicesActivity,
-                    android.R.layout.simple_spinner_item,
-                    VoiceCatalog.piperVoices(),
-                )
-                adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-                spinner.adapter = adapter
-                spinner.setSelection(
-                    VoiceCatalog.piperVoices().indexOf(piperVoice).coerceAtLeast(0),
-                )
-                spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                    override fun onItemSelected(
-                        parent: AdapterView<*>,
-                        view: View?,
-                        position: Int,
-                        id: Long,
-                    ) {
-                        val voice = VoiceCatalog.piperVoices()[position]
-                        if (voice == piperVoice) return
-                        piperVoice = voice
-                        if (chipPacks().none { it.id == selectedPackId }) {
-                            selectedPackId = defaultIn(chipPacks()).id
-                        }
-                        rebuildChips()
-                        update()
+                piperSpinner = labeledSpinner(
+                    R.string.voice_label,
+                    VoiceCatalog.piperVoices(piperLang!!),
+                    VoiceCatalog.piperVoices(piperLang!!).indexOf(piperVoice).coerceAtLeast(0),
+                ) { position ->
+                    val voice = VoiceCatalog.piperVoices(piperLang!!)[position]
+                    if (voice == piperVoice) return@labeledSpinner
+                    piperVoice = voice
+                    if (chipPacks().none { it.id == selectedPackId }) {
+                        selectedPackId = defaultIn(chipPacks()).id
                     }
-
-                    override fun onNothingSelected(parent: AdapterView<*>) = Unit
+                    rebuildChips()
+                    update()
                 }
-                piperSpinner = spinner
-                row.addView(spinner)
-                root.addView(row)
             }
             root.addView(
                 HorizontalScrollView(this@VoicesActivity).apply {
@@ -285,10 +279,63 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         fun chipPacks(): List<VoicePack> {
             val packs = VoiceCatalog.packsFor(info.family)
             return if (info.family == VoiceFamily.PIPER) {
-                packs.filter { it.voiceName == piperVoice }
+                packs.filter { it.lang == piperLang && it.voiceName == piperVoice }
             } else {
                 packs
             }
+        }
+
+        /** A "Label: [spinner]" row, added to the card; [onPick] runs on user picks. */
+        private fun labeledSpinner(
+            labelRes: Int,
+            items: List<String>,
+            selected: Int,
+            onPick: (Int) -> Unit,
+        ): Spinner {
+            val row = LinearLayout(this@VoicesActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            row.addView(
+                TextView(this@VoicesActivity).apply {
+                    setText(labelRes)
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { rightMargin = dp(8) }
+                },
+            )
+            val spinner = Spinner(this@VoicesActivity)
+            spinner.adapter = ArrayAdapter(
+                this@VoicesActivity,
+                android.R.layout.simple_spinner_item,
+                items,
+            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            spinner.setSelection(selected)
+            spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: AdapterView<*>,
+                    view: View?,
+                    position: Int,
+                    id: Long,
+                ) = onPick(position)
+
+                override fun onNothingSelected(parent: AdapterView<*>) = Unit
+            }
+            row.addView(spinner)
+            root.addView(row)
+            return spinner
+        }
+
+        /** Rebuilds the voice spinner for the current [piperLang], keeping the voice. */
+        fun rebuildVoiceSpinner() {
+            val spinner = piperSpinner ?: return
+            val voices = VoiceCatalog.piperVoices(piperLang!!)
+            spinner.adapter = ArrayAdapter(
+                this@VoicesActivity,
+                android.R.layout.simple_spinner_item,
+                voices,
+            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            spinner.setSelection(voices.indexOf(piperVoice).coerceAtLeast(0))
         }
 
         fun rebuildChips() {
@@ -324,14 +371,18 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             }
         }
 
-        /** Switches this card's selection to [pack] (and the Piper voice if needed). */
+        /** Switches this card's selection to [pack] (and the Piper language/voice if needed). */
         fun selectPack(pack: VoicePack) {
             if (pack.family != info.family) return
-            if (info.family == VoiceFamily.PIPER && pack.voiceName != piperVoice) {
-                piperVoice = pack.voiceName
-                piperSpinner?.setSelection(
-                    VoiceCatalog.piperVoices().indexOf(pack.voiceName).coerceAtLeast(0),
+            if (info.family == VoiceFamily.PIPER &&
+                (pack.lang != piperLang || pack.voiceName != piperVoice)
+            ) {
+                piperLang = pack.lang
+                piperLangSpinner?.setSelection(
+                    VoiceCatalog.piperLangs().indexOf(pack.lang).coerceAtLeast(0),
                 )
+                piperVoice = pack.voiceName
+                rebuildVoiceSpinner()
                 rebuildChips()
             }
             selectedPackId = pack.id
@@ -377,8 +428,11 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 else -> R.string.status_not_downloaded
             })}"
             sampleButton.setText(
-                if (playingPackId == pack.id) R.string.stop_sample_button
-                else R.string.sample_button,
+                when {
+                    playingPackId != pack.id -> R.string.sample_button
+                    sampleLoading -> R.string.sample_loading
+                    else -> R.string.stop_sample_button
+                },
             )
             when {
                 runningId == pack.id -> {
@@ -425,6 +479,18 @@ class VoicesActivity : Activity(), InstallTask.Listener {
             }
         }
     }
+
+    /** Default Piper language: the active pack's, else the most recently picked. */
+    private fun defaultPiperLang(): String {
+        val active = VoiceCatalog.byId(ReaderService.activePackId(this))
+        if (active?.family == VoiceFamily.PIPER && active.lang != null) return active.lang
+        val recent = prefs.getString(ReaderService.KEY_PIPER_LANG, null)
+        if (recent != null && recent in VoiceCatalog.piperLangs()) return recent
+        return VoiceCatalog.piperLangs().first()
+    }
+
+    private fun langPacks(lang: String): List<VoicePack> =
+        VoiceCatalog.packsFor(VoiceFamily.PIPER).filter { it.lang == lang }
 
     /**
      * Default selection within [packs]: the active pack if present, else the first
@@ -494,27 +560,50 @@ class VoicesActivity : Activity(), InstallTask.Listener {
         if (playingPackId == pack.id) {
             samples.stop()
             playingPackId = null
+            sampleLoading = false
             refresh()
             return
         }
         cardErrors.remove(pack.id)
-        val reason = samples.play(
-            this,
-            pack.sampleRes,
-            onDone = {
-                playingPackId = null
-                refresh()
-            },
-            onAsyncError = { asyncReason ->
-                playingPackId = null
-                sampleError(pack, asyncReason)
-            },
-        )
+        val url = pack.sampleUrl
+        val reason = if (url != null) {
+            samples.playUrl(
+                url,
+                onPrepared = {
+                    sampleLoading = false
+                    refresh()
+                },
+                onDone = {
+                    playingPackId = null
+                    sampleLoading = false
+                    refresh()
+                },
+                onAsyncError = { asyncReason ->
+                    playingPackId = null
+                    sampleLoading = false
+                    sampleError(pack, asyncReason)
+                },
+            )
+        } else {
+            samples.play(
+                this,
+                pack.sampleRes,
+                onDone = {
+                    playingPackId = null
+                    refresh()
+                },
+                onAsyncError = { asyncReason ->
+                    playingPackId = null
+                    sampleError(pack, asyncReason)
+                },
+            )
+        }
         if (reason != null) {
             sampleError(pack, reason)
         } else {
-            // play() stops any previous clip first, so this one is now the only one.
+            // play()/playUrl() stop any previous clip first, so this one is now the only one.
             playingPackId = pack.id
+            sampleLoading = url != null
         }
         refresh()
     }
