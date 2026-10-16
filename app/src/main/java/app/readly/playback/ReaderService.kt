@@ -47,10 +47,14 @@ import java.io.File
 import java.io.IOException
 import java.net.URI
 import java.util.Locale
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -280,6 +284,35 @@ class ReaderService : Service() {
             pack.speakers[speakerId.coerceIn(pack.speakers.indices)].substringBefore(" (")
 
         /**
+         * Waits up to [timeoutMs] for a cancelled preview task's `finally` (which
+         * flushes the shared track), so it can't run after the new pipeline's first
+         * writes and clip them. Returns false (after [onTimeout]) on timeout; a
+         * missing, cancelled or already-failed task returns true at once. Done tasks
+         * return immediately, so the common no-preview path costs nothing.
+         */
+        internal fun awaitPreviewDone(
+            task: Future<*>?,
+            timeoutMs: Long,
+            onTimeout: () -> Unit,
+        ): Boolean {
+            val pending = task ?: return true
+            return try {
+                pending.get(timeoutMs, TimeUnit.MILLISECONDS)
+                true
+            } catch (_: TimeoutException) {
+                onTimeout()
+                false
+            } catch (_: CancellationException) {
+                true // Never ran (shutdown); nothing to wait for.
+            } catch (_: ExecutionException) {
+                true // The preview reports its own errors.
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                false
+            }
+        }
+
+        /**
          * Loads the voice in the background so the next READ starts instantly. Skips
          * when the pack is already loaded, so reopening the app doesn't restart the
          * service (and flash a notification) for nothing.
@@ -301,6 +334,9 @@ class ReaderService : Service() {
         /** Hang watchdog: check interval and the busy time that logs a warning. */
         private const val WATCHDOG_INTERVAL_MS = 30_000L
         private const val WATCHDOG_BUSY_MS = 30_000L
+
+        /** How long a new READ waits for a cancelled preview's `finally`. */
+        private const val PREVIEW_CANCEL_TIMEOUT_MS = 300L
     }
 
     private lateinit var mainHandler: Handler
@@ -356,6 +392,14 @@ class ReaderService : Service() {
      */
     private val previewSeq = AtomicInteger(0)
     private val previewCancelSeq = AtomicInteger(0)
+
+    /**
+     * Latest preview task on `readly-preview`, posted from the main thread and
+     * awaited from `readly-read` in [cancelPreview]. Waiting on the latest task
+     * covers earlier ones too: the executor is FIFO, so they finish first.
+     */
+    @Volatile
+    private var previewTask: Future<*>? = null
 
     /** Name + start of the task currently on `readly-read` ("" when idle), for the watchdog. */
     private val readTaskLock = Object()
@@ -984,26 +1028,27 @@ class ReaderService : Service() {
 
     /**
      * Plays a short speaker preview through the shared AudioTrack. Runs on
-     * `readly-preview`, never on `readly-read`: a READ must never wait on a preview,
-     * so a new READ cancels an in-flight preview instead ([cancelPreview]). Title and
-     * index are untouched; the previous status is restored afterwards (PAUSED stays
-     * PAUSED), unless a READ took over meanwhile.
+     * `readly-preview`, never on `readly-read`: a new READ cancels an in-flight
+     * preview instead of queueing behind it ([cancelPreview]), waiting at most
+     * 300 ms for the cancelled task's `finally` so its track flush can't clip
+     * the new reading. Title and index are untouched; the previous status is
+     * restored afterwards (PAUSED stays PAUSED), unless a READ took over meanwhile.
      */
     private fun handlePreview(packId: String, speakerId: Int, text: String) {
         val mySeq = previewSeq.incrementAndGet()
-        previewExecutor.execute {
+        previewTask = previewExecutor.submit {
             val isCancelled = { mySeq <= previewCancelSeq.get() }
             try {
                 // A READ posted after this preview owns the track from here: leave
                 // the status alone, it is already showing the new reading.
-                if (destroyed || isCancelled()) return@execute
+                if (destroyed || isCancelled()) return@submit
                 val snap = ReaderState.snapshot
                 if (snap.status == ReaderStatus.READING) {
                     mainHandler.post {
                         Toast.makeText(this, R.string.preview_busy, Toast.LENGTH_LONG).show()
                     }
                     goIdle()
-                    return@execute
+                    return@submit
                 }
                 val pack = VoiceCatalog.byId(packId)
                 if (pack == null || text.isBlank()) {
@@ -1011,12 +1056,12 @@ class ReaderService : Service() {
                         packId,
                         IllegalStateException("Unknown voice pack $packId"),
                     )
-                    return@execute
+                    return@submit
                 }
                 // A READ may have started while this preview was queued. Every READ sets
                 // the cancel flag before it ever posts READING, so bailing here keeps
                 // the restore below from landing after the READ takes over.
-                if (isCancelled()) return@execute
+                if (isCancelled()) return@submit
                 val sid = speakerId.coerceIn(pack.speakers.indices)
                 val name = speakerShortName(pack, sid)
                 val prevStatus = snap.status
@@ -1032,7 +1077,7 @@ class ReaderService : Service() {
                     playPreviewAudio(pack, text, sid, isCancelled)
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
-                    return@execute
+                    return@submit
                 } catch (e: Exception) {
                     // A READ that cancelled this preview reports its own errors.
                     if (isCancelled()) {
@@ -1040,7 +1085,7 @@ class ReaderService : Service() {
                     } else {
                         previewError(pack.id, e)
                     }
-                    return@execute
+                    return@submit
                 } finally {
                     // A concurrent preload failure may have set ERROR meanwhile, and a
                     // new READ may have taken over; only restore when the preview
@@ -1075,9 +1120,20 @@ class ReaderService : Service() {
         }
     }
 
-    /** Cancels the in-flight preview, if any; the next READ owns the track from here. */
+    /**
+     * Cancels the in-flight preview, if any; the next READ owns the track from here.
+     * Also waits (up to 300 ms) for the cancelled task's `finally`, which flushes
+     * the track: without the wait it can run after the new pipeline's first writes
+     * and clip the start of the shared text (round 21). Never waits on the main
+     * thread (onDestroy also calls this); there the flag alone suffices because
+     * the track is released right after.
+     */
     private fun cancelPreview() {
         previewCancelSeq.set(previewSeq.get())
+        if (Looper.myLooper() == Looper.getMainLooper()) return
+        awaitPreviewDone(previewTask, PREVIEW_CANCEL_TIMEOUT_MS) {
+            Log.w("Readly", "Timed out waiting for the cancelled preview to finish")
+        }
     }
 
     /**
@@ -1162,12 +1218,12 @@ class ReaderService : Service() {
 
     /**
      * Drops everything queued on [track] and zeroes the shared frame accounting,
-     * atomically under [trackLock]: a starting pipeline's first writes either land
-     * before the reset (dropped by the flush) or after it (counted from 0 with the
-     * head at 0), so `drain()` stays consistent either way. Ends playing: leaving a
-     * pause here could wedge a racing new pipeline's consumer (blocking writes on a
-     * paused track stall once its buffer fills); the preview's caller re-pauses for a
-     * paused session.
+     * atomically under [trackLock]. [cancelPreview] waits for the cancelled
+     * preview's `finally`, so this reset normally lands before the new pipeline's
+     * first writes; if that wait timed out, the atomic reset still keeps `drain()`
+     * consistent either way. Ends playing: leaving a pause here could wedge a
+     * racing new pipeline's consumer (blocking writes on a paused track stall once
+     * its buffer fills); the preview's caller re-pauses for a paused session.
      */
     private fun resetTrack(track: AudioTrack) {
         synchronized(trackLock) {
