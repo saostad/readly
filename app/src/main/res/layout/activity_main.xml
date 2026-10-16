@@ -285,6 +285,13 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp" />
 
+            <Button
+                android:id="@+id/changePackButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/change_pack_button" />
+
             <Spinner
                 android:id="@+id/voiceSpinner"
                 android:layout_width="match_parent"

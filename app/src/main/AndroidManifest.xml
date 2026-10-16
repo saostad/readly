@@ -22,6 +22,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".VoicesActivity"
+            android:exported="false"
+            android:label="@string/voices_title" />
+
         <service
             android:name=".playback.ReaderService"
             android:exported="false"

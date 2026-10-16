@@ -27,6 +27,10 @@ class InstallTask(
     @Volatile
     var listener: Listener? = null
 
+    /** Id of the pack being installed; the app-wide task may belong to any screen. */
+    val packId: String
+        get() = store.pack.id
+
     @Volatile
     var isDone = false
         private set

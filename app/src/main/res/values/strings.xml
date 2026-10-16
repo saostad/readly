@@ -43,4 +43,23 @@
     <string name="notif_note_denied">Allow notifications so you can pause and skip from the notification shade and lock screen. Reading still works without them.</string>
     <string name="allow_button">Allow</string>
     <string name="need_voice_banner">Download the voice first, then share again.</string>
+
+    <string name="voices_title">Voices</string>
+    <string name="voices_help">Bigger voices sound more natural. Smaller ones download faster and work on more phones. Speeds were measured on a Pixel 11 Pro; most phones are slower.</string>
+    <string name="pack_info_format">%1$d MB · %2$s</string>
+    <string name="status_in_use">In use</string>
+    <string name="status_downloaded">Downloaded</string>
+    <string name="status_not_downloaded">Not downloaded</string>
+    <string name="play_sample_button">Play sample</string>
+    <string name="download_pack_format">Download (%1$d MB)</string>
+    <string name="another_downloading_note">Another voice is downloading.</string>
+    <string name="use_voice_button">Use this voice</string>
+    <string name="use_now_format">Use %1$s now?</string>
+    <string name="use_voice_toast_format">Readly will read with %1$s from the next thing you share.</string>
+    <string name="delete_button">Delete</string>
+    <string name="delete_pack_confirm_format">Delete %1$s? This frees %2$d MB. You can download it again later.</string>
+    <string name="delete_error_format">Couldn\'t delete %1$s: %2$s: %3$s</string>
+    <string name="sample_error_format">Couldn\'t play the sample: %1$s</string>
+    <string name="in_use_delete_help">Switch to another voice before deleting this one.</string>
+    <string name="change_pack_button">Change voice pack</string>
 </resources>

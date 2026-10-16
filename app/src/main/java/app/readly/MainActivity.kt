@@ -72,6 +72,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var nextButton: Button
     private lateinit var stopButton: Button
     private lateinit var voicePackLabel: TextView
+    private lateinit var changePackButton: Button
     private lateinit var voiceSpinner: Spinner
     private lateinit var speedLabel: TextView
     private lateinit var speedSeek: SeekBar
@@ -120,6 +121,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         nextButton = findViewById(R.id.nextButton)
         stopButton = findViewById(R.id.stopButton)
         voicePackLabel = findViewById(R.id.voicePackLabel)
+        changePackButton = findViewById(R.id.changePackButton)
         voiceSpinner = findViewById(R.id.voiceSpinner)
         speedLabel = findViewById(R.id.speedLabel)
         speedSeek = findViewById(R.id.speedSeek)
@@ -148,6 +150,9 @@ class MainActivity : Activity(), InstallTask.Listener {
                     NOTIF_REQUEST,
                 )
             }
+        }
+        changePackButton.setOnClickListener {
+            startActivity(Intent(this, VoicesActivity::class.java))
         }
         setupVoiceSpinner()
         setupSpeedSeek()
@@ -181,6 +186,14 @@ class MainActivity : Activity(), InstallTask.Listener {
 
     override fun onResume() {
         super.onResume()
+        // The active pack may have changed on the Voices screen while we were away.
+        val pack = ReaderService.activePack(this)
+        if (pack.id != store.pack.id) {
+            store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
+            body.text = getString(R.string.setup_body, pack.displayName, pack.sizeMb)
+            downloadButton.text = getString(R.string.download_button, pack.sizeMb)
+            refreshVoiceSection()
+        }
         // Warm the engine while the user pastes so the first READ starts instantly.
         if (store.isInstalled() && ReaderState.snapshot.status == ReaderStatus.IDLE) {
             ReaderService.preload(this)
@@ -228,6 +241,11 @@ class MainActivity : Activity(), InstallTask.Listener {
 
     private fun sendAction(action: String) {
         startService(Intent(this, ReaderService::class.java).setAction(action))
+    }
+
+    private fun refreshVoiceSection() {
+        voicePackLabel.text = getString(R.string.voice_pack_format, store.pack.displayName)
+        setupVoiceSpinner()
     }
 
     private fun setupVoiceSpinner() {
