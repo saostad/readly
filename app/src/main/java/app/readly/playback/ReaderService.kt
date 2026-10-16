@@ -297,6 +297,10 @@ class ReaderService : Service() {
 
         /** Idle grace after FINISHED / STOP before the service shuts down. */
         private const val IDLE_TIMEOUT_MS = 10L * 60 * 1000
+
+        /** Hang watchdog: check interval and the busy time that logs a warning. */
+        private const val WATCHDOG_INTERVAL_MS = 30_000L
+        private const val WATCHDOG_BUSY_MS = 30_000L
     }
 
     private lateinit var mainHandler: Handler
@@ -353,6 +357,14 @@ class ReaderService : Service() {
     private val previewSeq = AtomicInteger(0)
     private val previewCancelSeq = AtomicInteger(0)
 
+    /** Name + start of the task currently on `readly-read` ("" when idle), for the watchdog. */
+    private val readTaskLock = Object()
+    private var readTaskName = ""
+    private var readTaskStartMs = 0L
+
+    /** Main thread only: start mark of the stuck task already warned about. */
+    private var warnedTaskStart = 0L
+
     private val trackLock = Object()
     private var audioTrack: AudioTrack? = null
     private var trackSampleRate = 0
@@ -407,6 +419,27 @@ class ReaderService : Service() {
         stopSelf()
     }
 
+    /**
+     * Hang watchdog: if `readly-read` has been busy on one task for over 30 s, logs it
+     * with the task name (round 20: a wedged preview froze that thread with no log
+     * line at all). Fires once per stuck task; a long but healthy task (a page fetch,
+     * a voice download) logs once too.
+     */
+    private val watchdogCheck = object : Runnable {
+        override fun run() {
+            if (destroyed) return
+            val (name, start) = synchronized(readTaskLock) { readTaskName to readTaskStartMs }
+            if (name.isNotEmpty() && start != 0L) {
+                val busyMs = SystemClock.elapsedRealtime() - start
+                if (busyMs > WATCHDOG_BUSY_MS && start != warnedTaskStart) {
+                    warnedTaskStart = start
+                    Log.w("Readly", "readly-read busy on $name for ${busyMs / 1000} s")
+                }
+            }
+            mainHandler.postDelayed(this, WATCHDOG_INTERVAL_MS)
+        }
+    }
+
     // ------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------
@@ -422,6 +455,7 @@ class ReaderService : Service() {
             NotificationChannel(CHANNEL_ID, "Reading aloud", NotificationManager.IMPORTANCE_LOW),
         )
         audioManager = getSystemService(AudioManager::class.java)
+        mainHandler.postDelayed(watchdogCheck, WATCHDOG_INTERVAL_MS)
         mediaSession = MediaSession(this, "Readly").apply {
             setCallback(
                 object : MediaSession.Callback() {
@@ -484,6 +518,7 @@ class ReaderService : Service() {
     override fun onDestroy() {
         destroyed = true
         mainHandler.removeCallbacks(idleShutdown)
+        mainHandler.removeCallbacks(watchdogCheck)
         cancelPreview()
         readerExecutor.shutdownNow()
         preloadExecutor.shutdownNow()
@@ -514,8 +549,26 @@ class ReaderService : Service() {
     // Commands
     // ------------------------------------------------------------------
 
-    private fun handleRead(text: String, title: String, formatName: String) {
+    /** Runs [block] on `readly-read`, tracking its [name] for the hang watchdog. */
+    private fun executeRead(name: String, block: () -> Unit) {
         readerExecutor.execute {
+            synchronized(readTaskLock) {
+                readTaskName = name
+                readTaskStartMs = SystemClock.elapsedRealtime()
+            }
+            try {
+                block()
+            } finally {
+                synchronized(readTaskLock) {
+                    readTaskName = ""
+                    readTaskStartMs = 0
+                }
+            }
+        }
+    }
+
+    private fun handleRead(text: String, title: String, formatName: String) {
+        executeRead("READ") {
             currentHost = ""
             val finished = AtomicBoolean(false)
             fun finish() {
@@ -527,7 +580,7 @@ class ReaderService : Service() {
                 } catch (e: IllegalArgumentException) {
                     finish()
                     postError(e)
-                    return@execute
+                    return@executeRead
                 }
                 startReading(title, text, format, notice = null, onRequestDone = ::finish)
             } catch (e: InterruptedException) {
@@ -543,7 +596,7 @@ class ReaderService : Service() {
     }
 
     private fun handleReadUrl(url: String, titleHint: String?) {
-        readerExecutor.execute {
+        executeRead("READ_URL") {
             val finished = AtomicBoolean(false)
             fun finish() {
                 if (finished.compareAndSet(false, true)) pendingRequests.decrementAndGet()
@@ -904,11 +957,11 @@ class ReaderService : Service() {
 
     /** The Ask notification's "Read anyway": reads the held text with the main voice. */
     private fun handleReadAnyway() {
-        readerExecutor.execute {
+        executeRead("READ_ANYWAY") {
             try {
                 val held = pendingAsk ?: run {
                     Log.w("Readly", "Read-anyway tapped with nothing held; ignoring")
-                    return@execute
+                    return@executeRead
                 }
                 pendingAsk = null
                 pendingRequests.incrementAndGet()
@@ -1268,7 +1321,7 @@ class ReaderService : Service() {
     }
 
     private fun moveBy(delta: Int) {
-        readerExecutor.execute {
+        executeRead(if (delta > 0) "NEXT" else "PREVIOUS") {
             try {
                 val chunks: List<Chunk>
                 val title: String
@@ -1280,7 +1333,7 @@ class ReaderService : Service() {
                     packId = currentPackId
                     lang = currentLang
                 }
-                if (chunks.isEmpty()) return@execute
+                if (chunks.isEmpty()) return@executeRead
                 // Same document, so the same voice and language (no re-detection).
                 val pack = VoiceCatalog.byId(packId) ?: activePack(this)
                 val target = (ReaderState.snapshot.index + delta).coerceIn(0, chunks.size - 1)
@@ -1297,7 +1350,7 @@ class ReaderService : Service() {
     private fun handleStop() {
         // Immediate silence on the main thread; the join happens below.
         synchronized(trackLock) { audioTrack?.pause() }
-        readerExecutor.execute {
+        executeRead("STOP") {
             try {
                 stopPipeline()
                 synchronized(pipelineLock) {
