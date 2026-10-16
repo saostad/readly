@@ -87,8 +87,12 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var voicePackLabel: TextView
     private lateinit var persianPackLabel: TextView
     private lateinit var changePackButton: Button
+    private lateinit var voiceRow: LinearLayout
     private lateinit var voiceSpinner: Spinner
+    private lateinit var previewButton: Button
+    private lateinit var previewHelp: TextView
     private lateinit var singleVoiceNote: TextView
+    private var speakerTouched = false
     private lateinit var smartSwitch: Switch
     private lateinit var autoDownloadSwitch: Switch
     private lateinit var speedLabel: TextView
@@ -144,7 +148,10 @@ class MainActivity : Activity(), InstallTask.Listener {
         voicePackLabel = findViewById(R.id.voicePackLabel)
         persianPackLabel = findViewById(R.id.persianPackLabel)
         changePackButton = findViewById(R.id.changePackButton)
+        voiceRow = findViewById(R.id.voiceRow)
         voiceSpinner = findViewById(R.id.voiceSpinner)
+        previewButton = findViewById(R.id.previewButton)
+        previewHelp = findViewById(R.id.previewHelp)
         singleVoiceNote = findViewById(R.id.singleVoiceNote)
         smartSwitch = findViewById(R.id.smartSwitch)
         autoDownloadSwitch = findViewById(R.id.autoDownloadSwitch)
@@ -343,18 +350,25 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun setupVoiceSpinner() {
         val pack = store.pack
         if (pack.speakers.size == 1) {
-            voiceSpinner.visibility = View.GONE
+            voiceRow.visibility = View.GONE
+            previewHelp.visibility = View.GONE
             singleVoiceNote.visibility = View.VISIBLE
             return
         }
         singleVoiceNote.visibility = View.GONE
-        voiceSpinner.visibility = View.VISIBLE
+        voiceRow.visibility = View.VISIBLE
+        previewHelp.visibility = View.VISIBLE
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, pack.speakers)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         voiceSpinner.adapter = adapter
         voiceSpinner.setSelection(
             ReaderService.speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices),
         )
+        // The initial population above must not preview: only a real tap arms it.
+        voiceSpinner.setOnTouchListener { _, _ ->
+            speakerTouched = true
+            false
+        }
         voiceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(
                 parent: AdapterView<*>,
@@ -362,11 +376,32 @@ class MainActivity : Activity(), InstallTask.Listener {
                 position: Int,
                 id: Long,
             ) {
+                val old = ReaderService.speakerIdFor(this@MainActivity, pack.id)
                 ReaderService.setSpeakerId(this@MainActivity, pack.id, position)
+                if (speakerTouched && position != old) {
+                    playPreview(position)
+                }
+                speakerTouched = false
             }
 
             override fun onNothingSelected(parent: AdapterView<*>) = Unit
         }
+        previewButton.setOnClickListener {
+            playPreview(voiceSpinner.selectedItemPosition)
+        }
+    }
+
+    /** Previews the active pack's [speakerId] saying its preview sentence. */
+    private fun playPreview(speakerId: Int) {
+        val pack = store.pack
+        if (!store.isInstalled()) return
+        val sid = speakerId.coerceIn(pack.speakers.indices)
+        ReaderService.preview(
+            this,
+            pack.id,
+            sid,
+            ReaderService.previewText(this, pack, ReaderService.speakerShortName(pack, sid)),
+        )
     }
 
     private fun setupSmartSwitches() {
@@ -431,6 +466,11 @@ class MainActivity : Activity(), InstallTask.Listener {
             ReaderStatus.FETCHING -> {
                 statusLine.visibility = View.VISIBLE
                 statusLine.text = snap.currentText.ifBlank { "Opening…" }
+                statusLine.setTextColor(defaultTextColor)
+            }
+            ReaderStatus.PREVIEWING -> {
+                statusLine.visibility = View.VISIBLE
+                statusLine.text = snap.currentText.ifBlank { "Previewing…" }
                 statusLine.setTextColor(defaultTextColor)
             }
             ReaderStatus.ERROR -> {

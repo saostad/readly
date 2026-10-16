@@ -88,4 +88,11 @@
     <string name="auto_download_label">Download voices automatically on Wi-Fi</string>
     <string name="auto_download_help">Up to 70 MB per language. Never on mobile data.</string>
     <string name="smart_line_format">Smart voice: %1$s → %2$s</string>
+    <string name="preview_button">▶ Preview</string>
+    <string name="preview_help">Hear the selected voice say a sentence.</string>
+    <string name="previewing_format">Previewing %1$s…</string>
+    <string name="preview_busy">Pause reading to hear a preview.</string>
+    <string name="preview_error_format">Couldn\'t play the preview: %1$s: %2$s</string>
+    <string name="preview_text_en">Hi, I\'m %1$s. This is how I sound when I read to you.</string>
+    <string name="preview_text_fa">سلام، من %1$s هستم. این صدای من است.</string>
 </resources>

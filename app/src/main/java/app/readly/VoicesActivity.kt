@@ -27,6 +27,8 @@ import app.readly.model.VoiceFamilyInfo
 import app.readly.model.VoiceModelStore
 import app.readly.model.VoicePack
 import app.readly.playback.ReaderService
+import app.readly.playback.ReaderState
+import app.readly.playback.ReaderStatus
 import java.io.File
 import java.io.IOException
 
@@ -294,6 +296,17 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                     }
                     rebuildChips()
                     update()
+                    // A newly picked voice introduces itself, unless that would talk
+                    // over the reader.
+                    if (ReaderState.snapshot.status == ReaderStatus.READING) {
+                        Toast.makeText(
+                            this@VoicesActivity,
+                            R.string.preview_busy,
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    } else {
+                        VoiceCatalog.byId(selectedPackId)?.let { toggleSample(it) }
+                    }
                 }
             }
             root.addView(

@@ -78,12 +78,16 @@ class ReaderService : Service() {
         const val ACTION_STOP = "app.readly.STOP"
         const val ACTION_READ_URL = "app.readly.READ_URL"
         const val ACTION_READ_ANYWAY = "app.readly.READ_ANYWAY"
+        const val ACTION_PREVIEW = "app.readly.PREVIEW"
 
         const val EXTRA_TEXT = "text"
         const val EXTRA_TITLE = "title"
         const val EXTRA_FORMAT = "format"
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE_HINT = "titleHint"
+        const val EXTRA_PREVIEW_PACK = "previewPack"
+        const val EXTRA_PREVIEW_SPEAKER = "previewSpeaker"
+        const val EXTRA_PREVIEW_TEXT = "previewText"
 
         const val PREFS_NAME = "settings"
         const val KEY_ACTIVE_PACK = "activePackId"
@@ -241,6 +245,36 @@ class ReaderService : Service() {
                     .putExtra(EXTRA_TITLE_HINT, titleHint),
             )
         }
+
+        /**
+         * Plays a short on-device preview of [speakerId] in [packId] saying [text].
+         * Never interrupts reading: when the reader is READING the service Toasts
+         * instead.
+         */
+        fun preview(context: Context, packId: String, speakerId: Int, text: String) {
+            context.startForegroundService(
+                Intent(context, ReaderService::class.java)
+                    .setAction(ACTION_PREVIEW)
+                    .putExtra(EXTRA_PREVIEW_PACK, packId)
+                    .putExtra(EXTRA_PREVIEW_SPEAKER, speakerId)
+                    .putExtra(EXTRA_PREVIEW_TEXT, text),
+            )
+        }
+
+        /**
+         * Preview sentence for [speakerName] in [pack]: English, or Persian for
+         * Persian packs (Supertonic 3 previews in the main language, English).
+         */
+        fun previewText(context: Context, pack: VoicePack, speakerName: String): String =
+            if (bucketForPack(pack) == "fa") {
+                context.getString(R.string.preview_text_fa, speakerName)
+            } else {
+                context.getString(R.string.preview_text_en, speakerName)
+            }
+
+        /** Short speaker name for previews (`Bella (American, female)` → `Bella`). */
+        fun speakerShortName(pack: VoicePack, speakerId: Int): String =
+            pack.speakers[speakerId.coerceIn(pack.speakers.indices)].substringBefore(" (")
 
         /**
          * Loads the voice in the background so the next READ starts instantly. Skips
@@ -415,6 +449,11 @@ class ReaderService : Service() {
             ACTION_PREVIOUS -> moveBy(-1)
             ACTION_STOP -> handleStop()
             ACTION_READ_ANYWAY -> handleReadAnyway()
+            ACTION_PREVIEW -> handlePreview(
+                intent.getStringExtra(EXTRA_PREVIEW_PACK) ?: "",
+                intent.getIntExtra(EXTRA_PREVIEW_SPEAKER, 0),
+                intent.getStringExtra(EXTRA_PREVIEW_TEXT) ?: "",
+            )
             else -> Log.w("Readly", "ReaderService ignoring unknown action ${intent?.action}")
         }
         return START_NOT_STICKY
@@ -836,6 +875,121 @@ class ReaderService : Service() {
                 postError(e)
             }
         }
+    }
+
+    /**
+     * Plays a short speaker preview through the shared AudioTrack. Runs on
+     * `readly-read`, so a preview and a READ never overlap: a READ queued behind a
+     * preview simply starts when the few seconds are over. Title and index are
+     * untouched; the previous status is restored afterwards (PAUSED stays PAUSED).
+     */
+    private fun handlePreview(packId: String, speakerId: Int, text: String) {
+        readerExecutor.execute {
+            try {
+                val snap = ReaderState.snapshot
+                if (snap.status == ReaderStatus.READING) {
+                    mainHandler.post {
+                        Toast.makeText(this, R.string.preview_busy, Toast.LENGTH_LONG).show()
+                    }
+                    goIdle()
+                    return@execute
+                }
+                val pack = VoiceCatalog.byId(packId)
+                if (pack == null || text.isBlank()) {
+                    previewError(
+                        packId,
+                        IllegalStateException("Unknown voice pack $packId"),
+                    )
+                    return@execute
+                }
+                val sid = speakerId.coerceIn(pack.speakers.indices)
+                val name = speakerShortName(pack, sid)
+                val prevStatus = snap.status
+                val prevText = snap.currentText
+                ReaderState.update {
+                    it.copy(
+                        status = ReaderStatus.PREVIEWING,
+                        currentText = getString(R.string.previewing_format, name),
+                    )
+                }
+                updateNotification()
+                try {
+                    playPreviewAudio(pack, text, sid)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return@execute
+                } catch (e: Exception) {
+                    previewError(pack.id, e)
+                    return@execute
+                } finally {
+                    // A concurrent preload failure may have set ERROR meanwhile; only
+                    // restore when the preview status is still ours.
+                    ReaderState.update {
+                        if (it.status == ReaderStatus.PREVIEWING) {
+                            it.copy(status = prevStatus, currentText = prevText)
+                        } else {
+                            it
+                        }
+                    }
+                    if (prevStatus == ReaderStatus.PAUSED) {
+                        synchronized(trackLock) { audioTrack?.pause() }
+                    }
+                    updateNotification()
+                    // A paused reading session stays foreground; anything else detaches
+                    // (a no-op while a request is live).
+                    if (prevStatus != ReaderStatus.PAUSED) goIdle()
+                }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (e: Exception) {
+                previewError(packId, e)
+            }
+        }
+    }
+
+    /** Synthesizes [text] and plays it through the shared track, then drains it. */
+    private fun playPreviewAudio(pack: VoicePack, text: String, speakerId: Int) {
+        val speed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
+        val lang = if (bucketForPack(pack) == "fa") "fa" else "en"
+        val rate = engines.preload(pack.id)
+        val audio = engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped = { false })
+        if (audio.isEmpty()) return
+        val track = ensureTrack(rate)
+        var offset = 0
+        while (offset < audio.size) {
+            val n = track.write(audio, offset, audio.size - offset, AudioTrack.WRITE_BLOCKING)
+            if (n < 0) throw IOException("AudioTrack.write failed with error $n")
+            if (n == 0) {
+                try {
+                    Thread.sleep(10)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return
+                }
+                continue
+            }
+            offset += n
+        }
+        val endHead = (track.playbackHeadPosition.toLong() and 0xFFFFFFFFL) + audio.size
+        while (true) {
+            val head = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+            if (head >= endHead) return
+            try {
+                Thread.sleep(50)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
+        }
+    }
+
+    private fun previewError(packId: String, e: Throwable) {
+        val message = getString(R.string.preview_error_format, e.javaClass.name, e.message)
+        Log.e("Readly", "$message ($packId)", e)
+        mainHandler.post { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+        updateNotification()
+        goIdle()
     }
 
     /** The installed pack assigned to [lang] (`"fa"`/`"ar"`), or null. */
@@ -1453,6 +1607,7 @@ class ReaderService : Service() {
             ReaderStatus.ERROR -> snap.errorMessage ?: "Something went wrong"
             ReaderStatus.IDLE -> "Ready"
             ReaderStatus.ASK -> snap.notice ?: "Choose a voice"
+            ReaderStatus.PREVIEWING -> snap.currentText.ifBlank { "Previewing…" }
         }
         // No ic_media_stop on the platform; the close glyph reads as stop here.
         return Notification.Builder(this, CHANNEL_ID)
@@ -1464,7 +1619,8 @@ class ReaderService : Service() {
                 snap.status == ReaderStatus.READING ||
                     snap.status == ReaderStatus.PAUSED ||
                     snap.status == ReaderStatus.LOADING_VOICE ||
-                    snap.status == ReaderStatus.FETCHING,
+                    snap.status == ReaderStatus.FETCHING ||
+                    snap.status == ReaderStatus.PREVIEWING,
             )
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .addAction(
@@ -1544,7 +1700,8 @@ class ReaderService : Service() {
         val state = when (snap.status) {
             ReaderStatus.READING -> PlaybackState.STATE_PLAYING
             ReaderStatus.PAUSED -> PlaybackState.STATE_PAUSED
-            ReaderStatus.LOADING_VOICE, ReaderStatus.FETCHING -> PlaybackState.STATE_BUFFERING
+            ReaderStatus.LOADING_VOICE, ReaderStatus.FETCHING, ReaderStatus.PREVIEWING ->
+                PlaybackState.STATE_BUFFERING
             ReaderStatus.FINISHED, ReaderStatus.IDLE, ReaderStatus.ASK -> PlaybackState.STATE_STOPPED
             ReaderStatus.ERROR -> PlaybackState.STATE_ERROR
         }

@@ -15,6 +15,8 @@ enum class ReaderStatus {
     ERROR,
     /** Smart voice needs a download choice; nothing is playing. */
     ASK,
+    /** Playing a short speaker preview; returns to the previous status after. */
+    PREVIEWING,
 }
 
 /** Immutable snapshot of the reader UI state. */
