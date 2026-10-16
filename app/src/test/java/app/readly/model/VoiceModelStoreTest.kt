@@ -29,6 +29,8 @@ class VoiceModelStoreTest {
     private val piperTestPack = VoicePack(
         id = "test-piper",
         displayName = "Test Piper",
+        variant = "Standard",
+        voiceName = "Test (American)",
         family = VoiceFamily.PIPER,
         archive = "test-piper.tar.bz2",
         sizeBytes = 0L,

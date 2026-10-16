@@ -67,6 +67,64 @@ class VoiceCatalogTest {
     }
 
     @Test
+    fun everyPack_hasVariant() {
+        for (pack in VoiceCatalog.ALL) {
+            assertTrue("${pack.id}: blank variant", pack.variant.isNotBlank())
+        }
+    }
+
+    @Test
+    fun voiceName_onlyOnPiper() {
+        for (pack in VoiceCatalog.ALL) {
+            if (pack.family == VoiceFamily.PIPER) {
+                assertTrue("${pack.id}: blank voiceName", !pack.voiceName.isNullOrBlank())
+            } else {
+                assertEquals("${pack.id}: non-Piper must not have a voiceName", null, pack.voiceName)
+            }
+        }
+    }
+
+    @Test
+    fun piperVoiceVariantPairs_areUnique() {
+        val pairs = VoiceCatalog.ALL
+            .filter { it.family == VoiceFamily.PIPER }
+            .map { it.voiceName to it.variant }
+        assertEquals(pairs.size, pairs.toSet().size)
+    }
+
+    @Test
+    fun eachFamily_hasAtLeastOnePack() {
+        for (family in VoiceFamily.values()) {
+            assertTrue("$family has no packs", VoiceCatalog.packsFor(family).isNotEmpty())
+        }
+        assertEquals(4, VoiceCatalog.FAMILIES.size)
+    }
+
+    @Test
+    fun piperPack_unknownVariant_isNull() {
+        assertEquals(null, VoiceCatalog.piperPack("Ryan (American)", "HD"))
+        assertEquals(
+            "piper-lessac-high",
+            VoiceCatalog.piperPack("Lessac (American)", "HD")!!.id,
+        )
+        assertEquals(
+            listOf("Lessac (American)", "Ryan (American)", "Amy (American)", "Alba (British)"),
+            VoiceCatalog.piperVoices(),
+        )
+    }
+
+    @Test
+    fun shortName_matchesSpec() {
+        fun short(id: String) = VoiceCatalog.shortName(VoiceCatalog.byId(id)!!)
+        assertEquals("Supertonic v2", short("supertonic-2"))
+        assertEquals("Kokoro (Full)", short("kokoro-en"))
+        assertEquals("Kokoro (Compact)", short("kokoro-en-compact"))
+        assertEquals("Piper Lessac (HD)", short("piper-lessac-high"))
+        assertEquals("Piper Ryan", short("piper-ryan"))
+        assertEquals("Kitten Mini", short("kitten-mini"))
+    }
+
+    @Test
     fun everyPack_hasSampleClipInResRaw() {
         // Unit tests run from the module dir (`app/`), but fall back to the repo
         // root so the check also works when run from there.

@@ -11,9 +11,18 @@ enum class VoiceFamily {
     KITTEN,
 }
 
+/** Card order, titles and taglines for the family-grouped Voices screen. */
+data class VoiceFamilyInfo(
+    val family: VoiceFamily,
+    val title: String,
+    val tagline: String,
+)
+
 /**
  * One downloadable voice pack.
  *
+ * @param variant short chip label within its family card (e.g. `v2`, `Full`, `HD`).
+ * @param voiceName Piper voice only (e.g. `Lessac (American)`); null for other families.
  * @param modelFile the family's main `.onnx` (PIPER/KITTEN/KOKORO). SUPERTONIC has four
  *   model files instead, so this is `""` and unused for that family.
  * @param speakers display names; the speaker id passed to synthesis is the index.
@@ -24,6 +33,8 @@ enum class VoiceFamily {
 data class VoicePack(
     val id: String,
     val displayName: String,
+    val variant: String,
+    val voiceName: String?,
     val family: VoiceFamily,
     val archive: String,
     val sizeBytes: Long,
@@ -75,6 +86,8 @@ object VoiceCatalog {
         VoicePack(
             id = "supertonic-2",
             displayName = "Supertonic 2",
+            variant = "v2",
+            voiceName = null,
             family = VoiceFamily.SUPERTONIC,
             archive = "sherpa-onnx-supertonic-tts-int8-2026-03-06.tar.bz2",
             sizeBytes = 84692981L,
@@ -88,6 +101,8 @@ object VoiceCatalog {
         VoicePack(
             id = "supertonic-3",
             displayName = "Supertonic 3",
+            variant = "v3",
+            voiceName = null,
             family = VoiceFamily.SUPERTONIC,
             archive = "sherpa-onnx-supertonic-3-tts-int8-2026-05-11.tar.bz2",
             sizeBytes = 128774318L,
@@ -101,6 +116,8 @@ object VoiceCatalog {
         VoicePack(
             id = "kokoro-en",
             displayName = "Kokoro",
+            variant = "Full",
+            voiceName = null,
             family = VoiceFamily.KOKORO,
             archive = "kokoro-en-v0_19.tar.bz2",
             sizeBytes = 319625534L,
@@ -114,6 +131,8 @@ object VoiceCatalog {
         VoicePack(
             id = "kokoro-en-compact",
             displayName = "Kokoro Compact",
+            variant = "Compact",
+            voiceName = null,
             family = VoiceFamily.KOKORO,
             archive = "kokoro-int8-en-v0_19.tar.bz2",
             sizeBytes = 103248205L,
@@ -127,6 +146,8 @@ object VoiceCatalog {
         VoicePack(
             id = "piper-lessac",
             displayName = "Piper Lessac (American)",
+            variant = "Standard",
+            voiceName = "Lessac (American)",
             family = VoiceFamily.PIPER,
             archive = "vits-piper-en_US-lessac-medium.tar.bz2",
             sizeBytes = 67230653L,
@@ -140,6 +161,8 @@ object VoiceCatalog {
         VoicePack(
             id = "piper-ryan",
             displayName = "Piper Ryan (American)",
+            variant = "Standard",
+            voiceName = "Ryan (American)",
             family = VoiceFamily.PIPER,
             archive = "vits-piper-en_US-ryan-medium.tar.bz2",
             sizeBytes = 67213100L,
@@ -153,6 +176,8 @@ object VoiceCatalog {
         VoicePack(
             id = "piper-amy",
             displayName = "Piper Amy (American)",
+            variant = "Standard",
+            voiceName = "Amy (American)",
             family = VoiceFamily.PIPER,
             archive = "vits-piper-en_US-amy-medium.tar.bz2",
             sizeBytes = 67223746L,
@@ -166,6 +191,8 @@ object VoiceCatalog {
         VoicePack(
             id = "piper-alba",
             displayName = "Piper Alba (British)",
+            variant = "Standard",
+            voiceName = "Alba (British)",
             family = VoiceFamily.PIPER,
             archive = "vits-piper-en_GB-alba-medium.tar.bz2",
             sizeBytes = 67212349L,
@@ -179,6 +206,8 @@ object VoiceCatalog {
         VoicePack(
             id = "piper-lessac-high",
             displayName = "Piper Lessac HD",
+            variant = "HD",
+            voiceName = "Lessac (American)",
             family = VoiceFamily.PIPER,
             archive = "vits-piper-en_US-lessac-high.tar.bz2",
             sizeBytes = 115545841L,
@@ -192,6 +221,8 @@ object VoiceCatalog {
         VoicePack(
             id = "piper-lessac-compact",
             displayName = "Piper Lessac Compact",
+            variant = "Compact",
+            voiceName = "Lessac (American)",
             family = VoiceFamily.PIPER,
             archive = "vits-piper-en_US-lessac-medium-int8.tar.bz2",
             sizeBytes = 20969179L,
@@ -205,6 +236,8 @@ object VoiceCatalog {
         VoicePack(
             id = "kitten-mini",
             displayName = "Kitten Mini",
+            variant = "Mini",
+            voiceName = null,
             family = VoiceFamily.KITTEN,
             archive = "kitten-mini-en-v0_8.tar.bz2",
             sizeBytes = 67547594L,
@@ -219,4 +252,45 @@ object VoiceCatalog {
 
     /** The pack with [id], or null when unknown. */
     fun byId(id: String): VoicePack? = ALL.find { it.id == id }
+
+    /** Family cards in display order. */
+    val FAMILIES: List<VoiceFamilyInfo> = listOf(
+        VoiceFamilyInfo(VoiceFamily.SUPERTONIC, "Supertonic", "Fastest, natural · 10 voices"),
+        VoiceFamilyInfo(VoiceFamily.KOKORO, "Kokoro", "Most natural · 11 voices"),
+        VoiceFamilyInfo(VoiceFamily.PIPER, "Piper", "Light and fast · one voice per download"),
+        VoiceFamilyInfo(VoiceFamily.KITTEN, "Kitten", "Compact · 8 voices"),
+    )
+
+    /** Card info for [family]. */
+    fun familyInfo(family: VoiceFamily): VoiceFamilyInfo =
+        FAMILIES.first { it.family == family }
+
+    /** Packs in [family], in catalog order. */
+    fun packsFor(family: VoiceFamily): List<VoicePack> =
+        ALL.filter { it.family == family }
+
+    /** Distinct Piper [VoicePack.voiceName]s, in catalog order. */
+    fun piperVoices(): List<String> =
+        ALL.filter { it.family == VoiceFamily.PIPER }.mapNotNull { it.voiceName }.distinct()
+
+    /** The Piper pack for [voiceName] + [variant], or null when the voice lacks it. */
+    fun piperPack(voiceName: String, variant: String): VoicePack? =
+        ALL.find { it.family == VoiceFamily.PIPER && it.voiceName == voiceName && it.variant == variant }
+
+    /**
+     * Short display name for the Storage list and the main screen, e.g.
+     * `"Supertonic v2"`, `"Kokoro (Full)"`, `"Piper Lessac (HD)"`, `"Piper Ryan"`.
+     * Piper Standard omits the variant.
+     */
+    fun shortName(pack: VoicePack): String {
+        val title = familyInfo(pack.family).title
+        return when (pack.family) {
+            VoiceFamily.SUPERTONIC, VoiceFamily.KITTEN -> "$title ${pack.variant}"
+            VoiceFamily.KOKORO -> "$title (${pack.variant})"
+            VoiceFamily.PIPER -> {
+                val short = pack.voiceName?.substringBefore(" (") ?: pack.displayName
+                if (pack.variant == "Standard") "$title $short" else "$title $short (${pack.variant})"
+            }
+        }
+    }
 }
