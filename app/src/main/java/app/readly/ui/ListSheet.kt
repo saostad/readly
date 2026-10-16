@@ -29,7 +29,7 @@ class ListSheet(
     private fun dp(n: Int): Int = (n * activity.resources.displayMetrics.density + 0.5f).toInt()
 
     fun show() {
-        val dialog = Dialog(activity)
+        val dialog = Dialog(activity, R.style.SheetDialog)
         dialog.asBottomSheet() ?: return
         val pad = dp(16)
         val root = LinearLayout(activity).apply {
@@ -103,5 +103,6 @@ class ListSheet(
         )
         dialog.setContentView(root)
         dialog.show()
+        Sheets.applyFullWidth(dialog)
     }
 }

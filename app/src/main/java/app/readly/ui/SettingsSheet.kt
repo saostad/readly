@@ -36,7 +36,7 @@ class SettingsSheet(
 
     fun show() {
         val pack = ReaderService.activePack(activity)
-        val dialog = Dialog(activity)
+        val dialog = Dialog(activity, R.style.SheetDialog)
         dialog.asBottomSheet() ?: return
         dialog.setContentView(R.layout.dialog_settings_sheet)
 
@@ -62,6 +62,7 @@ class SettingsSheet(
         fillPersianLine(dialog)
         dialog.setOnDismissListener { onDismiss() }
         dialog.show()
+        Sheets.applyFullWidth(dialog)
     }
 
     private fun fillSpeakers(dialog: Dialog, pack: VoicePack) {
