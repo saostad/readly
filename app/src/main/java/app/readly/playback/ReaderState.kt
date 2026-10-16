@@ -33,6 +33,19 @@ data class ReaderSnapshot(
     val notice: String? = null,
     /** Smart voice pick for the current reading (e.g. `Smart voice: Spanish → …`), if any. */
     val smartLine: String? = null,
+    /** Previous/next sentence around the current one (empty when absent). */
+    val prevText: String = "",
+    val nextText: String = "",
+    /** Page host for link reads, "" for pasted or typed text. */
+    val host: String = "",
+    /** Pack id reading the current document ("" when none). */
+    val packId: String = "",
+    /** Chunks started on playback in this pipeline (for the time-left estimate). */
+    val playedChunks: Int = 0,
+    /** Average audio-ms per char measured so far in this document (0 = unknown). */
+    val msPerChar: Double = 0.0,
+    /** Chars from the current chunk to the end of the document. */
+    val remainingChars: Int = 0,
 )
 
 /**

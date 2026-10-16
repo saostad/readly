@@ -321,6 +321,12 @@ class ReaderService : Service() {
     private var currentTitle: String = ""
     private var currentPackId: String = ""
     private var currentLang: String = "en"
+    private var currentHost: String = ""
+    /** Audio ms and chars synthesized so far in this document (producer writes). */
+    @Volatile
+    private var docAudioMs = 0.0
+    @Volatile
+    private var docChars = 0
 
     /** Text held while Smart voice waits for the user's Ask choice. Read-anyway consumes it. */
     private data class PendingAsk(
@@ -494,6 +500,7 @@ class ReaderService : Service() {
 
     private fun handleRead(text: String, title: String, formatName: String) {
         readerExecutor.execute {
+            currentHost = ""
             val finished = AtomicBoolean(false)
             fun finish() {
                 if (finished.compareAndSet(false, true)) pendingRequests.decrementAndGet()
@@ -532,6 +539,7 @@ class ReaderService : Service() {
                 } catch (_: Exception) {
                     url
                 }
+                currentHost = host
                 // Foreground was already entered in onStartCommand; a worker-side
                 // startForeground here could run after a concurrent goIdle() detached.
                 ReaderState.update {
@@ -543,6 +551,13 @@ class ReaderService : Service() {
                         total = 0,
                         errorMessage = null,
                         notice = null,
+                        prevText = "",
+                        nextText = "",
+                        host = host,
+                        packId = "",
+                        playedChunks = 0,
+                        msPerChar = 0.0,
+                        remainingChars = 0,
                     )
                 }
                 updateNotification()
@@ -677,6 +692,13 @@ class ReaderService : Service() {
                 errorMessage = message,
                 notice = null,
                 smartLine = null,
+                prevText = "",
+                nextText = "",
+                host = "",
+                packId = "",
+                playedChunks = 0,
+                msPerChar = 0.0,
+                remainingChars = 0,
             )
         }
         mainHandler.post {
@@ -729,6 +751,13 @@ class ReaderService : Service() {
                 total = 0,
                 errorMessage = null,
                 notice = null,
+                prevText = "",
+                nextText = "",
+                host = currentHost,
+                packId = "",
+                playedChunks = 0,
+                msPerChar = 0.0,
+                remainingChars = 0,
             )
         }
         updateNotification()
@@ -840,6 +869,13 @@ class ReaderService : Service() {
                 errorMessage = null,
                 notice = combined,
                 smartLine = null,
+                prevText = "",
+                nextText = "",
+                host = "",
+                packId = "",
+                playedChunks = 0,
+                msPerChar = 0.0,
+                remainingChars = 0,
             )
         }
         mainHandler.post {
@@ -1168,6 +1204,13 @@ class ReaderService : Service() {
                         errorMessage = null,
                         notice = null,
                         smartLine = null,
+                        prevText = "",
+                        nextText = "",
+                        host = "",
+                        packId = "",
+                        playedChunks = 0,
+                        msPerChar = 0.0,
+                        remainingChars = 0,
                     )
                 }
                 updateNotification()
@@ -1219,6 +1262,12 @@ class ReaderService : Service() {
             onRequestDone?.invoke()
             return
         }
+        // A fresh document restarts the time-left stats; NEXT/PREVIOUS restarts
+        // (onRequestDone == null) keep measuring the same document.
+        if (onRequestDone != null) {
+            docAudioMs = 0.0
+            docChars = 0
+        }
         val rate = try {
             ensureEngineOrThrow(docPack.id)
         } catch (e: InterruptedException) {
@@ -1260,6 +1309,11 @@ class ReaderService : Service() {
                         } else {
                             ReaderStatus.READING
                         },
+                        prevText = chunks.getOrNull(index - 1)?.text.orEmpty(),
+                        nextText = chunks.getOrNull(index + 1)?.text.orEmpty(),
+                        playedChunks = it.playedChunks + 1,
+                        msPerChar = avgMsPerChar(),
+                        remainingChars = chunks.drop(index).sumOf { chunk -> chunk.text.length },
                     )
                 }
                 updateNotification()
@@ -1307,6 +1361,13 @@ class ReaderService : Service() {
                 index = startIndex,
                 total = chunks.size,
                 errorMessage = null,
+                prevText = chunks.getOrNull(startIndex - 1)?.text.orEmpty(),
+                nextText = chunks.getOrNull(startIndex + 1)?.text.orEmpty(),
+                host = currentHost,
+                packId = docPack.id,
+                playedChunks = 0,
+                msPerChar = avgMsPerChar(),
+                remainingChars = chunks.drop(startIndex).sumOf { chunk -> chunk.text.length },
             )
         }
         requestFocus()
@@ -1345,8 +1406,16 @@ class ReaderService : Service() {
         val synthMs = SystemClock.elapsedRealtime() - begin
         val rate = engines.sampleRateIfLoaded(pack.id) ?: 0
         val audioMs = if (rate > 0) audio.size * 1000.0 / rate else 0.0
+        docAudioMs += audioMs
+        docChars += text.length
         ReaderState.update { it.copy(lastRtf = if (audioMs > 0) synthMs / audioMs else 0.0) }
         return audio
+    }
+
+    /** Average audio-ms per char synthesized so far in this document (0 = unknown). */
+    private fun avgMsPerChar(): Double {
+        val chars = docChars
+        return if (chars > 0) docAudioMs / chars else 0.0
     }
 
     // ------------------------------------------------------------------

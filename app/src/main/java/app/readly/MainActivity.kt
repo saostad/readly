@@ -84,6 +84,9 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var tipCard: LinearLayout
     private lateinit var tipSetup: Button
     private lateinit var needVoiceBanner: TextView
+    private lateinit var miniBar: LinearLayout
+    private lateinit var miniText: TextView
+    private lateinit var miniToggle: ImageButton
 
     private val readerListener = ReaderState.Listener { render(it) }
 
@@ -125,6 +128,9 @@ class MainActivity : Activity(), InstallTask.Listener {
         autoChip = findViewById(R.id.autoChip)
         tipCard = findViewById(R.id.tipCard)
         tipSetup = findViewById(R.id.tipSetup)
+        miniBar = findViewById(R.id.miniBar)
+        miniText = findViewById(R.id.miniText)
+        miniToggle = findViewById(R.id.miniToggle)
         needVoiceBanner = findViewById(R.id.needVoiceBanner)
         if (intent?.getBooleanExtra(EXTRA_NEED_VOICE, false) == true) {
             needVoiceBanner.visibility = View.VISIBLE
@@ -169,6 +175,10 @@ class MainActivity : Activity(), InstallTask.Listener {
                 getString(R.string.phone_voice_fallback_toast),
             )
         }
+        miniBar.setOnClickListener {
+            startActivity(Intent(this, NowPlayingActivity::class.java))
+        }
+        miniToggle.setOnClickListener { sendAction(ReaderService.ACTION_TOGGLE) }
         refreshChips()
 
         if (store.isInstalled()) {
@@ -308,6 +318,11 @@ class MainActivity : Activity(), InstallTask.Listener {
         inputError.visibility = View.GONE
         val title = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(60) ?: ""
         ReaderService.read(this, text, title, SourceFormat.PLAIN)
+        startActivity(Intent(this, NowPlayingActivity::class.java))
+    }
+
+    private fun sendAction(action: String) {
+        startService(Intent(this, ReaderService::class.java).setAction(action))
     }
 
     private fun pasteFromClipboard() {
@@ -386,6 +401,21 @@ class MainActivity : Activity(), InstallTask.Listener {
         } else {
             noticeCard.visibility = View.GONE
         }
+        updateMiniBar(snap)
+    }
+
+    /** Mini-bar pinned to the bottom of Home while the reader isn't IDLE. */
+    private fun updateMiniBar(snap: ReaderSnapshot) {
+        if (readerContainer.visibility != View.VISIBLE || snap.status == ReaderStatus.IDLE) {
+            miniBar.visibility = View.GONE
+            return
+        }
+        miniBar.visibility = View.VISIBLE
+        val label = snap.title.ifBlank { snap.host.ifBlank { getString(R.string.source_text) } }
+        miniText.text = getString(R.string.minibar_format, label)
+        miniToggle.setImageResource(
+            if (snap.status == ReaderStatus.PAUSED) R.drawable.ic_play else R.drawable.ic_pause,
+        )
     }
 
     private fun updateNotifRow() {
@@ -549,6 +579,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         setSetupVisible(true)
         setProgressVisible(false)
         setErrorVisible(false)
+        updateMiniBar(ReaderState.snapshot)
     }
 
     private fun showProgress() {
@@ -559,6 +590,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         downloadHelp.visibility = View.GONE
         setProgressVisible(true)
         setErrorVisible(false)
+        updateMiniBar(ReaderState.snapshot)
     }
 
     private fun showError() {
@@ -569,12 +601,14 @@ class MainActivity : Activity(), InstallTask.Listener {
         downloadHelp.visibility = View.GONE
         setProgressVisible(false)
         setErrorVisible(true)
+        updateMiniBar(ReaderState.snapshot)
     }
 
     private fun showReader() {
         setupContainer.visibility = View.GONE
         readerContainer.visibility = View.VISIBLE
         updateNotifRow()
+        updateMiniBar(ReaderState.snapshot)
     }
 
     private fun setSetupVisible(visible: Boolean) {

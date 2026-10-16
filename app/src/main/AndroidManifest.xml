@@ -28,6 +28,10 @@
             android:exported="false"
             android:label="@string/voices_title" />
 
+        <activity
+            android:name=".NowPlayingActivity"
+            android:exported="false" />
+
         <service
             android:name=".playback.ReaderService"
             android:exported="false"

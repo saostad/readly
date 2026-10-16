@@ -133,4 +133,13 @@
     <string name="dismiss_desc">Dismiss</string>
     <string name="settings_desc">Voice and speed settings</string>
     <string name="phone_voice_label">Phone voice</string>
+
+    <string name="now_reading_title">Now reading</string>
+    <string name="minibar_format">Now reading · %1$s</string>
+    <string name="minibar_toggle_desc">Play or pause</string>
+    <string name="time_left_format">~%1$d min left</string>
+    <string name="source_text">Text</string>
+    <string name="opening_fallback">Opening…</string>
+    <string name="previewing_fallback">Previewing…</string>
+    <string name="close_desc">Close</string>
 </resources>
