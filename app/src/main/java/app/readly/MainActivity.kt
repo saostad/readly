@@ -18,6 +18,7 @@ import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import app.readly.model.InstallStage
 import app.readly.model.VoiceModelStore
 import app.readly.playback.ReaderService
@@ -27,6 +28,7 @@ import app.readly.playback.ReaderStatus
 import app.readly.text.SourceFormat
 import java.io.File
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * First-run voice download, then the reader: a text box to read aloud, playback
@@ -38,11 +40,17 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var store: VoiceModelStore
     private lateinit var prefs: SharedPreferences
     private var task: InstallTask? = null
+    private var lastSetupError: Exception? = null
+    private val setupSamples = SamplePlayer()
+    private var setupPlaying = false
 
     private lateinit var setupContainer: LinearLayout
     private lateinit var readerContainer: LinearLayout
     private lateinit var title: TextView
     private lateinit var body: TextView
+    private lateinit var setupEstimate: TextView
+    private lateinit var setupSampleButton: Button
+    private lateinit var chooseVoiceButton: Button
     private lateinit var downloadButton: Button
     private lateinit var downloadHelp: TextView
     private lateinit var progressBar: ProgressBar
@@ -89,6 +97,9 @@ class MainActivity : Activity(), InstallTask.Listener {
         readerContainer = findViewById(R.id.readerContainer)
         title = findViewById(R.id.title)
         body = findViewById(R.id.body)
+        setupEstimate = findViewById(R.id.setupEstimate)
+        setupSampleButton = findViewById(R.id.setupSampleButton)
+        chooseVoiceButton = findViewById(R.id.chooseVoiceButton)
         downloadButton = findViewById(R.id.downloadButton)
         downloadHelp = findViewById(R.id.downloadHelp)
         progressBar = findViewById(R.id.progressBar)
@@ -133,7 +144,12 @@ class MainActivity : Activity(), InstallTask.Listener {
         body.text = getString(R.string.setup_body, pack.displayName, pack.sizeMb)
         downloadButton.text = getString(R.string.download_button, pack.sizeMb)
         voicePackLabel.text = getString(R.string.voice_pack_format, pack.displayName)
+        updateSetupEstimate(pack.sizeMb)
 
+        setupSampleButton.setOnClickListener { toggleSetupSample() }
+        chooseVoiceButton.setOnClickListener {
+            startActivity(Intent(this, VoicesActivity::class.java))
+        }
         downloadButton.setOnClickListener { startInstall() }
         retryButton.setOnClickListener { startInstall() }
         cancelButton.setOnClickListener { task?.cancel() }
@@ -160,9 +176,10 @@ class MainActivity : Activity(), InstallTask.Listener {
         if (store.isInstalled()) {
             showReader()
         } else {
-            // Re-attach to the running install after rotation instead of restarting it.
+            // Re-attach to the running install after rotation instead of restarting it
+            // (only when it is ours; another pack's install belongs to its own screen).
             val running = (application as ReadlyApp).installTask
-            if (running != null && !running.isDone) {
+            if (running != null && !running.isDone && running.packId == store.pack.id) {
                 task = running
                 running.listener = this
                 showProgress()
@@ -179,26 +196,71 @@ class MainActivity : Activity(), InstallTask.Listener {
         ReaderState.addListener(readerListener)
     }
 
+    override fun onPause() {
+        task?.let { if (it.listener === this) it.listener = null }
+        super.onPause()
+    }
+
     override fun onStop() {
         ReaderState.removeListener(readerListener)
+        setupSamples.release()
+        setupPlaying = false
         super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
         // The active pack may have changed on the Voices screen while we were away.
+        // On a fresh install the active pack is the recommended one (DEFAULT_ID).
         val pack = ReaderService.activePack(this)
         if (pack.id != store.pack.id) {
+            task = null
+            lastSetupError = null
             store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
             body.text = getString(R.string.setup_body, pack.displayName, pack.sizeMb)
             downloadButton.text = getString(R.string.download_button, pack.sizeMb)
+            updateSetupEstimate(pack.sizeMb)
             refreshVoiceSection()
         }
+        repaintSetupSampleButton()
+        syncSetupState()
         // Warm the engine while the user pastes so the first READ starts instantly.
         if (store.isInstalled() && ReaderState.snapshot.status == ReaderStatus.IDLE) {
             ReaderService.preload(this)
         }
         updateNotifRow()
+    }
+
+    /**
+     * Shows reader, progress, error or idle from the current disk state: an install
+     * that finished on the Voices screen while we were away lands here, as does a
+     * re-attach to our still-running install.
+     */
+    private fun syncSetupState() {
+        if (store.isInstalled()) {
+            showReader()
+            return
+        }
+        val running = (application as ReadlyApp).installTask
+        if (running != null && !running.isDone && running.packId == store.pack.id) {
+            task = running
+            running.listener = this
+            showProgress()
+            updateProgress(running.lastStage, running.lastDoneBytes, running.lastTotalBytes)
+            return
+        }
+        task = null
+        val error = lastSetupError
+        if (error != null) {
+            errorText.text = getString(
+                R.string.error_format,
+                error.javaClass.name,
+                error.message ?: "(no details)",
+            )
+            showError()
+        } else {
+            showIdle()
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -373,6 +435,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun startInstall() {
         val app = application as ReadlyApp
         if (app.installTask?.isDone == false) return
+        lastSetupError = null
         val newTask = InstallTask(store) { finished ->
             if (app.installTask === finished) app.installTask = null
         }
@@ -391,24 +454,75 @@ class MainActivity : Activity(), InstallTask.Listener {
     override fun onDone() {
         Log.i("Readly", "Voice install complete")
         task = null
+        lastSetupError = null
         showReader()
     }
 
     override fun onCancelled() {
         Log.i("Readly", "Voice install cancelled by user")
         task = null
+        lastSetupError = null
         showIdle()
     }
 
     override fun onError(e: Exception) {
         Log.e("Readly", "Voice download failed", e)
         task = null
+        lastSetupError = e
         errorText.text = getString(
             R.string.error_format,
             e.javaClass.name,
             e.message ?: "(no details)",
         )
         showError()
+    }
+
+    /** Download estimate from the measured rate (320 MB took ~3 min on a Pixel). */
+    private fun updateSetupEstimate(sizeMb: Int) {
+        val minutes = maxOf(1, (sizeMb / 100.0).roundToInt())
+        setupEstimate.text = if (minutes == 1) {
+            getString(R.string.setup_eta_one)
+        } else {
+            getString(R.string.setup_eta_many, minutes)
+        }
+    }
+
+    private fun toggleSetupSample() {
+        if (setupPlaying) {
+            setupSamples.stop()
+            setupPlaying = false
+            repaintSetupSampleButton()
+            return
+        }
+        val reason = setupSamples.play(
+            this,
+            store.pack.sampleRes,
+            onDone = {
+                setupPlaying = false
+                repaintSetupSampleButton()
+            },
+            onAsyncError = { asyncReason -> setupSampleError(asyncReason) },
+        )
+        if (reason != null) {
+            setupSampleError(reason)
+        } else {
+            setupPlaying = true
+        }
+        repaintSetupSampleButton()
+    }
+
+    private fun repaintSetupSampleButton() {
+        setupSampleButton.setText(
+            if (setupPlaying) R.string.stop_button else R.string.play_sample_button,
+        )
+    }
+
+    private fun setupSampleError(reason: String) {
+        setupPlaying = false
+        val message = getString(R.string.sample_error_format, reason)
+        Log.e("Readly", "$message (${store.pack.id})")
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        repaintSetupSampleButton()
     }
 
     private fun updateProgress(stage: InstallStage, bytesDone: Long, bytesTotal: Long) {

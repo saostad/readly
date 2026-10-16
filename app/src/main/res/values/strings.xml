@@ -62,4 +62,9 @@
     <string name="sample_error_format">Couldn\'t play the sample: %1$s</string>
     <string name="in_use_delete_help">Switch to another voice before deleting this one.</string>
     <string name="change_pack_button">Change voice pack</string>
+    <string name="setup_eta_one">Setup takes about 1 minute on Wi-Fi.</string>
+    <string name="setup_eta_many">Setup takes about %1$d minutes on Wi-Fi.</string>
+    <string name="choose_voice_button">Choose a different voice</string>
+    <string name="setup_sample_help">Hear what this voice sounds like.</string>
+    <string name="choose_voice_help">Compare all voices before downloading.</string>
 </resources>
