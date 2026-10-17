@@ -32,6 +32,15 @@
             android:name=".NowPlayingActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".NytBrowserActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".ArticleActivity"
+            android:exported="false"
+            android:label="@string/article_title" />
+
         <service
             android:name=".playback.ReaderService"
             android:exported="false"

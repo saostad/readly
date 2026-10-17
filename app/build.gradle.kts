@@ -8,10 +8,10 @@ plugins {
 
 android {
     namespace = "app.readly"
-    compileSdk = 34
-    // Pinned: the host SDK ships only build-tools 36.1.0 (AGP 8.13 defaults to
-    // 35.0.0, which would need an SDK install outside the repo).
-    buildToolsVersion = "36.1.0"
+    // 37: minimum demanded by the pinned geckoview 158 AAR metadata (same as
+    // the proven Round 1 prototype; production target/min stay 34/26).
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "app.readly"
@@ -42,9 +42,21 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    packaging {
+        resources.excludes += "META-INF/DEPENDENCIES"
+        // arm64-only: the pinned GeckoView AAR ships arm64 + armeabi-v7a +
+        // x86_64; Readly ships arm64 only (same ndk abiFilter as before).
+        jniLibs {
+            excludes += "lib/armeabi-v7a/**"
+            excludes += "lib/x86/**"
+            excludes += "lib/x86_64/**"
+        }
+    }
 }
 
 dependencies {
+    // Pinned stable GeckoView (official Mozilla Maven); article engine only.
+    implementation("org.mozilla.geckoview:geckoview:158.0.20261007201254")
     implementation(libs.commons.compress)
     implementation(libs.jsoup)
     // readability4j pulls jsoup 1.11.2 and kotlin-stdlib 1.3.72 transitively; we
@@ -63,9 +75,17 @@ dependencies {
 }
 
 // readability4j asks for jsoup 1.11.2; force the version we test against.
+// GeckoView's POM requests newer kotlin-stdlib / androidx.core than this
+// pinned toolchain provides. Both forces below are verified safe against the
+// actual geckoview-158 classes (see the Round 1 prototype README for the
+// method): kotlin-stdlib 2.4.20 -> 2.2.20 (Gecko is pure Java, zero
+// kotlin/* refs) and androidx.core 1.19.0 -> 1.18.0 (all 10 referenced
+// members present; newest core fitting AGP 8.13.2).
 configurations.all {
     resolutionStrategy {
         force("org.jsoup:jsoup:1.23.2")
+        force("org.jetbrains.kotlin:kotlin-stdlib:2.2.20")
+        force("androidx.core:core:1.18.0")
     }
 }
 

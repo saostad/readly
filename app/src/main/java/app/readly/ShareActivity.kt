@@ -18,8 +18,10 @@ import java.io.File
  * and finishes at once so the share sheet closes instantly.
  *
  * Any shared file is read here in [onCreate], while the sender's URI permission is
- * still valid. URL fetching happens in the service ([ReaderService.ACTION_READ_URL]),
- * in parallel with the voice load kicked off by [ReaderService.preload].
+ * still valid. Shared links open in the automatic article engine
+ * ([ArticleActivity]) while the sender is still foreground, in parallel with
+ * the voice load kicked off by [ReaderService.preload]. Text, HTML, Markdown
+ * and file shares are read directly by [ReaderService.read].
  */
 class ShareActivity : Activity() {
 
@@ -43,7 +45,7 @@ class ShareActivity : Activity() {
                 }
                 is ShareRequest.Url -> {
                     ReaderService.preload(this)
-                    ReaderService.readUrl(this, request.url, request.titleHint)
+                    startActivity(ArticleActivity.intent(this, request.url))
                 }
             }
         } catch (e: IllegalArgumentException) {

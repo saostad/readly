@@ -1,5 +1,13 @@
 package app.readly.input
 
+import app.readly.input.nyt.NytArticle
+import app.readly.input.sites.RuleStatus
+import app.readly.input.sites.SiteArticleGuard
+import app.readly.input.sites.SiteBrowserPolicy
+import app.readly.input.sites.SiteCleanup
+import app.readly.input.sites.SiteReadingSnapshot
+import app.readly.input.sites.SiteRequests
+import app.readly.input.sites.SiteUsage
 import app.readly.text.SourceFormat
 import app.readly.text.TextSanitizer
 import java.io.ByteArrayOutputStream
@@ -35,10 +43,16 @@ interface FetchConnection : Closeable {
  *   passes [httpUrlOpener].
  * @param onWarn receives messages that production logs with `Log.w("Readly", …)`; injected
  *   so JVM tests don't touch `android.util.Log`.
+ * @param siteRules the pinned per-reading catalog snapshot, or null to read
+ *   without shared fixes (unknown-host behavior everywhere).
+ * @param siteUsage collects applied fixes for the reading notice; null
+ *   records nothing.
  */
 class ArticleFetcher(
     private val urlOpener: (String) -> FetchConnection,
     private val onWarn: (String) -> Unit = { android.util.Log.w("Readly", it) },
+    private val siteRules: SiteReadingSnapshot? = null,
+    private val siteUsage: SiteUsage? = null,
 ) {
     /** A fetched page, ready for [app.readly.text.TextSanitizer]. */
     data class Document(
@@ -64,6 +78,22 @@ class ArticleFetcher(
 
         /** Production [ArticleFetcher] opener backed by [HttpURLConnection]. */
         fun httpUrlOpener(url: String): FetchConnection = HttpFetchConnection(url)
+
+        /**
+         * Production opener with an explicit User-Agent. [NytFetchPolicy][app.readly.input.nyt.NytFetchPolicy]
+         * uses this per redirect hop; the update downloader keeps [httpUrlOpener].
+         */
+        fun httpUrlOpenerWithUserAgent(url: String, userAgent: String): FetchConnection =
+            HttpFetchConnection(url, userAgent)
+
+        /**
+         * Production opener with an explicit header map (User-Agent, Referer,
+         * validated extras). [SiteFetchPolicy][app.readly.input.sites.SiteFetchPolicy]
+         * uses this per redirect hop; an empty map sends the standard
+         * User-Agent and Accept-Language. Map entries override the defaults.
+         */
+        fun httpUrlOpenerWithHeaders(url: String, headers: Map<String, String>): FetchConnection =
+            HttpFetchConnection(url, USER_AGENT, headers)
 
         private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
 
@@ -108,6 +138,89 @@ class ArticleFetcher(
             throw e
         } catch (e: Exception) {
             throw FetchException("Couldn't open $url: ${e.javaClass.name}: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Extracts a readable article from already-rendered markup (the browser
+     * fallback's DOM snapshot) without any network fetch — the opener is
+     * never consulted, so tests prove that with a throwing opener. Any
+     * eligible website address may be read; unsafe targets fail instead of
+     * handing arbitrary DOM to speech.
+     *
+     * Main NYT article hosts run the exact NYT guard/extractor, unchanged.
+     * Every other host — matched-rule or unknown — runs the shared block
+     * guard first (recognizable login, challenge, and paywall pages fail
+     * with an explanation instead of being spoken as UI), then the final
+     * page's eligible declarative cleanup, then the same Readability-or-
+     * fallback extraction as [fetch]. [siteRules] supplies the cleanup
+     * match only; the browser sends its normal UA, never rule headers.
+     * Other NYT subdomains take the ordinary path (never the NYT UA).
+     *
+     * @throws IOException with a user-readable message on any failure.
+     */
+    fun extractRenderedHtml(
+        html: String,
+        finalUrl: String,
+        siteRules: SiteReadingSnapshot? = null,
+        siteUsage: SiteUsage? = null,
+    ): Document {
+        try {
+            // Byte budget, same 5 MiB definition as the DOM snapshot: cheap
+            // char check first (each char is at least one UTF-8 byte), then
+            // an exact UTF-8 measurement for multibyte markup.
+            if (html.length > MAX_BYTES) {
+                throw FetchException(
+                    "Read page failed: the rendered page is too large " +
+                        "(${html.length} chars, over 5 MB).",
+                )
+            }
+            val byteSize = html.toByteArray(Charsets.UTF_8).size
+            if (byteSize > MAX_BYTES) {
+                throw FetchException(
+                    "Read page failed: the rendered page is too large " +
+                        "($byteSize bytes, over 5 MB).",
+                )
+            }
+            if (!SiteBrowserPolicy.allowsExtraction(finalUrl)) {
+                throw FetchException(
+                    "Read page failed: ${SiteBrowserPolicy.blockReason(finalUrl)}: $finalUrl",
+                )
+            }
+            val doc = Jsoup.parse(html, finalUrl)
+            val host = hostOf(finalUrl)
+            if (NytArticle.isNytHost(finalUrl)) {
+                NytArticle.requireReadable(doc, finalUrl)
+                stripNonProse(doc)
+                val body = NytArticle.extractBody(doc)
+                return Document(cleanTitle(body.rawTitle, host), body.html, SourceFormat.HTML, null)
+            }
+            siteUsage?.finalHost = host
+            // Guarded before cleanup could erase the evidence, like native —
+            // but for unknown hosts too: a rendered script-heavy page is
+            // often an app shell or wall, never article prose to speak.
+            SiteArticleGuard.blockReason(doc, finalUrl, host)?.let { throw FetchException(it) }
+            val siteMatch = if (siteRules != null && SiteRequests.isEligibleUrl(finalUrl)) {
+                siteRules.catalog.match(host)
+            } else {
+                null
+            }
+            if (siteMatch != null && siteMatch.rule.html.cleanup.isNotEmpty()) {
+                val report = applySiteCleanup(doc, siteMatch.rule.html.cleanup, host)
+                if (report.applied()) {
+                    siteUsage?.cleanupApplied = true
+                    if (siteMatch.rule.status == RuleStatus.PARTIAL) siteUsage?.partialApplied = true
+                }
+            }
+            stripNonProse(doc)
+            return readabilityDocument(doc, finalUrl, host, "Read page failed")
+        } catch (e: FetchException) {
+            throw e
+        } catch (e: Exception) {
+            throw FetchException(
+                "Read page failed: ${e.javaClass.name}: ${e.message}",
+                e,
+            )
         }
     }
 
@@ -261,14 +374,60 @@ class ArticleFetcher(
         val probe = Jsoup.parse(String(bytes, Charsets.UTF_8), finalUrl)
         val html = decode(bytes, contentType, probe)
         val doc = Jsoup.parse(html, finalUrl)
-        stripNonProse(doc)
         val host = hostOf(finalUrl)
+        val nytHost = NytArticle.isNytHost(finalUrl)
+        // Only the final response URL's matched rule applies, and only on
+        // eligible fetches (same https/no-userinfo/port/domain boundary as
+        // request routing): never the original URL's rule after a redirect.
+        val siteMatch = if (siteRules != null && SiteRequests.isEligibleUrl(finalUrl)) {
+            siteRules.catalog.match(host)
+        } else {
+            null
+        }
+        siteUsage?.finalHost = host
+        // Blocking evidence is inspected before any cleanup could strip it;
+        // bodies are extracted after cleanup, like others. NYT keeps its
+        // exact guard and extractor; other matched hosts get the narrow
+        // shared guard, and unknown hosts keep the ordinary fallback.
+        if (nytHost) {
+            NytArticle.requireReadable(doc, finalUrl)
+        } else if (siteMatch != null) {
+            SiteArticleGuard.blockReason(doc, finalUrl, host)?.let { throw FetchException(it) }
+        }
+        if (siteMatch != null && siteMatch.rule.html.cleanup.isNotEmpty()) {
+            val report = applySiteCleanup(doc, siteMatch.rule.html.cleanup, host)
+            if (report.applied()) {
+                siteUsage?.cleanupApplied = true
+                if (siteMatch.rule.status == RuleStatus.PARTIAL) siteUsage?.partialApplied = true
+            }
+        }
+        stripNonProse(doc)
+        if (nytHost) {
+            val body = NytArticle.extractBody(doc)
+            return Document(cleanTitle(body.rawTitle, host), body.html, SourceFormat.HTML, null)
+        }
+        return readabilityDocument(doc, finalUrl, host, "Couldn't open $url")
+    }
+
+    /**
+     * Runs Readability over the cleaned [doc] (guard and site cleanup have
+     * already run); falls back to the whole page with [FALLBACK_NOTICE] when
+     * no main article is found. Shared by [fetch] and [extractRenderedHtml]
+     * so both paths keep the same titles and fallback behavior; only the
+     * [failurePrefix] differs (`Couldn't open <url>` vs `Read page failed`).
+     */
+    private fun readabilityDocument(
+        doc: org.jsoup.nodes.Document,
+        finalUrl: String,
+        host: String,
+        failurePrefix: String,
+    ): Document {
         val article = try {
             // Readability4J mutates the Document it is given, so it gets a
             // clone; the fallback path below reads the cleaned original.
             Readability4J(finalUrl, doc.clone()).parse()
         } catch (e: Exception) {
-            throw FetchException("Couldn't open $url: ${e.javaClass.name}: ${e.message}", e)
+            throw FetchException("$failurePrefix: ${e.javaClass.name}: ${e.message}", e)
         }
         val articleText = article?.textContent.orEmpty()
         val articleHtml = article?.content.orEmpty()
@@ -280,6 +439,29 @@ class ArticleFetcher(
         }
         val raw = ogTitle.ifBlank { article.title.orEmpty().ifBlank { doc.title() } }.ifBlank { host }
         return Document(cleanTitle(raw, host), articleHtml, SourceFormat.HTML, null)
+    }
+
+    /**
+     * Runs the final page's declarative cleanup and returns its report. A
+     * selector failure fails the read with the operation, selector, and real
+     * error: the uncleaned page may still show blocked UI that must not be
+     * spoken as an article. Internal for the deterministic failing-document
+     * seam test; production callers pass the parsed page.
+     */
+    internal fun applySiteCleanup(
+        doc: org.jsoup.nodes.Document,
+        ops: List<app.readly.input.sites.CleanupOp>,
+        host: String,
+    ): SiteCleanup.Report {
+        val report = SiteCleanup.apply(doc, ops)
+        report.errors.firstOrNull()?.let { failure ->
+            val detail = failure.message ?: "(no details)"
+            throw FetchException(
+                "Couldn't clean this article from $host: cleanup selector " +
+                    "\"${failure.selector}\" failed: ${failure.errorClass}: $detail",
+            )
+        }
+        return report
     }
 
     /**
@@ -402,15 +584,24 @@ class ArticleFetcher(
         return path.lowercase(Locale.US).endsWith(".md")
     }
 
-    private class HttpFetchConnection(url: String) : FetchConnection {
+    private class HttpFetchConnection(
+        url: String,
+        userAgent: String = USER_AGENT,
+        headers: Map<String, String> = emptyMap(),
+    ) : FetchConnection {
         private val conn = (URI(url).toURL().openConnection() as HttpURLConnection).apply {
             connectTimeout = 10_000
             readTimeout = 20_000
             // Redirects are followed by hand so http↔https crossings work too.
             instanceFollowRedirects = false
             requestMethod = "GET"
-            setRequestProperty("User-Agent", USER_AGENT)
+            setRequestProperty("User-Agent", userAgent)
             setRequestProperty("Accept-Language", Locale.getDefault().toLanguageTag())
+            // Validated rule headers only (User-Agent, Referer, literal
+            // extras); later values win, so a rule User-Agent replaces the
+            // default above. Transport headers can never arrive here: the
+            // importer and cache codec forbid them.
+            for ((name, value) in headers) setRequestProperty(name, value)
         }
 
         override val statusCode: Int
@@ -422,5 +613,6 @@ class ArticleFetcher(
         override fun close() = conn.disconnect()
     }
 
-    private class FetchException(message: String, cause: Throwable? = null) : IOException(message, cause)
+    /** User-readable fetch failures; pass through [fetch] unwrapped. Visible to the NYT extractor. */
+    internal class FetchException(message: String, cause: Throwable? = null) : IOException(message, cause)
 }

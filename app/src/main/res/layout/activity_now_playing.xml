@@ -66,6 +66,30 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
+        <LinearLayout
+            android:id="@+id/npBrowserRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <Button
+                style="@style/Btn.Primary"
+                android:id="@+id/npOpenPage"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/nyt_open_page" />
+
+            <TextView
+                android:id="@+id/npOpenHelp"
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/nyt_open_page_help" />
+        </LinearLayout>
+
         <TextView
             android:id="@+id/sentenceView"
             android:layout_width="match_parent"

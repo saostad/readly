@@ -4,6 +4,8 @@ import android.app.Activity
 import android.app.Dialog
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.widget.Button
 import android.widget.SeekBar
@@ -11,12 +13,20 @@ import android.widget.Switch
 import android.widget.TextView
 import app.readly.PhoneVoiceSettings
 import app.readly.R
+import app.readly.ReadlyApp
 import app.readly.VoicesActivity
+import app.readly.article.ArticleEngine
+import app.readly.article.BpcUiState
+import app.readly.input.sites.RuleUpdateStatus
+import app.readly.input.sites.SiteUiState
 import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
 import app.readly.model.VoicePack
 import app.readly.playback.ReaderService
 import java.io.File
+import java.lang.ref.WeakReference
+import java.text.DateFormat
+import java.util.Date
 import java.util.Locale
 
 /**
@@ -60,6 +70,7 @@ class SettingsSheet(
         )
         fillPhoneRow(dialog)
         fillPersianLine(dialog)
+        fillSiteSection(dialog)
         dialog.setOnDismissListener { onDismiss() }
         dialog.show()
         Sheets.applyFullWidth(dialog)
@@ -188,6 +199,165 @@ class SettingsSheet(
             line.visibility = View.VISIBLE
         } else {
             line.visibility = View.GONE
+        }
+    }
+
+    /**
+     * "Website reading": the shared automatic-updates toggle, a manual update
+     * check, and the current article-extension plus reading-fix status. The
+     * toggle governs both updaters. The manual check targets the actual
+     * add-on (starting the engine when needed) and also refreshes the
+     * native/extraction rules kept for compatibility; the two statuses are
+     * shown separately, never conflated. Everything here is immediate: both
+     * coordinators work on their own threads, and completion callbacks
+     * repaint on main only while this dialog is still showing. The retained
+     * callbacks capture only the two weak references plus the app-owned
+     * coordinators/engine and the main handler — never the dialog, the
+     * activity, or this sheet — so a dismiss/rotation retains nothing and
+     * never touches dead views. All rendering lives in [SiteSheetUi].
+     */
+    private fun fillSiteSection(dialog: Dialog) {
+        val coord = (activity.application as ReadlyApp).siteRules
+        coord.ensureStarted()
+        val engine = ArticleEngine.get(activity)
+        val auto = dialog.findViewById<Switch>(R.id.sheetNytAutoSwitch)
+        auto.isChecked = prefs.getBoolean(ReaderService.KEY_NYT_AUTO_UPDATE, true)
+        auto.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean(ReaderService.KEY_NYT_AUTO_UPDATE, checked).apply()
+        }
+        val dialogRef = WeakReference(dialog)
+        val activityRef = WeakReference(activity)
+        val main = Handler(Looper.getMainLooper())
+        val repaint = Runnable {
+            val act = activityRef.get()
+            val d = dialogRef.get()
+            if (act == null || act.isFinishing || act.isDestroyed) return@Runnable
+            if (d == null || !d.isShowing) return@Runnable
+            SiteSheetUi.paint(d, act, coord.siteUiState(), engine.bpcUiState())
+        }
+        val firstBpc = engine.bpcUiState()
+        SiteSheetUi.paint(dialog, activity, coord.siteUiState().also { first ->
+            if (first.base.checking) {
+                // Join the in-flight check so the sheet refreshes when it lands.
+                coord.checkUpdates(manual = false) { main.post(repaint) }
+            }
+        }, firstBpc.also {
+            if (it.checking) {
+                engine.checkAddonUpdates(manual = false) { main.post(repaint) }
+            }
+        })
+        dialog.findViewById<Button>(R.id.sheetNytCheck).setOnClickListener {
+            val act = activityRef.get()
+            val d = dialogRef.get()
+            if (act != null && d != null) {
+                val optimistic = coord.siteUiState()
+                val optimisticBpc = engine.bpcUiState()
+                SiteSheetUi.paint(
+                    d, act,
+                    optimistic.copy(base = optimistic.base.copy(checking = true)),
+                    optimisticBpc.copy(checking = true),
+                )
+            }
+            // Manual: the actual add-on first (may start the engine), then the
+            // compatibility rules. Both repaint when they land.
+            engine.checkAddonUpdates(manual = true) { main.post(repaint) }
+            coord.checkUpdates(manual = true) { main.post(repaint) }
+        }
+    }
+
+    companion object {
+        /**
+         * Static site sheet renderer: every function takes the recovered
+         * [Dialog]/[Activity] as parameters and holds no references, so the
+         * callbacks in [fillSiteSection] cannot retain the sheet or its
+         * activity indirectly.
+         */
+        internal object SiteSheetUi {
+            /** Repaints the check button, status lines and problem text. */
+            fun paint(
+                dialog: Dialog,
+                activity: Activity,
+                state: SiteUiState,
+                bpc: BpcUiState? = null,
+            ) {
+                val base = state.base
+                val checking = base.checking || bpc?.checking == true
+                dialog.findViewById<Button>(R.id.sheetNytCheck).apply {
+                    isEnabled = !checking
+                    setText(if (checking) R.string.nyt_checking else R.string.nyt_check_updates)
+                }
+                dialog.findViewById<TextView>(R.id.sheetNytStatus).text =
+                    siteStatusText(activity, state, bpc)
+                val problems = listOfNotNull(
+                    bpc?.lastError,
+                    base.startupError, base.lastError, base.warning,
+                    base.startupNotice, base.coordinatorError,
+                ).filter { it.isNotBlank() }
+                val errorView = dialog.findViewById<TextView>(R.id.sheetNytError)
+                if (problems.isEmpty()) {
+                    errorView.visibility = View.GONE
+                } else {
+                    errorView.text = problems.joinToString("\n\n")
+                    errorView.visibility = View.VISIBLE
+                }
+            }
+
+            /**
+             * Add-on version/check lines first, then the compatibility rules
+             * version/source, import summary, and last-check lines. The two
+             * updaters are never conflated: the add-on is the real article
+             * engine, the rules only feed native/extraction compatibility.
+             */
+            fun siteStatusText(activity: Activity, state: SiteUiState, bpc: BpcUiState? = null): String {
+                val lines = mutableListOf<String>()
+                if (bpc != null) {
+                    lines.add(
+                        if (!bpc.installedVersion.isNullOrBlank()) {
+                            activity.getString(R.string.bpc_addon_format, bpc.installedVersion)
+                        } else {
+                            activity.getString(R.string.bpc_addon_unknown)
+                        },
+                    )
+                    if (bpc.lastCheckMs > 0) {
+                        val whenText = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                            .format(Date(bpc.lastCheckMs))
+                        lines.add(activity.getString(R.string.bpc_last_checked_format, whenText))
+                    } else {
+                        lines.add(activity.getString(R.string.bpc_never_checked))
+                    }
+                }
+                val base = state.base
+                if (!base.ready) {
+                    lines.add(
+                        activity.getString(
+                            if (base.startupError != null) R.string.nyt_unavailable else R.string.nyt_starting,
+                        ),
+                    )
+                    return lines.joinToString("\n")
+                }
+                val source = activity.getString(
+                    if (base.origin == RuleUpdateStatus.ORIGIN_CACHE) R.string.nyt_source_downloaded
+                    else R.string.nyt_source_bundled,
+                )
+                lines.add(activity.getString(R.string.nyt_rules_format, base.version ?: "?", source))
+                if (state.summary != null) {
+                    lines.add(state.summary)
+                    lines.add(activity.getString(R.string.sites_imports_partial))
+                }
+                if (state.legacyOverrideVersion != null) {
+                    lines.add(
+                        activity.getString(R.string.sites_legacy_format, state.legacyOverrideVersion),
+                    )
+                }
+                if (base.lastCheckMs > 0) {
+                    val whenText = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                        .format(Date(base.lastCheckMs))
+                    lines.add(activity.getString(R.string.nyt_last_checked_format, whenText))
+                } else {
+                    lines.add(activity.getString(R.string.nyt_never_checked))
+                }
+                return lines.joinToString("\n")
+            }
         }
     }
 }

@@ -1,0 +1,21 @@
+{
+  "name": "Bypass Paywalls Clean (Firefox edition)",
+  "extensionId": "magnolia@12.34",
+  "version": "4.4.7.2",
+  "manifestVersion": 2,
+  "source": "https://gitflic.ru/project/magnolia1234/bpc_uploads/blob/raw?file=bypass_paywalls_clean-latest.xpi",
+  "upstreamProject": "https://gitflic.ru/project/magnolia1234/bypass-paywalls-firefox-clean",
+  "updateUrl": "https://gitflic.ru/project/magnolia1234/bpc_updates/blob/raw?file=updates.json",
+  "license": "MIT (Copyright (c) 2020, magnolia1234; see LICENSE in this folder)",
+  "file": "bpc.xpi",
+  "sha256": "ca3d938a9def4f2feb0ddd26f122b7701e22da45871a183e2b2ca0219669db3e",
+  "sizeBytes": 324071,
+  "signatureEntries": [
+    "META-INF/cose.manifest",
+    "META-INF/cose.sig",
+    "META-INF/manifest.mf",
+    "META-INF/mozilla.sf",
+    "META-INF/mozilla.rsa"
+  ],
+  "note": "Bundled byte-identical (unmodified). The probe verifies the SHA-256 at runtime before install and aborts on mismatch."
+}

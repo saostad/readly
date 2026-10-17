@@ -78,6 +78,10 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var noticeCard: LinearLayout
     private lateinit var noticeText: TextView
     private lateinit var dismissNotice: Button
+    private lateinit var errorCard: LinearLayout
+    private lateinit var errorMessage: TextView
+    private lateinit var openPageButton: Button
+    private lateinit var openPageHelp: TextView
     private lateinit var chipRow: LinearLayout
     private lateinit var voiceChip: Button
     private lateinit var speedChip: Button
@@ -124,6 +128,10 @@ class MainActivity : Activity(), InstallTask.Listener {
         noticeCard = findViewById(R.id.noticeCard)
         noticeText = findViewById(R.id.noticeText)
         dismissNotice = findViewById(R.id.dismissNotice)
+        errorCard = findViewById(R.id.errorCard)
+        errorMessage = findViewById(R.id.errorMessage)
+        openPageButton = findViewById(R.id.openPageButton)
+        openPageHelp = findViewById(R.id.openPageHelp)
         chipRow = findViewById(R.id.chipRow)
         voiceChip = findViewById(R.id.voiceChip)
         speedChip = findViewById(R.id.speedChip)
@@ -171,6 +179,15 @@ class MainActivity : Activity(), InstallTask.Listener {
         autoChip.setOnClickListener { toggleSmartVoice() }
         dismissNotice.setOnClickListener {
             ReaderState.update { it.copy(notice = null) }
+        }
+        openPageButton.setOnClickListener {
+            // The exact failed link from state: works even when the input
+            // box is empty (e.g. a failed shared link). Retries in the
+            // automatic article engine, not the legacy manual browser.
+            ReaderState.snapshot.retryUrl?.let {
+                startActivity(ArticleActivity.intent(this, it))
+                overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+            }
         }
         tipSetup.setOnClickListener {
             PhoneVoiceSettings.open(
@@ -324,10 +341,23 @@ class MainActivity : Activity(), InstallTask.Listener {
             return
         }
         inputError.visibility = View.GONE
-        val title = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(60) ?: ""
-        ReaderService.read(this, text, title, SourceFormat.PLAIN)
-        startActivity(Intent(this, NowPlayingActivity::class.java))
-        overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+        // Pasted links open in the automatic article engine (same URL/headline
+        // classification as shares); real prose is read directly. No transient
+        // Now Playing over the article browser while it loads.
+        when (val route = app.readly.article.ArticleRoute.routeInput(text)) {
+            is app.readly.article.ArticleRoute.Decision.Article -> {
+                startActivity(ArticleActivity.intent(this, route.url))
+                overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+            }
+            is app.readly.article.ArticleRoute.Decision.Prose -> {
+                ReaderService.read(this, route.text, route.title, SourceFormat.PLAIN)
+                startActivity(Intent(this, NowPlayingActivity::class.java))
+                overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+            }
+            null -> {
+                inputError.visibility = View.VISIBLE
+            }
+        }
     }
 
     private fun sendAction(action: String) {
@@ -414,7 +444,24 @@ class MainActivity : Activity(), InstallTask.Listener {
         } else {
             noticeCard.visibility = View.GONE
         }
+        renderError(snap)
         updateMiniBar(snap)
+    }
+
+    /**
+     * Failed readings show the real error; a failed eligible link
+     * additionally offers a retry in the automatic article engine.
+     */
+    private fun renderError(snap: ReaderSnapshot) {
+        if (snap.status == ReaderStatus.ERROR && !snap.errorMessage.isNullOrBlank()) {
+            errorCard.visibility = View.VISIBLE
+            errorMessage.text = snap.errorMessage
+            val canRetry = !snap.retryUrl.isNullOrBlank()
+            openPageButton.visibility = if (canRetry) View.VISIBLE else View.GONE
+            openPageHelp.visibility = if (canRetry) View.VISIBLE else View.GONE
+        } else {
+            errorCard.visibility = View.GONE
+        }
     }
 
     /** Mini-bar pinned to the bottom of Home while the reader isn't IDLE. */

@@ -32,6 +32,10 @@ import app.readly.R
 import app.readly.ReadlyApp
 import app.readly.VoicesActivity
 import app.readly.input.ArticleFetcher
+import app.readly.input.sites.SiteBrowserPolicy
+import app.readly.input.sites.SiteFetchPolicy
+import app.readly.input.sites.SiteUpdateCoordinator
+import app.readly.input.sites.SiteUsage
 import app.readly.model.SmartVoice
 import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceFamily
@@ -90,6 +94,7 @@ class ReaderService : Service() {
         const val EXTRA_TEXT = "text"
         const val EXTRA_TITLE = "title"
         const val EXTRA_FORMAT = "format"
+        const val EXTRA_NOTICE = "notice"
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE_HINT = "titleHint"
         const val EXTRA_PREVIEW_PACK = "previewPack"
@@ -112,6 +117,9 @@ class ReaderService : Service() {
         /** Auto-download small voices on Wi-Fi (default ON). */
         const val KEY_AUTO_DOWNLOAD = "autoDownloadVoices"
 
+        /** Daily automatic NYT reading-fix checks while Readly is in use (default ON). */
+        const val KEY_NYT_AUTO_UPDATE = "nytAutoUpdate"
+
         /** Per-pack RTF EMA key (`rtf.<packId>`, float). */
         fun rtfKey(packId: String): String = EngineManager.rtfKey(packId)
 
@@ -122,6 +130,10 @@ class ReaderService : Service() {
         fun isAutoDownloadOn(context: Context): Boolean =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getBoolean(KEY_AUTO_DOWNLOAD, true)
+
+        fun isNytAutoUpdateOn(context: Context): Boolean =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_NYT_AUTO_UPDATE, true)
 
         /** Display name for a 2-letter language code (e.g. `es` → `Spanish`). */
         fun languageName(lang: String): String =
@@ -232,18 +244,44 @@ class ReaderService : Service() {
                 .edit().putInt(speakerKey(canonical), id).apply()
         }
 
-        /** Reads [text] aloud. [format] is the [SourceFormat] name (default PLAIN). */
-        fun read(context: Context, text: String, title: String, format: SourceFormat) {
+        /**
+         * Longest [read] notice kept; notices are short sentences (fallback,
+         * cleanup, startup errors), and anything longer is truncated rather
+         * than dropped so the handoff still carries the warning.
+         */
+        const val MAX_READ_NOTICE_CHARS = 2000
+
+        /**
+         * Reads [text] aloud. [format] is the [SourceFormat] name (default
+         * PLAIN). [notice] is an optional short notice shown with the
+         * reading (the browser fallback's extraction/cleanup notices);
+         * longer values are truncated to [MAX_READ_NOTICE_CHARS].
+         */
+        fun read(
+            context: Context,
+            text: String,
+            title: String,
+            format: SourceFormat,
+            notice: String? = null,
+        ) {
             context.startForegroundService(
                 Intent(context, ReaderService::class.java)
                     .setAction(ACTION_READ)
                     .putExtra(EXTRA_TEXT, text)
                     .putExtra(EXTRA_TITLE, title)
-                    .putExtra(EXTRA_FORMAT, format.name),
+                    .putExtra(EXTRA_FORMAT, format.name)
+                    .putExtra(EXTRA_NOTICE, notice?.take(MAX_READ_NOTICE_CHARS)),
             )
         }
 
-        /** Fetches [url] in the service, then reads the extracted article aloud. */
+        /**
+         * Fetches [url] in the service, then reads the extracted article aloud.
+         * Internal/native compatibility only: no UI link entrypoint uses this
+         * — shares, pasted links and retries all open the automatic article
+         * engine ([app.readly.ArticleActivity]) instead, which never runs a
+         * parallel native fetch (that would read previews and skip the
+         * add-on). Kept for tests and shared-text edge cases.
+         */
         fun readUrl(context: Context, url: String, titleHint: String?) {
             context.startForegroundService(
                 Intent(context, ReaderService::class.java)
@@ -527,6 +565,7 @@ class ReaderService : Service() {
                     intent.getStringExtra(EXTRA_TEXT) ?: "",
                     intent.getStringExtra(EXTRA_TITLE) ?: "",
                     intent.getStringExtra(EXTRA_FORMAT) ?: SourceFormat.PLAIN.name,
+                    intent.getStringExtra(EXTRA_NOTICE),
                 )
             }
             ACTION_READ_URL -> {
@@ -611,7 +650,7 @@ class ReaderService : Service() {
         }
     }
 
-    private fun handleRead(text: String, title: String, formatName: String) {
+    private fun handleRead(text: String, title: String, formatName: String, notice: String?) {
         executeRead("READ") {
             currentHost = ""
             val finished = AtomicBoolean(false)
@@ -626,7 +665,7 @@ class ReaderService : Service() {
                     postError(e)
                     return@executeRead
                 }
-                startReading(title, text, format, notice = null, onRequestDone = ::finish)
+                startReading(title, text, format, notice = notice, onRequestDone = ::finish)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 finish()
@@ -671,10 +710,43 @@ class ReaderService : Service() {
                         playedChunks = 0,
                         msPerChar = 0.0,
                         remainingChars = 0,
+                        retryUrl = null,
                     )
                 }
                 updateNotification()
-                val doc = ArticleFetcher(ArticleFetcher::httpUrlOpener).fetch(url)
+                val sites = (application as ReadlyApp).siteRules
+                sites.ensureStarted()
+                // Snapshot the current catalog without waiting for any update
+                // download; the refresh runs separately on readly-sites.
+                val snapshot = sites.snapshotForReading()
+                val usage = SiteUsage()
+                val opener = if (snapshot != null) {
+                    SiteFetchPolicy.opener(
+                        snapshot,
+                        usage,
+                        ArticleFetcher::httpUrlOpenerWithHeaders,
+                    )
+                } else {
+                    ArticleFetcher::httpUrlOpener
+                }
+                val doc = ArticleFetcher(opener, siteRules = snapshot, siteUsage = usage).fetch(url)
+                val siteNotice = when {
+                    snapshot != null && usage.applied() -> {
+                        sites.onRead()
+                        val state = sites.siteUiState()
+                        SiteUpdateCoordinator.readingNotice(
+                            usage.noticeHost(),
+                            snapshot.version(),
+                            usage.partialApplied,
+                            if (usage.legacyUsed) usage.legacyVersion else null,
+                            state.base.startupNotice,
+                            state.base.warning,
+                            state.base.lastError,
+                        )
+                    }
+                    snapshot == null -> sites.uiState().startupError
+                    else -> null
+                }
                 // Articles bring their own title; fetched text/markdown falls back
                 // to the shared headline when there is one.
                 val title = if (doc.format == SourceFormat.HTML) {
@@ -682,13 +754,17 @@ class ReaderService : Service() {
                 } else {
                     titleHint?.takeIf { it.isNotBlank() } ?: doc.title
                 }
-                startReading(title, doc.text, doc.format, doc.notice, ::finish)
+                val notice = listOfNotNull(doc.notice, siteNotice)
+                    .joinToString(" ").takeIf { it.isNotBlank() }
+                startReading(title, doc.text, doc.format, notice, ::finish)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 finish()
             } catch (e: Exception) {
                 finish()
-                postError(e)
+                // A failed eligible link keeps its exact source URL for the
+                // user-invoked browser fallback; anything else clears it.
+                postError(e, SiteBrowserPolicy.retryUrlForFailure(url))
             } finally {
                 finish()
             }
@@ -802,6 +878,7 @@ class ReaderService : Service() {
                 currentText = "",
                 index = 0,
                 total = 0,
+                retryUrl = null,
                 errorMessage = message,
                 notice = null,
                 smartLine = null,
@@ -862,6 +939,7 @@ class ReaderService : Service() {
                 currentText = "Downloading a $display voice (${pack.sizeMb} MB)…",
                 index = 0,
                 total = 0,
+                retryUrl = null,
                 errorMessage = null,
                 notice = null,
                 prevText = "",
@@ -979,6 +1057,7 @@ class ReaderService : Service() {
                 currentText = "",
                 index = 0,
                 total = 0,
+                retryUrl = null,
                 errorMessage = null,
                 notice = combined,
                 smartLine = null,
@@ -1334,7 +1413,7 @@ class ReaderService : Service() {
             if (pendingRequests.get() > 0) return
             val active = synchronized(pipelineLock) { pipeline != null }
             if (!active && ReaderState.snapshot.status == ReaderStatus.LOADING_VOICE) {
-                ReaderState.update { it.copy(status = ReaderStatus.IDLE) }
+                ReaderState.update { it.copy(status = ReaderStatus.IDLE, retryUrl = null) }
                 updateNotification()
                 goIdle()
             }
@@ -1423,6 +1502,7 @@ class ReaderService : Service() {
                         currentText = "",
                         index = 0,
                         total = 0,
+                        retryUrl = null,
                         errorMessage = null,
                         notice = null,
                         smartLine = null,
@@ -1582,6 +1662,7 @@ class ReaderService : Service() {
                 currentText = chunks[startIndex].text,
                 index = startIndex,
                 total = chunks.size,
+                retryUrl = null,
                 errorMessage = null,
                 prevText = chunks.getOrNull(startIndex - 1)?.text.orEmpty(),
                 nextText = chunks.getOrNull(startIndex + 1)?.text.orEmpty(),
@@ -1768,11 +1849,16 @@ class ReaderService : Service() {
     // Errors + foreground
     // ------------------------------------------------------------------
 
-    private fun postError(e: Throwable) {
+    /**
+     * Reports a terminal failure. [retryUrl] is the exact failed-link URL
+     * for the browser fallback, set only by a failed eligible link read;
+     * every other error clears it so no stale link button appears elsewhere.
+     */
+    private fun postError(e: Throwable, retryUrl: String? = null) {
         val message = "Couldn't read aloud: ${e.javaClass.name}: ${e.message}"
         Log.e("Readly", message, e)
         setNoisyRegistered(false)
-        ReaderState.update { it.copy(status = ReaderStatus.ERROR, errorMessage = message) }
+        ReaderState.update { it.copy(status = ReaderStatus.ERROR, errorMessage = message, retryUrl = retryUrl) }
         mainHandler.post { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
         updateNotification()
         goIdle()

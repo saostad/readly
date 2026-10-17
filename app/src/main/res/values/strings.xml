@@ -151,4 +151,45 @@
     <string name="voice_sheet_title">Voice</string>
     <string name="search_hint">Search</string>
     <string name="back_desc">Back</string>
+
+    <string name="nyt_section_title">Website reading</string>
+    <string name="nyt_auto_label">Automatic updates</string>
+    <string name="nyt_auto_help">Checks for article-engine and reading-fix updates once a day while Readly is in use.</string>
+    <string name="sites_imports_partial">Imports compatible parts only. Some sites need browser-specific fixes.</string>
+    <string name="sites_legacy_format">NYT legacy rules %1$s in use.</string>
+    <string name="nyt_check_updates">Check updates</string>
+    <string name="nyt_checking">Checking…</string>
+    <string name="nyt_rules_format">Rules %1$s (%2$s)</string>
+    <string name="nyt_source_bundled">bundled</string>
+    <string name="nyt_source_downloaded">downloaded</string>
+    <string name="nyt_last_checked_format">Last checked %1$s</string>
+    <string name="nyt_never_checked">Never checked</string>
+    <string name="nyt_starting">Starting…</string>
+    <string name="nyt_unavailable">Reading fixes unavailable</string>
+    <string name="nyt_open_page">Open in article reader</string>
+    <string name="nyt_open_page_help">Reading failed. Open the link in the automatic article reader, complete any sign-in or verification, and it reads aloud on its own.</string>
+    <string name="nyt_browser_help">Open the article, complete any sign-in or verification if needed, then tap Read page.</string>
+    <string name="nyt_browser_read">Read page</string>
+    <string name="nyt_browser_reload">Reload</string>
+    <string name="nyt_browser_reading">Reading page…</string>
+    <string name="nyt_browser_loading_format">Loading %1$s…</string>
+    <string name="nyt_browser_loaded_format">Loaded %1$s</string>
+    <string name="nyt_browser_blocked_format">Blocked: %1$s.</string>
+
+    <string name="article_title">Article reader</string>
+    <string name="article_help">Opening the article automatically. Complete any sign-in if the page asks.</string>
+    <string name="article_reload">Reload</string>
+    <string name="article_cancel">Cancel</string>
+    <string name="article_starting">Starting the article engine…</string>
+    <string name="article_loading_format">Opening %1$s…</string>
+    <string name="article_loading_slow_format">Still opening %1$s…</string>
+    <string name="article_loaded_format">Loaded %1$s</string>
+    <string name="article_reading">Reading the page…</string>
+    <string name="article_retrying">Trying again…</string>
+    <string name="article_blocked_format">Blocked: %1$s.</string>
+
+    <string name="bpc_addon_format">Article extension %1$s</string>
+    <string name="bpc_addon_unknown">Article extension not installed yet</string>
+    <string name="bpc_last_checked_format">Extension last checked %1$s</string>
+    <string name="bpc_never_checked">Extension never checked</string>
 </resources>

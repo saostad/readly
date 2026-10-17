@@ -37,6 +37,7 @@ class NowPlayingActivity : Activity() {
     private lateinit var playPauseButton: ImageButton
     private lateinit var speedChip: Button
     private lateinit var speakerChip: Button
+    private lateinit var browserRow: View
 
     /** True once a non-IDLE state was seen; an IDLE after that closes the screen. */
     private var hasStarted = false
@@ -56,6 +57,7 @@ class NowPlayingActivity : Activity() {
         playPauseButton = findViewById(R.id.npPlayPause)
         speedChip = findViewById(R.id.npSpeedChip)
         speakerChip = findViewById(R.id.npSpeakerChip)
+        browserRow = findViewById(R.id.npBrowserRow)
 
         findViewById<ImageButton>(R.id.closeButton).setOnClickListener { closeWithTransition() }
         findViewById<ImageButton>(R.id.npPrev).setOnClickListener {
@@ -70,6 +72,12 @@ class NowPlayingActivity : Activity() {
         }
         speedChip.setOnClickListener { openSheet() }
         speakerChip.setOnClickListener { openSheet() }
+        findViewById<Button>(R.id.npOpenPage).setOnClickListener {
+            ReaderState.snapshot.retryUrl?.let {
+                startActivity(ArticleActivity.intent(this, it))
+                overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+            }
+        }
 
         render(ReaderState.snapshot)
     }
@@ -115,6 +123,7 @@ class NowPlayingActivity : Activity() {
             hasStarted = true
         }
         renderArt(snap)
+        renderBrowserRow(snap)
         renderSentence(snap)
         renderProgress(snap)
         playPauseButton.setImageResource(
@@ -145,6 +154,16 @@ class NowPlayingActivity : Activity() {
         artSrc.setTextColor(
             getColor(if (snap.status == ReaderStatus.ERROR) R.color.error else R.color.accent),
         )
+    }
+
+    /** The retry button offers the automatic article engine for a failed eligible link only. */
+    private fun renderBrowserRow(snap: ReaderSnapshot) {
+        browserRow.visibility =
+            if (snap.status == ReaderStatus.ERROR && !snap.retryUrl.isNullOrBlank()) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
     }
 
     /** Previous sentence dimmed, the current one highlighted, the next dimmed. */

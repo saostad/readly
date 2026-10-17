@@ -46,6 +46,13 @@ data class ReaderSnapshot(
     val msPerChar: Double = 0.0,
     /** Chars from the current chunk to the end of the document. */
     val remainingChars: Int = 0,
+    /**
+     * Exact source URL offered to the browser fallback on a failed NYT
+     * link read, null otherwise. Set only by a failed URL read whose link
+     * is a main NYT article page; cleared when a different read or stop
+     * starts, so no stale link button appears on unrelated errors.
+     */
+    val retryUrl: String? = null,
 )
 
 /**
