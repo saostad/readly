@@ -3,6 +3,7 @@ package app.readly.model
 import java.io.BufferedInputStream
 import java.io.Closeable
 import java.io.File
+import java.io.FileOutputStream
 import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
@@ -27,6 +28,8 @@ enum class InstallStage {
 interface DownloadConnection : Closeable {
     val statusCode: Int
     val statusMessage: String
+    /** Start byte of the response's `Content-Range` header, or null when absent. */
+    val contentRangeStart: Long?
     fun input(): InputStream
 }
 
@@ -38,21 +41,24 @@ interface DownloadConnection : Closeable {
  * @param pack the voice pack this store installs.
  * @param baseDir directory holding the download and the installed model
  *   (on device: `context.noBackupFilesDir/voices`).
- * @param urlOpener opens [VoicePack.url]; production passes [httpUrlOpener].
+ * @param urlOpener opens [VoicePack.url] from the given byte offset (0 = whole
+ *   file, no `Range` header); production passes [httpUrlOpener].
  * @param expectedSha256 expected SHA-256 of the archive; a parameter so tests can inject
  *   fixture hashes (production uses the pack's [VoicePack.sha256]).
  * @param expectedSizeBytes expected archive size in bytes; a parameter so tests can inject
  *   fixture sizes (production uses the pack's [VoicePack.sizeBytes]).
  * @param onInfo receives messages that production logs with `Log.i("Readly", …)`; injected
  *   so JVM tests don't touch `android.util.Log`.
+ * @param sleeper backs the resume back-off; injected so tests don't wait.
  */
 class VoiceModelStore(
     val pack: VoicePack,
     private val baseDir: File,
-    private val urlOpener: (String) -> DownloadConnection,
+    private val urlOpener: (String, Long) -> DownloadConnection,
     private val expectedSha256: String = pack.sha256,
     private val expectedSizeBytes: Long = pack.sizeBytes,
     private val onInfo: (String) -> Unit = { android.util.Log.i("Readly", it) },
+    private val sleeper: (Long) -> Unit = { Thread.sleep(it) },
 ) {
     companion object {
         const val REQUIRED_FREE_BYTES = 500L * 1024 * 1024
@@ -61,8 +67,12 @@ class VoiceModelStore(
         private const val READ_BUFFER_BYTES = 64 * 1024
         private const val PROGRESS_MIN_DELTA_BYTES = 256L * 1024
 
+        /** Back-off between single-file resume attempts (5 retries, then give up). */
+        private val RESUME_DELAYS_MS = longArrayOf(2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
+
         /** Production [VoiceModelStore] opener backed by [HttpURLConnection]. */
-        fun httpUrlOpener(url: String): DownloadConnection = HttpDownloadConnection(url)
+        fun httpUrlOpener(url: String, fromByte: Long): DownloadConnection =
+            HttpDownloadConnection(url, fromByte)
 
         /** Ids of the packs installed under [base], in catalog order. */
         fun installedIds(base: File): List<String> =
@@ -183,6 +193,14 @@ class VoiceModelStore(
      * Single pass for single-file packs: streams HTTP through the hash into
      * `<tmpDir>/<modelFile>`. Same progress throttle and cancel checks as the
      * archive path. Returns the bytes consumed.
+     *
+     * A dropped connection resumes instead of restarting: when a read throws an
+     * [IOException], this waits out the back-off (cancel-aware), reopens from
+     * the bytes already in the file, and appends, keeping the same digest — so
+     * it covers exactly the file's bytes. A 206 whose `Content-Range` start
+     * matches the offset continues; a 200 (no range support) truncates the
+     * file, resets the digest and restarts from 0. After 5 failed resumes the
+     * original error is rethrown with the retry count.
      */
     private fun streamDownloadToFile(
         tmpDir: File,
@@ -192,34 +210,95 @@ class VoiceModelStore(
     ): Long {
         tmpDir.deleteRecursively()
         tmpDir.mkdirs()
-        urlOpener(pack.url).use { conn ->
-            throwIfHttpError(conn)
-            val counting = countedDigestStream(conn, digest)
-            try {
-                val target = File(tmpDir, pack.modelFile)
-                target.parentFile?.mkdirs()
-                var lastReported = 0L
-                target.outputStream().use { out ->
-                    val buf = ByteArray(READ_BUFFER_BYTES)
-                    while (true) {
-                        if (cancelled()) throw CancellationException("Voice download cancelled")
-                        val n = counting.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                        if (counting.count - lastReported >= PROGRESS_MIN_DELTA_BYTES) {
-                            progress(InstallStage.DOWNLOADING, counting.count, expectedSizeBytes)
-                            lastReported = counting.count
+        val target = File(tmpDir, pack.modelFile)
+        target.parentFile?.mkdirs()
+        var done = 0L
+        var lastReported = 0L
+        var resumeFrom = 0L
+        var failures = 0
+        while (true) {
+            if (cancelled()) throw CancellationException("Voice download cancelled")
+            var retry = false
+            urlOpener(pack.url, resumeFrom).use { conn ->
+                if (resumeFrom == 0L) {
+                    throwIfHttpError(conn)
+                } else {
+                    when {
+                        conn.statusCode == 206 && conn.contentRangeStart == resumeFrom -> Unit
+                        conn.statusCode == 200 -> {
+                            digest.reset()
+                            done = 0L
+                            lastReported = 0L
+                            resumeFrom = 0L
+                        }
+                        else -> {
+                            throwIfHttpError(conn)
+                            throw IOException(
+                                "Voice download failed: HTTP ${conn.statusCode} with an " +
+                                    "unexpected Content-Range for resume from $resumeFrom bytes",
+                            )
                         }
                     }
                 }
-                if (counting.count != lastReported) {
-                    progress(InstallStage.DOWNLOADING, counting.count, expectedSizeBytes)
+                val counting = countedDigestStream(conn, digest)
+                try {
+                    FileOutputStream(target, resumeFrom > 0L).use { out ->
+                        val buf = ByteArray(READ_BUFFER_BYTES)
+                        while (true) {
+                            if (cancelled()) throw CancellationException("Voice download cancelled")
+                            val n = counting.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            if (done - lastReported >= PROGRESS_MIN_DELTA_BYTES) {
+                                progress(InstallStage.DOWNLOADING, done, expectedSizeBytes)
+                                lastReported = done
+                            }
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: IOException) {
+                    failures++
+                    if (failures > RESUME_DELAYS_MS.size) {
+                        throw IOException(
+                            "Voice download failed after ${RESUME_DELAYS_MS.size} retries at " +
+                                "$done of $expectedSizeBytes bytes: " +
+                                "${e.javaClass.simpleName}: ${e.message}",
+                            e,
+                        )
+                    }
+                    onInfo(
+                        "Voice download interrupted at $done of $expectedSizeBytes bytes " +
+                            "(${e.javaClass.simpleName}: ${e.message}); " +
+                            "resuming (attempt $failures of ${RESUME_DELAYS_MS.size})",
+                    )
+                    cancelAwareSleep(RESUME_DELAYS_MS[failures - 1], cancelled)
+                    resumeFrom = done
+                    retry = true
+                } finally {
+                    counting.close()
                 }
-                return counting.count
-            } finally {
-                counting.close()
+            }
+            if (!retry) {
+                if (done != lastReported) {
+                    progress(InstallStage.DOWNLOADING, done, expectedSizeBytes)
+                }
+                return done
             }
         }
+    }
+
+    /** [sleeper] that aborts with [CancellationException] when [cancelled] fires. */
+    private fun cancelAwareSleep(ms: Long, cancelled: () -> Boolean) {
+        if (cancelled()) throw CancellationException("Voice download cancelled")
+        try {
+            sleeper(ms)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw CancellationException("Voice download cancelled")
+        }
+        if (cancelled()) throw CancellationException("Voice download cancelled")
     }
 
     /** Throws the shared HTTP-failure message unless [conn] is 2xx. */
@@ -260,7 +339,7 @@ class VoiceModelStore(
         tmpDir.deleteRecursively()
         tmpDir.mkdirs()
         val base = tmpDir.toPath().toAbsolutePath().normalize()
-        urlOpener(pack.url).use { conn ->
+        urlOpener(pack.url, 0).use { conn ->
             throwIfHttpError(conn)
             val counting = countedDigestStream(conn, digest)
             var lastReported = 0L
@@ -369,20 +448,31 @@ class VoiceModelStore(
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
-    private class HttpDownloadConnection(url: String) : DownloadConnection {
+    private class HttpDownloadConnection(url: String, fromByte: Long) : DownloadConnection {
         private val conn = (URI(url).toURL().openConnection() as HttpURLConnection).apply {
             connectTimeout = 30_000
             readTimeout = 60_000
             instanceFollowRedirects = true
             requestMethod = "GET"
+            if (fromByte > 0) setRequestProperty("Range", "bytes=$fromByte-")
         }
 
         override val statusCode: Int
             get() = conn.responseCode
         override val statusMessage: String
             get() = conn.responseMessage ?: ""
+        override val contentRangeStart: Long?
+            get() = parseContentRangeStart(conn.getHeaderField("Content-Range"))
         override fun input(): InputStream = conn.inputStream
         override fun close() = conn.disconnect()
+
+        companion object {
+            /** Start byte of a `Content-Range: bytes <start>-<end>/<total>` value. */
+            private fun parseContentRangeStart(value: String?): Long? {
+                val range = value?.trim()?.removePrefix("bytes ")?.substringBefore('-') ?: return null
+                return range.toLongOrNull()
+            }
+        }
     }
 
     private class CountingInputStream(input: InputStream) : FilterInputStream(input) {
