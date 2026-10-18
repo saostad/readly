@@ -545,15 +545,73 @@ class VoiceModelStoreTest {
     }
 
     @Test
-    fun install_singleFile_sixConsecutiveDrops_throwsFailedAfter5Retries() {
+    fun install_singleFile_reopenFailuresThen206_installsWithBackoff() {
         val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
         val bytes = ByteArray(100) { it.toByte() }
         val offsets = mutableListOf<Long>()
-        val sleeps = mutableListOf<Long>()
-        // Every attempt serves 10 more bytes, then drops.
+        val slices = mutableListOf<Long>()
+        val infos = mutableListOf<String>()
+        var resumeCalls = 0
         val opener: (String, Long) -> DownloadConnection = { _, from ->
             offsets.add(from)
             if (from == 0L) {
+                FakeConnection(200, "OK", bytes, failAfterBytes = 10)
+            } else {
+                resumeCalls++
+                if (resumeCalls <= 2) {
+                    throw java.net.UnknownHostException("Unable to resolve host \"huggingface.co\"")
+                }
+                FakeConnection(
+                    206, "Partial Content", bytes.copyOfRange(from.toInt(), bytes.size),
+                    contentRangeStart = from,
+                )
+            }
+        }
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(
+            pocket, base, opener, sha256(bytes), bytes.size.toLong(),
+            onInfo = infos::add, sleeper = slices::add,
+        )
+
+        store.install(progress = { _, _, _ -> }, cancelled = { false })
+
+        assertEquals(listOf(0L, 10L, 10L, 10L), offsets)
+        assertTrue(store.isInstalled())
+        assertTrue(bytes.contentEquals(File(base, "pocket-farsi-v1/pocket-farsi-v1.onnx").readBytes()))
+        assertDelays(slices, listOf(2_000L, 4_000L, 8_000L))
+        assertEquals(
+            listOf(
+                "Voice download interrupted at 10 of 100 bytes " +
+                    "(SocketException: Software caused connection abort); " +
+                    "resuming (attempt 1 of 5)",
+                "Voice download interrupted at 10 of 100 bytes " +
+                    "(UnknownHostException: Unable to resolve host \"huggingface.co\"); " +
+                    "resuming (attempt 2 of 5)",
+                "Voice download interrupted at 10 of 100 bytes " +
+                    "(UnknownHostException: Unable to resolve host \"huggingface.co\"); " +
+                    "resuming (attempt 3 of 5)",
+            ),
+            infos,
+        )
+    }
+
+    @Test
+    fun install_singleFile_dropsWithProgressBetween_resetsCounterAndInstalls() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val bytes = ByteArray(100) { (it * 7).toByte() }
+        val offsets = mutableListOf<Long>()
+        val slices = mutableListOf<Long>()
+        // 6 drops, each delivering 10 new bytes before dropping; the 7th attempt
+        // completes. Every failure sees progress, so the counter resets and the
+        // install succeeds instead of throwing after 5 retries.
+        val opener: (String, Long) -> DownloadConnection = { _, from ->
+            offsets.add(from)
+            if (from >= 60L) {
+                FakeConnection(
+                    206, "Partial Content", bytes.copyOfRange(from.toInt(), bytes.size),
+                    contentRangeStart = from,
+                )
+            } else if (from == 0L) {
                 FakeConnection(200, "OK", bytes, failAfterBytes = 10)
             } else {
                 FakeConnection(
@@ -565,7 +623,36 @@ class VoiceModelStoreTest {
         val base = temp.newFolder("voices")
         val store = VoiceModelStore(
             pocket, base, opener, sha256(bytes), bytes.size.toLong(),
-            onInfo = {}, sleeper = sleeps::add,
+            onInfo = {}, sleeper = slices::add,
+        )
+
+        store.install(progress = { _, _, _ -> }, cancelled = { false })
+
+        assertEquals(listOf(0L, 10L, 20L, 30L, 40L, 50L, 60L), offsets)
+        assertTrue(store.isInstalled())
+        assertTrue(bytes.contentEquals(File(base, "pocket-farsi-v1/pocket-farsi-v1.onnx").readBytes()))
+        // A fresh streak each time: every back-off is the first 2 s delay.
+        assertDelays(slices, List(6) { 2_000L })
+    }
+
+    @Test
+    fun install_singleFile_consecutiveFailuresWithNoProgress_throwsFailedAfter5Retries() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val bytes = ByteArray(100) { it.toByte() }
+        val offsets = mutableListOf<Long>()
+        val slices = mutableListOf<Long>()
+        val opener: (String, Long) -> DownloadConnection = { _, from ->
+            offsets.add(from)
+            if (from == 0L) {
+                FakeConnection(200, "OK", bytes, failAfterBytes = 10)
+            } else {
+                throw java.net.UnknownHostException("Unable to resolve host \"huggingface.co\"")
+            }
+        }
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(
+            pocket, base, opener, sha256(bytes), bytes.size.toLong(),
+            onInfo = {}, sleeper = slices::add,
         )
 
         try {
@@ -573,16 +660,70 @@ class VoiceModelStoreTest {
             fail("expected IOException")
         } catch (e: IOException) {
             assertEquals(
-                "Voice download failed after 5 retries at 60 of 100 bytes: " +
-                    "SocketException: Software caused connection abort",
+                "Voice download failed after 5 retries at 10 of 100 bytes: " +
+                    "UnknownHostException: Unable to resolve host \"huggingface.co\"",
                 e.message,
             )
         }
-        assertEquals(listOf(0L, 10L, 20L, 30L, 40L, 50L), offsets)
-        assertEquals(listOf(2_000L, 4_000L, 8_000L, 16_000L, 30_000L), sleeps)
+        assertEquals(listOf(0L, 10L, 10L, 10L, 10L, 10L), offsets)
+        assertDelays(slices, listOf(2_000L, 4_000L, 8_000L, 16_000L, 30_000L))
         assertFalse(File(base, "pocket-farsi-v1").exists())
         assertFalse(File(base, "pocket-farsi-v1.tmp").exists())
         assertFalse(store.isInstalled())
+    }
+
+    @Test
+    fun install_singleFile_cancelDuringLongBackoff_returnsWithinOneSlice() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val bytes = ByteArray(100) { it.toByte() }
+        val slices = mutableListOf<Long>()
+        var cancelled = false
+        val opener: (String, Long) -> DownloadConnection = { _, from ->
+            if (from == 0L) {
+                FakeConnection(200, "OK", bytes, failAfterBytes = 10)
+            } else {
+                throw java.net.UnknownHostException("Unable to resolve host \"huggingface.co\"")
+            }
+        }
+        val base = temp.newFolder("voices")
+        // The first 4 back-offs total 2+4+8+16 = 30 s = 120 slices; cancel one
+        // slice into the 30 s back-off.
+        val store = VoiceModelStore(
+            pocket, base, opener, sha256(bytes), bytes.size.toLong(),
+            onInfo = {},
+            sleeper = { slice ->
+                slices.add(slice)
+                if (slices.size == 121) cancelled = true
+            },
+        )
+
+        try {
+            store.install(progress = { _, _, _ -> }, cancelled = { cancelled })
+            fail("expected CancellationException")
+        } catch (e: CancellationException) {
+            assertEquals("Voice download cancelled", e.message)
+        }
+        assertEquals(121, slices.size)
+        assertTrue(slices.all { it in 1..250L })
+        assertFalse(File(base, "pocket-farsi-v1").exists())
+        assertFalse(File(base, "pocket-farsi-v1.tmp").exists())
+        assertFalse(store.isInstalled())
+    }
+
+    /** Groups per-slice sleeps into back-offs, asserting each totals its expected delay. */
+    private fun assertDelays(slices: List<Long>, expected: List<Long>) {
+        var i = 0
+        for (delay in expected) {
+            var sum = 0L
+            while (sum < delay) {
+                assertTrue("ran out of slices for delay $delay", i < slices.size)
+                assertTrue("slice out of range: ${slices[i]}", slices[i] in 1..250L)
+                sum += slices[i]
+                i++
+            }
+            assertEquals(delay, sum)
+        }
+        assertEquals("extra slices: $slices", i, slices.size)
     }
 
     @Test
