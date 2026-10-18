@@ -85,6 +85,9 @@ dependencies {
     testImplementation(libs.junit)
     // Real org.json for JVM unit tests: Android's stub throws on the host JVM.
     testImplementation(libs.json)
+    // Host ONNX Runtime for the JVM G2P test (same 1.28.0 Java API as the
+    // Android AAR above; the device uses sherpa's native runtime instead).
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.28.0")
 }
 
 // readability4j asks for jsoup 1.11.2; force the version we test against.
