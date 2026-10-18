@@ -1420,12 +1420,15 @@ class ReaderService : Service() {
             if (destroyed) return
             val mainId = activePackId(this)
             if (engines.isLoaded(mainId)) return
-            // A warm-up, not a request: skip quietly when the main voice isn't
+            // A warm-up, not a request: skip when the main voice isn't
             // installed (Persian-only setup) instead of posting a load error.
             val mainPack = VoiceCatalog.byId(mainId)
-            if (mainPack == null ||
-                !VoiceModelStore(mainPack, voicesDir(), VoiceModelStore::httpUrlOpener).isInstalled()
-            ) {
+            if (mainPack == null) {
+                Log.i("Readly", "Preload skipped: unknown main voice $mainId")
+                return
+            }
+            if (!VoiceModelStore(mainPack, voicesDir(), VoiceModelStore::httpUrlOpener).isInstalled()) {
+                Log.i("Readly", "Preload skipped: main voice ${mainPack.id} is not installed")
                 return
             }
             try {
