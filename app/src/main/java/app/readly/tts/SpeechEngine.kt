@@ -89,6 +89,7 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
         if (text.isBlank()) return FloatArray(0)
         // Pocket ignores lang (Persian only) and logs its own synthesize line.
         pocket?.let { return it.synthesize(text, speed, isStopped, onChunk) }
+        val sherpa = tts ?: error("no speech engine is loaded")
         val startMs = SystemClock.elapsedRealtime()
         val callback: (FloatArray) -> Int =
             if (onChunk != null) StreamingCallback(isStopped, onChunk) else StopCallback(isStopped)
@@ -101,9 +102,9 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
                 speed = speed,
                 extra = mapOf("lang" to supertonicLang),
             )
-            tts.generateWithConfigAndCallback(text, config, callback)
+            sherpa.generateWithConfigAndCallback(text, config, callback)
         } else {
-            tts.generateWithCallback(text, speakerId, speed, callback)
+            sherpa.generateWithCallback(text, speakerId, speed, callback)
         }
         val synthMs = SystemClock.elapsedRealtime() - startMs
         val audioMs = if (audio.sampleRate > 0) audio.samples.size * 1000.0 / audio.sampleRate else 0.0
