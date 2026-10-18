@@ -1,5 +1,8 @@
 import java.net.URI
 import java.security.MessageDigest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 plugins {
     alias(libs.plugins.android.application)
@@ -67,6 +70,11 @@ dependencies {
         exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
     }
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
+    // Pocket TTS needs the ONNX Runtime Java API, but only its Java half: this AAR is
+    // onnxruntime-android 1.28.0 with jni/*/libonnxruntime.so stripped out (see
+    // stripOnnxRuntimeNative below). One ONNX Runtime ships in the process — sherpa's
+    // 1.28.2, which is API-compatible with the 1.28.0 Java binding.
+    implementation(files("libs/onnxruntime-android-1.28.0-java-only.aar"))
     // Compile-time resource annotations (@RawRes) for the voice sample clips.
     implementation(libs.annotation)
     testImplementation(libs.junit)
@@ -133,4 +141,97 @@ tasks.register("fetchSherpaOnnx") {
     }
 }
 
-tasks.named("preBuild") { dependsOn("fetchSherpaOnnx") }
+val onnxRuntimeAarUrl =
+    "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/1.28.0/onnxruntime-android-1.28.0.aar"
+val onnxRuntimeAarSha256 =
+    "f351a0638696f54b35184290dbc001d66daae17281ad0b548d2c70347d53b8a9"
+val onnxRuntimeAarFile = layout.projectDirectory.file("libs/onnxruntime-android-1.28.0.aar")
+val onnxRuntimeJavaOnlyAarFile =
+    layout.projectDirectory.file("libs/onnxruntime-android-1.28.0-java-only.aar")
+
+tasks.register("fetchOnnxRuntime") {
+    description = "Downloads the onnxruntime-android AAR once and verifies its SHA-256 checksum."
+    onlyIf("onnxruntime-android AAR already present") { !onnxRuntimeAarFile.asFile.exists() }
+    outputs.file(onnxRuntimeAarFile)
+    doLast {
+        val dest = onnxRuntimeAarFile.asFile
+        dest.parentFile.mkdirs()
+        try {
+            URI(onnxRuntimeAarUrl).toURL().openStream().use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
+        } catch (e: Exception) {
+            dest.delete()
+            throw GradleException(
+                "Could not download onnxruntime-android AAR from $onnxRuntimeAarUrl: " +
+                    "${e.javaClass.name}: ${e.message}",
+                e,
+            )
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        dest.inputStream().use { input ->
+            val buf = ByteArray(8192)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                digest.update(buf, 0, n)
+            }
+        }
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        if (!actual.equals(onnxRuntimeAarSha256, ignoreCase = true)) {
+            dest.delete()
+            throw GradleException(
+                "onnxruntime-android AAR checksum mismatch: expected $onnxRuntimeAarSha256, got $actual",
+            )
+        }
+    }
+}
+
+tasks.register("stripOnnxRuntimeNative") {
+    description =
+        "Copies the onnxruntime-android AAR without its libonnxruntime.so (sherpa already ships one)."
+    dependsOn("fetchOnnxRuntime")
+    inputs.file(onnxRuntimeAarFile)
+    outputs.file(onnxRuntimeJavaOnlyAarFile)
+    doLast {
+        val src = onnxRuntimeAarFile.asFile
+        val dest = onnxRuntimeJavaOnlyAarFile.asFile
+        if (!src.exists()) {
+            throw GradleException(
+                "onnxruntime-android AAR is missing: ${src.path} " +
+                    "(fetchOnnxRuntime should have downloaded it)",
+            )
+        }
+        var stripped = 0
+        ZipFile(src).use { zip ->
+            dest.outputStream().use { raw ->
+                ZipOutputStream(raw).use { out ->
+                    val entries = zip.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        if (!entry.isDirectory &&
+                            entry.name.matches(Regex("jni/[^/]+/libonnxruntime\\.so"))
+                        ) {
+                            stripped++
+                            continue
+                        }
+                        out.putNextEntry(ZipEntry(entry.name).apply { time = entry.time })
+                        if (!entry.isDirectory) {
+                            zip.getInputStream(entry).use { it.copyTo(out) }
+                        }
+                        out.closeEntry()
+                    }
+                }
+            }
+        }
+        if (stripped == 0) {
+            dest.delete()
+            throw GradleException(
+                "onnxruntime-android AAR has no jni/*/libonnxruntime.so entries: " +
+                    "the AAR layout changed, refusing to guess which native library to strip",
+            )
+        }
+    }
+}
+
+tasks.named("preBuild") { dependsOn("fetchSherpaOnnx", "fetchOnnxRuntime", "stripOnnxRuntimeNative") }
