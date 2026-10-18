@@ -3,20 +3,18 @@ package app.readly.tts.pocket
 import java.io.IOException
 
 /**
- * Minimal SentencePiece unigram encoder for the tokenizer baked into the Pocket model
+ * Minimal SentencePiece BPE encoder for the tokenizer baked into the Pocket model
  * (`pocket_tts_tokenizer` metadata). Reads the `ModelProto` bytes directly and runs the
- * same best-score (Viterbi) segmentation as SentencePiece, with byte fallback.
+ * same greedy highest-score merges as SentencePiece, with byte fallback.
  *
  * Text must already be normalized ([NormalizeFa]); this does not apply SentencePiece's
  * own NFKC character map. Checked against the Python `sentencepiece` package on every
  * test sentence (`src/test/resources/pocket/fixtures.json`).
  */
-class SentencePiece private constructor(
+class SentencePiece internal constructor(
     private val scores: FloatArray,
     private val ids: Map<String, Int>,
     private val byteIds: Map<Int, Int>,
-    private val maxPieceLen: Int,
-    private val unkScore: Double,
     private val addDummyPrefix: Boolean,
 ) {
     val vocabSize: Int get() = scores.size
@@ -27,47 +25,40 @@ class SentencePiece private constructor(
             if (addDummyPrefix) append(SPACE)
             for (c in text) append(if (c == ' ') SPACE else c)
         }
-        // Work on code points so a piece never splits a surrogate pair.
-        val cps = normalized.codePoints().toArray()
-        val n = cps.size
-        val best = DoubleArray(n + 1) { Double.NEGATIVE_INFINITY }
-        val back = IntArray(n + 1) { -1 }
-        best[0] = 0.0
-        for (end in 1..n) {
-            val earliest = maxOf(0, end - maxPieceLen)
-            for (start in earliest until end) {
-                if (best[start] == Double.NEGATIVE_INFINITY) continue
-                val id = ids[String(cps, start, end - start)] ?: continue
-                val score = best[start] + scores[id]
-                if (score > best[end]) {
-                    best[end] = score
-                    back[end] = start
+        // One symbol per code point so a merge never splits a surrogate pair.
+        val symbols = ArrayList<String>(normalized.length)
+        var offset = 0
+        while (offset < normalized.length) {
+            val cp = normalized.codePointAt(offset)
+            symbols += String(Character.toChars(cp))
+            offset += Character.charCount(cp)
+        }
+        // Greedy BPE: each round merges the adjacent pair whose concatenation is a
+        // NORMAL or USER_DEFINED piece with the highest score (ties: leftmost).
+        while (symbols.size > 1) {
+            var bestScore = Float.NEGATIVE_INFINITY
+            var bestPos = -1
+            for (pos in 0 until symbols.size - 1) {
+                val id = ids[symbols[pos] + symbols[pos + 1]] ?: continue
+                val score = scores[id]
+                if (score > bestScore) {
+                    bestScore = score
+                    bestPos = pos
                 }
             }
-            if (best[end] == Double.NEGATIVE_INFINITY && best[end - 1] != Double.NEGATIVE_INFINITY) {
-                best[end] = best[end - 1] + unkScore
-                back[end] = end - 1
-            }
+            if (bestPos < 0) break
+            symbols[bestPos] = symbols[bestPos] + symbols[bestPos + 1]
+            symbols.removeAt(bestPos + 1)
         }
-        val spans = ArrayList<IntArray>()
-        var end = n
-        while (end > 0) {
-            val start = back[end]
-            if (start < 0) break
-            spans += intArrayOf(start, end)
-            end = start
-        }
-        spans.reverse()
-        val out = ArrayList<Int>(spans.size)
-        for ((start, stop) in spans.map { it[0] to it[1] }) {
-            val piece = String(cps, start, stop - start)
-            val id = ids[piece]
+        val out = ArrayList<Int>(symbols.size)
+        for (symbol in symbols) {
+            val id = ids[symbol]
             if (id != null) {
                 out += id
                 continue
             }
-            val bytes = piece.toByteArray(Charsets.UTF_8)
-            if (bytes.all { (it.toInt() and 0xff) in byteIds }) {
+            val bytes = symbol.toByteArray(Charsets.UTF_8)
+            if (bytes.isNotEmpty() && bytes.all { (it.toInt() and 0xff) in byteIds }) {
                 for (b in bytes) out += byteIds.getValue(b.toInt() and 0xff)
             } else {
                 out += UNK_ID
@@ -78,7 +69,6 @@ class SentencePiece private constructor(
 
     companion object {
         private const val SPACE = '▁'
-        private const val UNK_PENALTY = 10.0
         private const val UNK_ID = 0
         private const val NORMAL = 1
         private const val UNKNOWN = 2
@@ -103,15 +93,9 @@ class SentencePiece private constructor(
             if (pieces.isEmpty()) throw IOException("Couldn't read the voice tokenizer: it has no pieces")
             val ids = HashMap<String, Int>()
             val byteIds = HashMap<Int, Int>()
-            var minScore = Double.POSITIVE_INFINITY
-            var longest = 1
-            pieces.forEachIndexed { id, (text, score, kind) ->
+            pieces.forEachIndexed { id, (text, _, kind) ->
                 when (kind) {
-                    NORMAL, USER_DEFINED -> {
-                        ids[text] = id
-                        longest = maxOf(longest, text.codePointCount(0, text.length))
-                        minScore = minOf(minScore, score.toDouble())
-                    }
+                    NORMAL, USER_DEFINED -> ids[text] = id
                     BYTE -> text.substring(3, 5).toIntOrNull(16)?.let { byteIds[it] = id }
                     UNKNOWN -> ids.remove(text)
                 }
@@ -120,8 +104,6 @@ class SentencePiece private constructor(
                 scores = FloatArray(pieces.size) { pieces[it].second },
                 ids = ids,
                 byteIds = byteIds,
-                maxPieceLen = longest,
-                unkScore = minScore - UNK_PENALTY,
                 addDummyPrefix = addDummyPrefix,
             )
         }
