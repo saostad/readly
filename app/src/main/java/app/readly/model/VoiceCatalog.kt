@@ -476,7 +476,7 @@ object VoiceCatalog {
     fun shortName(pack: VoicePack): String {
         val title = familyInfo(pack.family).title
         return when (pack.family) {
-            VoiceFamily.SUPERTONIC, VoiceFamily.KITTEN -> "$title ${pack.variant}"
+            VoiceFamily.SUPERTONIC, VoiceFamily.KITTEN, VoiceFamily.POCKET -> "$title ${pack.variant}"
             VoiceFamily.KOKORO -> "$title (${pack.variant})"
             VoiceFamily.PIPER -> {
                 val short = pack.voiceName?.substringBefore(" (") ?: pack.displayName
