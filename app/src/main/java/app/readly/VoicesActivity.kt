@@ -674,13 +674,23 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                     mainButton.setText(R.string.use_button)
                     mainButton.isEnabled = true
                 }
+                !pack.downloadable -> {
+                    mainButton.setText(R.string.not_downloadable_button)
+                    mainButton.isEnabled = false
+                }
                 else -> {
                     mainButton.text = VoiceCatalog.downloadLabel(pack.sizeMb)
                     mainButton.isEnabled = runningId == null
                 }
             }
-            noteText.visibility =
-                if (!installed && runningId != null && runningId != pack.id) View.VISIBLE else View.GONE
+            if (!installed && !pack.downloadable) {
+                noteText.setText(R.string.not_downloadable_note)
+                noteText.visibility = View.VISIBLE
+            } else {
+                noteText.setText(R.string.another_downloading_note)
+                noteText.visibility =
+                    if (!installed && runningId != null && runningId != pack.id) View.VISIBLE else View.GONE
+            }
             val runningHere =
                 runningId != null && VoiceCatalog.byId(runningId)?.family == info.family
             progressBar.visibility = if (runningHere) View.VISIBLE else View.GONE
