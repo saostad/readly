@@ -119,6 +119,19 @@ class VoiceModelStoreTest {
     }
 
     @Test
+    fun isInstalled_pocketV2Pack_needsOnlyOnnxAndMarker() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v2")!!
+        val base = temp.newFolder("voices")
+        touch(base, "pocket-farsi-v2/pocket-farsi-v2.onnx")
+        val store = VoiceModelStore(pocket, base, { _, _ -> error("must not download") })
+
+        assertFalse(store.isInstalled())
+        touch(base, "pocket-farsi-v2/.complete")
+        assertTrue(store.isInstalled())
+        assertEquals(File(base, "pocket-farsi-v2"), store.modelDir)
+    }
+
+    @Test
     fun install_singleFile_success_writesModelAndMarker() {
         val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
         val bytes = "fake-onnx-model".toByteArray()

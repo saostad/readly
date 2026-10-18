@@ -329,6 +329,29 @@ class VoiceCatalogTest {
     }
 
     @Test
+    fun pocketV2Pack_hasExpectedFields() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v2")!!
+        assertEquals(VoiceFamily.POCKET, pocket.family)
+        assertEquals("Pocket Farsi", pocket.displayName)
+        assertEquals("v2", pocket.variant)
+        assertEquals(setOf("fa"), pocket.languages())
+        assertEquals(listOf("Voice A"), pocket.speakers)
+        assertEquals("pocket-farsi-v2", pocket.topDir)
+        assertEquals("pocket-farsi-v2.onnx", pocket.modelFile)
+        assertEquals(226378457L, pocket.sizeBytes)
+        assertEquals(
+            "53a49a5d2fdf94832a0163939c38eb638789ae1f1678dccdd539240dffcf4703",
+            pocket.sha256,
+        )
+        assertTrue(pocket.downloadable)
+        assertEquals(
+            "https://huggingface.co/saostad/readly-voices/resolve/main/pocket-farsi-v2/pocket-farsi-v2.onnx",
+            pocket.url,
+        )
+        assertEquals(app.readly.R.raw.sample_pocket_farsi_v2, pocket.sampleRes)
+    }
+
+    @Test
     fun languages_piper_usesLangPrefix() {
         fun langs(id: String) = VoiceCatalog.byId(id)!!.languages()
         assertEquals(setOf("en"), langs("piper-en_US-lessac-medium"))

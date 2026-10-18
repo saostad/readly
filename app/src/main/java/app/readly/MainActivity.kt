@@ -749,6 +749,6 @@ class MainActivity : Activity(), InstallTask.Listener {
         const val EXTRA_NEED_VOICE = "needVoice"
 
         /** The Persian-only setup alternative to the main voice. */
-        const val POCKET_PACK_ID = "pocket-farsi-v1"
+        const val POCKET_PACK_ID = "pocket-farsi-v2"
     }
 }

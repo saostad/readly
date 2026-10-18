@@ -55,11 +55,16 @@ object PocketAudio {
 
     /**
      * Prepare one chunk the way the reference runtime does before tokenizing: flatten line
-     * breaks, uppercase the first character, and close a trailing word character with a
-     * period. (The Farsi config disables space padding and semicolon removal, and Persian
-     * has no case to change.)
+     * breaks and, unless the model's flags say otherwise, uppercase the first character
+     * and close a trailing word character with a period. (Both Farsi configs disable
+     * space padding and semicolon removal; v1 capitalizes and punctuates, v2 — whose
+     * input is phonemes — does neither, and Persian has no case to change.)
      */
-    fun prepareTextPrompt(chunk: String): String {
+    fun prepareTextPrompt(
+        chunk: String,
+        capitalizeFirstLetter: Boolean = true,
+        appendTerminalPunctuation: Boolean = true,
+    ): String {
         var text = trimWhitespace(chunk).replace('\n', ' ').replace('\r', ' ')
         while ("  " in text) {
             text = text.replace("  ", " ")
@@ -67,10 +72,14 @@ object PocketAudio {
         if (text.isEmpty()) {
             return text
         }
-        val first = text.codePointAt(0)
-        text = String(Character.toChars(first)).uppercase(Locale.ROOT) +
-            text.substring(Character.charCount(first))
-        if (Character.isLetterOrDigit(text.codePointBefore(text.length))) {
+        if (capitalizeFirstLetter) {
+            val first = text.codePointAt(0)
+            text = String(Character.toChars(first)).uppercase(Locale.ROOT) +
+                text.substring(Character.charCount(first))
+        }
+        if (appendTerminalPunctuation &&
+            Character.isLetterOrDigit(text.codePointBefore(text.length))
+        ) {
             text += "."
         }
         return text

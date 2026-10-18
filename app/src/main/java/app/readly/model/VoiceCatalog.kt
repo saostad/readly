@@ -230,6 +230,23 @@ object VoiceCatalog {
             lang = "fa",
             fileUrl = "https://huggingface.co/saostad/readly-voices/resolve/main/pocket-farsi-v1/pocket-farsi-v1.onnx",
         ),
+        VoicePack(
+            id = "pocket-farsi-v2",
+            displayName = "Pocket Farsi",
+            variant = "v2",
+            voiceName = null,
+            family = VoiceFamily.POCKET,
+            archive = "",
+            sizeBytes = 226378457L,
+            sha256 = "53a49a5d2fdf94832a0163939c38eb638789ae1f1678dccdd539240dffcf4703",
+            topDir = "pocket-farsi-v2",
+            modelFile = "pocket-farsi-v2.onnx",
+            speakers = listOf("Voice A"),
+            rtfNote = "Speed on phones not measured yet",
+            sampleRes = R.raw.sample_pocket_farsi_v2,
+            lang = "fa",
+            fileUrl = "https://huggingface.co/saostad/readly-voices/resolve/main/pocket-farsi-v2/pocket-farsi-v2.onnx",
+        ),
     )
 
     @Volatile
@@ -380,7 +397,7 @@ object VoiceCatalog {
             VoiceFamilyInfo(VoiceFamily.KOKORO, "Kokoro", "Most natural · 11 voices"),
             VoiceFamilyInfo(VoiceFamily.PIPER, "Piper", piperTagline()),
             VoiceFamilyInfo(VoiceFamily.KITTEN, "Kitten", "Compact · 8 voices"),
-            VoiceFamilyInfo(VoiceFamily.POCKET, "Pocket", "Natural Persian · 1 voice"),
+            VoiceFamilyInfo(VoiceFamily.POCKET, "Pocket", "Natural Persian · 2 voices"),
         )
     }
 

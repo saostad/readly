@@ -182,6 +182,21 @@ class PocketAudioTest {
         return File(userDir, "build")
     }
 
+    @Test
+    fun prepareTextPrompt_honorsFrontEndFlags() {
+        // v1 (defaults): capitalize + terminal period.
+        assertEquals("Hello world.", PocketAudio.prepareTextPrompt("hello world"))
+        // v2 (phonemes in): whitespace tidying only.
+        assertEquals(
+            "hello world",
+            PocketAudio.prepareTextPrompt("hello world", capitalizeFirstLetter = false, appendTerminalPunctuation = false),
+        )
+        assertEquals(
+            "a b",
+            PocketAudio.prepareTextPrompt("  a\nb  ", capitalizeFirstLetter = false, appendTerminalPunctuation = false),
+        )
+    }
+
     companion object {
         private val WHITESPACE = Regex("\\s+")
     }
