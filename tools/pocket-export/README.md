@@ -9,3 +9,14 @@ chosen voice baked in (at most 5 s of it).
 Output: `out/pocket-farsi-v1.onnx` (~230 MB, gitignored) and, with
 `--samples`, `out/samples/NN-onnx.wav` / `NN-torch.wav` to compare by ear.
 Adapted from smart-voices PR #4.
+
+## Put the voice on a phone
+
+No download host yet, so the model file is copied by hand for now. From this
+directory, with a debug build installed (so `run-as` works):
+
+```
+adb push out/pocket-farsi-v1.onnx /data/local/tmp/
+adb shell run-as app.readly sh -c 'mkdir -p no_backup/voices/pocket-farsi-v1 && cp /data/local/tmp/pocket-farsi-v1.onnx no_backup/voices/pocket-farsi-v1/ && touch no_backup/voices/pocket-farsi-v1/.complete'
+adb shell rm /data/local/tmp/pocket-farsi-v1.onnx
+```
