@@ -60,7 +60,9 @@ object SmartVoice {
      * [lang].
      */
     fun recommendedPack(lang: String, all: List<VoicePack> = VoiceCatalog.ALL): VoicePack? {
-        val piper = all.filter { it.family == VoiceFamily.PIPER && lang in it.languages() }
+        // A pack with no download host (Pocket v1) is never a download recommendation.
+        val downloadable = all.filter { it.downloadable }
+        val piper = downloadable.filter { it.family == VoiceFamily.PIPER && lang in it.languages() }
         if (piper.isNotEmpty()) {
             val firstVoice = piper.mapNotNull { it.voiceName }.minOrNull() ?: return null
             val candidates = piper.filter { it.voiceName == firstVoice }
@@ -68,7 +70,7 @@ object SmartVoice {
             candidates.find { it.variant == "Standard" }?.let { return it }
             return candidates.minByOrNull { it.sizeBytes }
         }
-        return all.find { it.id == "supertonic-3" }?.takeIf { lang in it.languages() }
+        return downloadable.find { it.id == "supertonic-3" }?.takeIf { lang in it.languages() }
     }
 
     /**
@@ -119,6 +121,8 @@ object SmartVoice {
 
     /** Only a small Piper Compact or Standard is ever auto-downloaded. */
     private fun isAutoDownloadable(pack: VoicePack): Boolean {
+        // A pack with no download host (Pocket v1) can never auto-download.
+        if (!pack.downloadable) return false
         if (pack.family != VoiceFamily.PIPER) return false
         if (pack.variant != "Compact" && pack.variant != "Standard") return false
         return pack.sizeBytes <= MAX_AUTO_DOWNLOAD_BYTES

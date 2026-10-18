@@ -34,6 +34,7 @@ class VoiceCatalogTest {
     fun sha256_is64LowercaseHex() {
         val hex64 = Regex("[0-9a-f]{64}")
         for (pack in VoiceCatalog.ALL) {
+            if (!pack.downloadable) continue
             assertTrue("${pack.id}: ${pack.sha256}", hex64.matches(pack.sha256))
         }
     }
@@ -45,6 +46,7 @@ class VoiceCatalogTest {
             VoiceFamily.PIPER to 1,
             VoiceFamily.SUPERTONIC to 10,
             VoiceFamily.KITTEN to 8,
+            VoiceFamily.POCKET to 1,
         )
         for (pack in VoiceCatalog.ALL) {
             assertEquals(pack.id, expected[pack.family], pack.speakers.size)
@@ -101,7 +103,7 @@ class VoiceCatalogTest {
         for (family in VoiceFamily.values()) {
             assertTrue("$family has no packs", VoiceCatalog.packsFor(family).isNotEmpty())
         }
-        assertEquals(4, VoiceCatalog.FAMILIES.size)
+        assertEquals(5, VoiceCatalog.FAMILIES.size)
     }
 
     @Test
@@ -315,6 +317,13 @@ class VoiceCatalogTest {
         assertEquals("Full · 67 MB", VoiceCatalog.sizeLabel(false, 67))
         assertEquals("Compact · 21 MB", VoiceCatalog.sizeLabel(true, 21))
         assertEquals("Download · 21 MB", VoiceCatalog.downloadLabel(21))
+    }
+
+    @Test
+    fun pocketPack_isFoundAndSpeaksPersian() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        assertEquals(VoiceFamily.POCKET, pocket.family)
+        assertEquals(setOf("fa"), pocket.languages())
     }
 
     @Test
