@@ -14,7 +14,7 @@ import java.text.Normalizer
  * (`src/test/resources/pocket/fixtures.json`).
  */
 object NormalizeFa {
-    private const val ZWNJ = '‌'
+    private const val ZWNJ = '\u200C'
     private const val PERSIAN_LETTERS =
         "آابپتثجچحخدذرز" +
             "ژسشصضطظعغفقکگ" +
@@ -44,7 +44,7 @@ object NormalizeFa {
     }
 
     private val diacritics = Regex("[ً-ٰٕۖ-ۭٖ-ٟ]")
-    private val invisibles = Regex("[​‍‎‏‪-‮⁦-⁩﻿­]")
+    private val invisibles = Regex("[\u200B\u200D\u200E\u200F\u202A-\u202E\u2066-\u2069\uFEFF\u00AD]")
     private val thousandsComma = Regex("(?U)(?<=\\d),(?=\\d\\d\\d\\b)")
     private val number = Regex("([0-9]+)(?:[.]([0-9]+))?")
     private val percent = Regex("[٪%]")
