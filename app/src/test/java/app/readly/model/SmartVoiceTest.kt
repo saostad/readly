@@ -183,9 +183,33 @@ class SmartVoiceTest {
             "piper-es_MX-ald-medium-compact",
             SmartVoice.recommendedPack("es")!!.id,
         )
+    }
+
+    @Test
+    fun recommendedPack_fa_returnsPocket() {
+        assertEquals("pocket-farsi-v1", SmartVoice.recommendedPack("fa")!!.id)
+    }
+
+    @Test
+    fun recommendedPack_ar_unchanged() {
         assertEquals(
-            "piper-fa_IR-amir-medium-compact",
-            SmartVoice.recommendedPack("fa")!!.id,
+            "piper-ar_JO-kareem-medium-compact",
+            SmartVoice.recommendedPack("ar")!!.id,
+        )
+    }
+
+    @Test
+    fun recommendedPack_fa_withoutPocket_fallsBackToPiper() {
+        val piper = pack("piper-fa_IR-amir-medium")
+        assertEquals(piper, SmartVoice.recommendedPack("fa", listOf(piper)))
+    }
+
+    @Test
+    fun pick_prefersPocketOverPersianPiper() {
+        val installed = listOf(pack("piper-fa_IR-amir-medium"), pack("pocket-farsi-v1"))
+        assertEquals(
+            SmartVoice.Choice.Use(pack("pocket-farsi-v1")),
+            SmartVoice.pick("fa", installed, null, emptyMap(), true),
         )
     }
 
