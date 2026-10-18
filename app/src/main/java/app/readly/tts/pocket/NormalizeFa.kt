@@ -15,7 +15,7 @@ import java.text.Normalizer
  */
 object NormalizeFa {
     private const val ZWNJ = '\u200C'
-    private const val PERSIAN_LETTERS =
+    internal const val PERSIAN_LETTERS =
         "آابپتثجچحخدذرز" +
             "ژسشصضطظعغفقکگ" +
             "لمنوهیئ"
