@@ -162,11 +162,18 @@ class ReaderService : Service() {
                 .edit().putString(langPackKey(lang), packId).apply()
         }
 
-        /** `"fa"` → `"Persian"`, `"ar"` → `"Arabic"`. */
+        /**
+         * `"fa"` → `"Persian"`, `"ar"` → `"Arabic"`; any other code resolves
+         * through its English display name (`"en"` → `"English"`), falling
+         * back to the code when unknown.
+         */
         fun langName(lang: String): String = when (lang) {
             "fa" -> "Persian"
             "ar" -> "Arabic"
-            else -> lang
+            else -> {
+                val display = Locale.forLanguageTag(lang).getDisplayLanguage(Locale.ENGLISH)
+                if (display.isBlank() || display == lang) lang else display
+            }
         }
 
         /**

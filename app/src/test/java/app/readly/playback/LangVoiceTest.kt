@@ -31,4 +31,11 @@ class LangVoiceTest {
         assertEquals("activePackId.fa", ReaderService.langPackKey("fa"))
         assertEquals("activePackId.ar", ReaderService.langPackKey("ar"))
     }
+
+    @Test
+    fun langName_otherCodes_useDisplayLanguageWithCodeFallback() {
+        assertEquals("English", ReaderService.langName("en"))
+        assertEquals("Persian", ReaderService.langName("fa"))
+        assertEquals("zz", ReaderService.langName("zz"))
+    }
 }
