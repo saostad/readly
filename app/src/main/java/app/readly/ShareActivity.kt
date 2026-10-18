@@ -21,7 +21,9 @@ import java.io.File
  * still valid. Shared links open in the automatic article engine
  * ([ArticleActivity]) while the sender is still foreground, in parallel with
  * the voice load kicked off by [ReaderService.preload]. Text, HTML, Markdown
- * and file shares are read directly by [ReaderService.read].
+ * and file shares are read directly by [ReaderService.read] with no preload:
+ * preloading the main voice before detection made a Persian share load the
+ * English voice first, then the detected one.
  */
 class ShareActivity : Activity() {
 
@@ -40,7 +42,7 @@ class ShareActivity : Activity() {
         try {
             when (val request = resolveIntent(intent)) {
                 is ShareRequest.Read -> {
-                    ReaderService.preload(this)
+                    Log.i("Readly", "Share: text read; skipping main-voice preload so the detected voice loads first")
                     ReaderService.read(this, request.text, request.title, request.format)
                 }
                 is ShareRequest.Url -> {
