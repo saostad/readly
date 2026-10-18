@@ -43,17 +43,28 @@ object NormalizeFa {
         put('،', "،"); put('؛', "؛"); put('؟', "؟")
     }
 
+    // Never use the inline unicode flag in this file: Android ICU regex rejects
+    // UNICODE_CHARACTER_CLASS (PatternSyntaxException at class init; see the
+    // noUnicodeFlagInMainSources test), so every Unicode class is spelled out to mean
+    // the same on the JVM and on Android, matching Python re on str.
+    // Python whitespace set (str.isspace), verified against re on every char (see the
+    // pythonWhitespaceSetMatchesJavaClass test): White_Space plus U+001C..U+001F, the
+    // latter built with toChar so this source file stays plain ASCII.
+    internal val UNICODE_WS = "[\\p{IsWhite_Space}" + 0x1C.toChar() + "-" + 0x1F.toChar() + "]"
+
     private val diacritics = Regex("[ً-ٰٕۖ-ۭٖ-ٟ]")
     private val invisibles = Regex("[\u200B\u200D\u200E\u200F\u202A-\u202E\u2066-\u2069\uFEFF\u00AD]")
-    private val thousandsComma = Regex("(?U)(?<=\\d),(?=\\d\\d\\d\\b)")
+    // [0-9] (not Nd): foldDigits has already run before numbersToWords, so only ASCII
+    // digits reach here. The trailing (?![\p{L}\p{N}_]) is \b after a digit, spelled out.
+    private val thousandsComma = Regex("(?<=[0-9]),(?=[0-9][0-9][0-9](?![\\p{L}\\p{N}_]))")
     private val number = Regex("([0-9]+)(?:[.]([0-9]+))?")
     private val percent = Regex("[٪%]")
     private val zwnjRun = Regex("$ZWNJ+")
-    private val spacedZwnj = Regex("(?U)\\s*$ZWNJ\\s*")
+    private val spacedZwnj = Regex("$UNICODE_WS*$ZWNJ$UNICODE_WS*")
     private val strayZwnj = Regex("(?<![$PERSIAN_LETTERS])$ZWNJ|$ZWNJ(?![$PERSIAN_LETTERS])")
-    private val spaceBeforePunct = Regex("(?U)\\s+([$KEPT_PUNCT])")
+    private val spaceBeforePunct = Regex("$UNICODE_WS+([$KEPT_PUNCT])")
     private val repeatedPunct = Regex("([.،؛؟!:])\\1+")
-    private val whitespace = Regex("(?U)\\s+")
+    private val whitespace = Regex("$UNICODE_WS+")
 
     private val ones = listOf("", "یک", "دو", "سه", "چهار", "پنج", "شش", "هفت", "هشت", "نه")
     private val teens = listOf(
