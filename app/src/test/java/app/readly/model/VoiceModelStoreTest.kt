@@ -51,7 +51,7 @@ class VoiceModelStoreTest {
 
     @Test
     fun isInstalled_freshDir_returnsFalse() {
-        val store = VoiceModelStore(kokoro, temp.newFolder("voices"), { error("unused") }, "unused")
+        val store = VoiceModelStore(kokoro, temp.newFolder("voices"), { _, _ -> error("unused") }, "unused")
         assertFalse(store.isInstalled())
     }
 
@@ -65,7 +65,7 @@ class VoiceModelStoreTest {
         touch(base, "kokoro-en-v0_19/tokens.txt")
         File(base, "kokoro-en-v0_19/espeak-ng-data").mkdirs()
         touch(base, "kokoro-en-v0_19/.complete")
-        val store = VoiceModelStore(kokoro, base, { error("must not download") })
+        val store = VoiceModelStore(kokoro, base, { _, _ -> error("must not download") })
 
         assertTrue(store.isInstalled())
         assertEquals(File(base, "kokoro-en-v0_19"), store.modelDir)
@@ -76,7 +76,7 @@ class VoiceModelStoreTest {
         val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
         val base = temp.newFolder("voices")
         touch(base, "pocket-farsi-v1/pocket-farsi-v1.onnx")
-        val store = VoiceModelStore(pocket, base, { error("must not download") })
+        val store = VoiceModelStore(pocket, base, { _, _ -> error("must not download") })
 
         assertFalse(store.isInstalled())
         touch(base, "pocket-farsi-v1/.complete")
@@ -90,7 +90,7 @@ class VoiceModelStoreTest {
         // keeps the copy-by-hand message.
         val pack = piperTestPack.copy(archive = "", fileUrl = null)
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(pack, base, { error("must not download") })
+        val store = VoiceModelStore(pack, base, { _, _ -> error("must not download") })
 
         try {
             store.install(progress = { _, _, _ -> }, cancelled = { false })
@@ -185,7 +185,7 @@ class VoiceModelStoreTest {
         val store = VoiceModelStore(
             pocket,
             base,
-            { FakeConnection(404, "Not Found", ByteArray(0)) },
+            { _, _ -> FakeConnection(404, "Not Found", ByteArray(0)) },
             pocket.sha256,
         )
 
@@ -404,7 +404,7 @@ class VoiceModelStoreTest {
         val store = VoiceModelStore(
             kokoro,
             base,
-            { FakeConnection(404, "Not Found", ByteArray(0)) },
+            { _, _ -> FakeConnection(404, "Not Found", ByteArray(0)) },
             kokoro.sha256,
         )
 
@@ -463,7 +463,7 @@ class VoiceModelStoreTest {
         val base = temp.newFolder("voices")
         touch(base, "kokoro-en-v0_19/model.onnx")
         val infos = mutableListOf<String>()
-        val store = VoiceModelStore(kokoro, base, { error("unused") }, onInfo = infos::add)
+        val store = VoiceModelStore(kokoro, base, { _, _ -> error("unused") }, onInfo = infos::add)
 
         store.delete()
 
@@ -473,16 +473,185 @@ class VoiceModelStoreTest {
         assertEquals("second delete logs nothing", 1, infos.size)
     }
 
-    private fun fakeOpener(archive: ByteArray): (String) -> DownloadConnection =
-        { FakeConnection(200, "OK", archive) }
+    private fun fakeOpener(archive: ByteArray): (String, Long) -> DownloadConnection =
+        { _, _ -> FakeConnection(200, "OK", archive) }
+
+    @Test
+    fun install_singleFile_dropThenResume206_installsAndOpenerSawOffset() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val bytes = ByteArray(100) { it.toByte() }
+        val offsets = mutableListOf<Long>()
+        val infos = mutableListOf<String>()
+        val opener: (String, Long) -> DownloadConnection = { _, from ->
+            offsets.add(from)
+            if (from == 0L) {
+                FakeConnection(200, "OK", bytes, failAfterBytes = 10)
+            } else {
+                FakeConnection(
+                    206, "Partial Content", bytes.copyOfRange(from.toInt(), bytes.size),
+                    contentRangeStart = from,
+                )
+            }
+        }
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(
+            pocket, base, opener, sha256(bytes), bytes.size.toLong(),
+            onInfo = infos::add, sleeper = {},
+        )
+
+        store.install(progress = { _, _, _ -> }, cancelled = { false })
+
+        assertEquals(listOf(0L, 10L), offsets)
+        assertTrue(store.isInstalled())
+        assertTrue(bytes.contentEquals(File(base, "pocket-farsi-v1/pocket-farsi-v1.onnx").readBytes()))
+        assertTrue(File(base, "pocket-farsi-v1/.complete").isFile)
+        assertEquals(
+            listOf(
+                "Voice download interrupted at 10 of 100 bytes " +
+                    "(SocketException: Software caused connection abort); " +
+                    "resuming (attempt 1 of 5)",
+            ),
+            infos,
+        )
+    }
+
+    @Test
+    fun install_singleFile_resumeAnswers200_restartsFromZeroAndInstalls() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val bytes = ByteArray(100) { (it * 3).toByte() }
+        val offsets = mutableListOf<Long>()
+        var first = true
+        val opener: (String, Long) -> DownloadConnection = { _, from ->
+            offsets.add(from)
+            if (first) {
+                first = false
+                FakeConnection(200, "OK", bytes, failAfterBytes = 10)
+            } else {
+                // No range support: full body, no Content-Range.
+                FakeConnection(200, "OK", bytes)
+            }
+        }
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(
+            pocket, base, opener, sha256(bytes), bytes.size.toLong(),
+            onInfo = {}, sleeper = {},
+        )
+
+        store.install(progress = { _, _, _ -> }, cancelled = { false })
+
+        assertEquals(listOf(0L, 10L), offsets)
+        assertTrue(store.isInstalled())
+        assertTrue(bytes.contentEquals(File(base, "pocket-farsi-v1/pocket-farsi-v1.onnx").readBytes()))
+    }
+
+    @Test
+    fun install_singleFile_sixConsecutiveDrops_throwsFailedAfter5Retries() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val bytes = ByteArray(100) { it.toByte() }
+        val offsets = mutableListOf<Long>()
+        val sleeps = mutableListOf<Long>()
+        // Every attempt serves 10 more bytes, then drops.
+        val opener: (String, Long) -> DownloadConnection = { _, from ->
+            offsets.add(from)
+            if (from == 0L) {
+                FakeConnection(200, "OK", bytes, failAfterBytes = 10)
+            } else {
+                FakeConnection(
+                    206, "Partial Content", bytes.copyOfRange(from.toInt(), bytes.size),
+                    contentRangeStart = from, failAfterBytes = 10,
+                )
+            }
+        }
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(
+            pocket, base, opener, sha256(bytes), bytes.size.toLong(),
+            onInfo = {}, sleeper = sleeps::add,
+        )
+
+        try {
+            store.install(progress = { _, _, _ -> }, cancelled = { false })
+            fail("expected IOException")
+        } catch (e: IOException) {
+            assertEquals(
+                "Voice download failed after 5 retries at 60 of 100 bytes: " +
+                    "SocketException: Software caused connection abort",
+                e.message,
+            )
+        }
+        assertEquals(listOf(0L, 10L, 20L, 30L, 40L, 50L), offsets)
+        assertEquals(listOf(2_000L, 4_000L, 8_000L, 16_000L, 30_000L), sleeps)
+        assertFalse(File(base, "pocket-farsi-v1").exists())
+        assertFalse(File(base, "pocket-farsi-v1.tmp").exists())
+        assertFalse(store.isInstalled())
+    }
+
+    @Test
+    fun install_singleFile_cancelDuringBackoff_throwsCancellationAndInstallsNothing() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val bytes = ByteArray(100) { it.toByte() }
+        var cancelled = false
+        val opener: (String, Long) -> DownloadConnection = { _, from ->
+            if (from == 0L) {
+                FakeConnection(200, "OK", bytes, failAfterBytes = 10)
+            } else {
+                FakeConnection(
+                    206, "Partial Content", bytes.copyOfRange(from.toInt(), bytes.size),
+                    contentRangeStart = from,
+                )
+            }
+        }
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(
+            pocket, base, opener, sha256(bytes), bytes.size.toLong(),
+            onInfo = {}, sleeper = { cancelled = true },
+        )
+
+        try {
+            store.install(progress = { _, _, _ -> }, cancelled = { cancelled })
+            fail("expected CancellationException")
+        } catch (e: CancellationException) {
+            assertEquals("Voice download cancelled", e.message)
+        }
+        assertFalse(File(base, "pocket-farsi-v1").exists())
+        assertFalse(File(base, "pocket-farsi-v1.tmp").exists())
+        assertFalse(store.isInstalled())
+    }
 
     private class FakeConnection(
         override val statusCode: Int,
         override val statusMessage: String,
         private val bytes: ByteArray,
+        override val contentRangeStart: Long? = null,
+        private val failAfterBytes: Int = Int.MAX_VALUE,
     ) : DownloadConnection {
-        override fun input(): InputStream = ByteArrayInputStream(bytes)
+        override fun input(): InputStream =
+            if (failAfterBytes >= bytes.size) ByteArrayInputStream(bytes)
+            else FailingStream(bytes, failAfterBytes)
         override fun close() {}
+    }
+
+    /** Serves [bytes] up to [failAfter], then drops like a flaky connection. */
+    private class FailingStream(private val bytes: ByteArray, private val failAfter: Int) : InputStream() {
+        private var pos = 0
+
+        private fun check() {
+            if (pos >= failAfter) throw java.net.SocketException("Software caused connection abort")
+        }
+
+        override fun read(): Int {
+            check()
+            if (pos >= bytes.size) return -1
+            return bytes[pos++].toInt() and 0xFF
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            check()
+            if (pos >= bytes.size) return -1
+            val n = minOf(len, minOf(bytes.size - pos, failAfter - pos))
+            bytes.copyInto(b, off, pos, pos + n)
+            pos += n
+            return n
+        }
     }
 
     private fun touch(base: File, path: String) {
