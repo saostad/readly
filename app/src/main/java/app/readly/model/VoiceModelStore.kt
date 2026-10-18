@@ -49,7 +49,8 @@ interface DownloadConnection : Closeable {
  *   fixture sizes (production uses the pack's [VoicePack.sizeBytes]).
  * @param onInfo receives messages that production logs with `Log.i("Readly", …)`; injected
  *   so JVM tests don't touch `android.util.Log`.
- * @param sleeper backs the resume back-off; injected so tests don't wait.
+ * @param sleeper backs the resume back-off in ≤ 250 ms slices; injected so tests
+ *   don't wait.
  */
 class VoiceModelStore(
     val pack: VoicePack,
@@ -67,7 +68,8 @@ class VoiceModelStore(
         private const val READ_BUFFER_BYTES = 64 * 1024
         private const val PROGRESS_MIN_DELTA_BYTES = 256L * 1024
 
-        /** Back-off between single-file resume attempts (5 retries, then give up). */
+        /** Back-off between single-file resume attempts (5 consecutive failures with no
+         * progress, then give up). */
         private val RESUME_DELAYS_MS = longArrayOf(2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
 
         /** Production [VoiceModelStore] opener backed by [HttpURLConnection]. */
@@ -199,8 +201,15 @@ class VoiceModelStore(
      * the bytes already in the file, and appends, keeping the same digest — so
      * it covers exactly the file's bytes. A 206 whose `Content-Range` start
      * matches the offset continues; a 200 (no range support) truncates the
-     * file, resets the digest and restarts from 0. After 5 failed resumes the
-     * original error is rethrown with the retry count.
+     * file, resets the digest and restarts from 0.
+     *
+     * Reconnect failures are retried too: past the very first open, an
+     * [IOException] from opening the connection or reading its status/headers
+     * counts as one failed attempt, logged and backed off exactly like a read
+     * failure. The attempt counter resets whenever bytes arrived since the last
+     * failure, so "failed after 5 retries" means 5 consecutive attempts with no
+     * progress. HTTP error statuses and Content-Range mismatches are terminal
+     * and never retried.
      */
     private fun streamDownloadToFile(
         tmpDir: File,
@@ -216,31 +225,94 @@ class VoiceModelStore(
         var lastReported = 0L
         var resumeFrom = 0L
         var failures = 0
+        var doneAtLastFailure = 0L
+
+        fun handleFailure(e: IOException) {
+            if (done > doneAtLastFailure) {
+                // Bytes arrived since the last failure: this starts a new streak.
+                failures = 0
+                doneAtLastFailure = done
+            }
+            failures++
+            if (failures > RESUME_DELAYS_MS.size) {
+                throw IOException(
+                    "Voice download failed after ${RESUME_DELAYS_MS.size} retries at " +
+                        "$done of $expectedSizeBytes bytes: " +
+                        "${e.javaClass.simpleName}: ${e.message}",
+                    e,
+                )
+            }
+            onInfo(
+                "Voice download interrupted at $done of $expectedSizeBytes bytes " +
+                    "(${e.javaClass.simpleName}: ${e.message}); " +
+                    "resuming (attempt $failures of ${RESUME_DELAYS_MS.size})",
+            )
+            cancelAwareSleep(RESUME_DELAYS_MS[failures - 1], cancelled)
+            resumeFrom = done
+        }
+
         while (true) {
             if (cancelled()) throw CancellationException("Voice download cancelled")
-            var retry = false
-            urlOpener(pack.url, resumeFrom).use { conn ->
+            // Failures is only 0 before the first failure, so this is true for the
+            // very first open alone: a reopen from 0 after a 200 restart stays
+            // retryable, as does one after a 0-byte first read.
+            val firstOpen = failures == 0 && resumeFrom == 0L
+            val conn: DownloadConnection
+            try {
+                conn = urlOpener(pack.url, resumeFrom)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                if (firstOpen) throw e
+                handleFailure(e)
+                continue
+            }
+            try {
+                val status: Int
+                val statusMessage: String
+                val rangeStart: Long?
+                try {
+                    status = conn.statusCode
+                    statusMessage = conn.statusMessage
+                    rangeStart = conn.contentRangeStart
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: IOException) {
+                    if (firstOpen) throw e
+                    handleFailure(e)
+                    continue
+                }
                 if (resumeFrom == 0L) {
-                    throwIfHttpError(conn)
+                    throwIfHttpError(status, statusMessage)
                 } else {
                     when {
-                        conn.statusCode == 206 && conn.contentRangeStart == resumeFrom -> Unit
-                        conn.statusCode == 200 -> {
+                        status == 206 && rangeStart == resumeFrom -> Unit
+                        status == 200 -> {
                             digest.reset()
                             done = 0L
                             lastReported = 0L
                             resumeFrom = 0L
+                            doneAtLastFailure = 0L
                         }
                         else -> {
-                            throwIfHttpError(conn)
+                            throwIfHttpError(status, statusMessage)
                             throw IOException(
-                                "Voice download failed: HTTP ${conn.statusCode} with an " +
+                                "Voice download failed: HTTP $status with an " +
                                     "unexpected Content-Range for resume from $resumeFrom bytes",
                             )
                         }
                     }
                 }
-                val counting = countedDigestStream(conn, digest)
+                val counting: CountingInputStream
+                try {
+                    counting = countedDigestStream(conn, digest)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: IOException) {
+                    if (firstOpen) throw e
+                    handleFailure(e)
+                    continue
+                }
                 try {
                     FileOutputStream(target, resumeFrom > 0L).use { out ->
                         val buf = ByteArray(READ_BUFFER_BYTES)
@@ -259,54 +331,47 @@ class VoiceModelStore(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: IOException) {
-                    failures++
-                    if (failures > RESUME_DELAYS_MS.size) {
-                        throw IOException(
-                            "Voice download failed after ${RESUME_DELAYS_MS.size} retries at " +
-                                "$done of $expectedSizeBytes bytes: " +
-                                "${e.javaClass.simpleName}: ${e.message}",
-                            e,
-                        )
-                    }
-                    onInfo(
-                        "Voice download interrupted at $done of $expectedSizeBytes bytes " +
-                            "(${e.javaClass.simpleName}: ${e.message}); " +
-                            "resuming (attempt $failures of ${RESUME_DELAYS_MS.size})",
-                    )
-                    cancelAwareSleep(RESUME_DELAYS_MS[failures - 1], cancelled)
-                    resumeFrom = done
-                    retry = true
+                    handleFailure(e)
+                    continue
                 } finally {
                     counting.close()
                 }
+            } finally {
+                conn.close()
             }
-            if (!retry) {
-                if (done != lastReported) {
-                    progress(InstallStage.DOWNLOADING, done, expectedSizeBytes)
-                }
-                return done
+            if (done != lastReported) {
+                progress(InstallStage.DOWNLOADING, done, expectedSizeBytes)
             }
+            return done
         }
     }
 
-    /** [sleeper] that aborts with [CancellationException] when [cancelled] fires. */
+    /**
+     * [sleeper] in ≤ 250 ms slices, checking [cancelled] between them so a cancel
+     * during a long back-off returns within one slice.
+     */
     private fun cancelAwareSleep(ms: Long, cancelled: () -> Boolean) {
-        if (cancelled()) throw CancellationException("Voice download cancelled")
-        try {
-            sleeper(ms)
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-            throw CancellationException("Voice download cancelled")
+        var remaining = ms
+        while (remaining > 0) {
+            if (cancelled()) throw CancellationException("Voice download cancelled")
+            val slice = minOf(remaining, 250L)
+            try {
+                sleeper(slice)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw CancellationException("Voice download cancelled")
+            }
+            remaining -= slice
         }
         if (cancelled()) throw CancellationException("Voice download cancelled")
     }
 
-    /** Throws the shared HTTP-failure message unless [conn] is 2xx. */
-    private fun throwIfHttpError(conn: DownloadConnection) {
-        if (conn.statusCode !in 200..299) {
-            val detail = if (conn.statusMessage.isBlank()) "" else " ${conn.statusMessage}"
+    /** Throws the shared HTTP-failure message unless [statusCode] is 2xx. */
+    private fun throwIfHttpError(statusCode: Int, statusMessage: String) {
+        if (statusCode !in 200..299) {
+            val detail = if (statusMessage.isBlank()) "" else " $statusMessage"
             throw IOException(
-                "Voice download failed: HTTP ${conn.statusCode}$detail from ${pack.url}",
+                "Voice download failed: HTTP $statusCode$detail from ${pack.url}",
             )
         }
     }
@@ -340,7 +405,7 @@ class VoiceModelStore(
         tmpDir.mkdirs()
         val base = tmpDir.toPath().toAbsolutePath().normalize()
         urlOpener(pack.url, 0).use { conn ->
-            throwIfHttpError(conn)
+            throwIfHttpError(conn.statusCode, conn.statusMessage)
             val counting = countedDigestStream(conn, digest)
             var lastReported = 0L
             fun maybeReport() {
