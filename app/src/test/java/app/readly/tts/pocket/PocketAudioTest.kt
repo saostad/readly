@@ -1,6 +1,11 @@
 package app.readly.tts.pocket
 
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.sin
 import org.junit.Assert.assertEquals
@@ -9,8 +14,8 @@ import org.junit.Test
 
 /**
  * Ports of the `pocket.rs` helper tests (`split_text_respects_token_budget_and_punctuation`,
- * `trim_silence_keeps_120ms_at_each_end`, `loudness_lifts_quiet_audio_and_limits_peaks`) plus
- * the runaway cap and the 1.0-speed identity.
+ * `trim_silence_keeps_120ms_at_each_end`) plus the runaway cap, the 1.0-speed identity, and
+ * the BS.1770 loudness chain (sine, gating, and the real v1 fixture clip).
  */
 class PocketAudioTest {
     @Test
@@ -43,21 +48,6 @@ class PocketAudioTest {
     }
 
     @Test
-    fun loudnessLiftsQuietAudioAndLimitsPeaks() {
-        // Quiet sine (~-23 dB RMS) gains up toward the target.
-        val quiet = FloatArray(24000) { i -> 0.1f * sin(2.0 * PI * 440.0 * i / 24000.0).toFloat() }
-        val lifted = PocketAudio.normalizeLoudness(quiet)
-        assertTrue("quiet audio must get louder", rms(lifted) > rms(quiet) * 1.5)
-        // Loud audio never exceeds the ceiling.
-        val loud = FloatArray(24000) { i -> 0.99f * sin(2.0 * PI * 440.0 * i / 24000.0).toFloat() }
-        val limited = PocketAudio.normalizeLoudness(loud)
-        val peak = limited.maxOf { kotlin.math.abs(it) }
-        assertTrue("peak $peak", peak <= PocketAudio.PEAK_CEILING + 1e-6f)
-        // Silence passes through.
-        assertTrue(FloatArray(16).contentEquals(PocketAudio.normalizeLoudness(FloatArray(16))))
-    }
-
-    @Test
     fun runawayLimitIs97PercentOfLengthCap() {
         val expected = ceil((18.0 / 3 + 2) * 12.5) / 12.5 * 0.97
         assertEquals(expected, PocketAudio.runawayLimitSeconds(18), 1e-12)
@@ -69,10 +59,127 @@ class PocketAudioTest {
         assertTrue(samples.contentEquals(PocketAudio.applySpeed(samples, 1.0f)))
     }
 
-    private fun rms(samples: FloatArray): Double {
-        var sum = 0.0
-        for (s in samples) sum += s.toDouble() * s.toDouble()
-        return kotlin.math.sqrt(sum / samples.size)
+    @Test
+    fun measureLufsOfSineIsMinus23AtBothSampleRates() {
+        // 997 Hz sine at amplitude 0.1: RMS −23.0 dB, K-weighting ≈ 0 dB at 1 kHz.
+        val at24k = PocketAudio.measureLufs(sine997(24000, 3), 24000)
+        assertEquals(-23.0, at24k, 0.3)
+        val at48k = PocketAudio.measureLufs(sine997(48000, 3), 48000)
+        assertEquals(-23.0, at48k, 0.3)
+        // Rate-correct coefficients: same acoustic level measures the same.
+        assertTrue("24k=$at24k 48k=$at48k", abs(at24k - at48k) < 0.3)
+    }
+
+    @Test
+    fun gatingIgnoresSilence() {
+        val sine = sine997(24000, 2)
+        val combo = sine + FloatArray(2 * 24000)
+        val alone = PocketAudio.measureLufs(sine, 24000)
+        val withSilence = PocketAudio.measureLufs(combo, 24000)
+        assertTrue("alone=$alone combo=$withSilence", abs(withSilence - alone) < 0.5)
+    }
+
+    @Test
+    fun rawClipMeasuresMinus218AndMastersToMinus12() {
+        val (raw, sampleRate) = readMono16BitWav("/pocket/raw-v1-6s.wav")
+        assertEquals(24000, sampleRate)
+        // ffmpeg ebur128 says −21.8 LUFS for this clip.
+        assertEquals(-21.8, PocketAudio.measureLufs(raw, sampleRate), 0.5)
+
+        val mastered = PocketAudio.masterChunk(raw, sampleRate)
+        assertEquals(raw.size, mastered.size)
+        assertEquals(-12.0, PocketAudio.measureLufs(mastered, sampleRate), 1.0)
+        val peak = mastered.maxOf { abs(it) }
+        assertTrue("peak $peak exceeds ${PocketAudio.PEAK_CEILING}", peak <= PocketAudio.PEAK_CEILING)
+
+        val outFile = File(findBuildDir(), "pocket-audio/processed-v1-6s.wav")
+        try {
+            outFile.parentFile!!.mkdirs()
+            writeMono16BitWav(outFile, mastered, sampleRate)
+        } catch (e: Exception) {
+            throw AssertionError("couldn't write ${outFile.path}: ${e.javaClass.name}: ${e.message}")
+        }
+    }
+
+    @Test
+    fun allZeroInputPassesThroughUnchanged() {
+        val silent = FloatArray(24000)
+        assertTrue(silent.contentEquals(PocketAudio.masterChunk(silent, 24000)))
+    }
+
+    private fun sine997(sampleRate: Int, seconds: Int): FloatArray {
+        val n = sampleRate * seconds
+        return FloatArray(n) { i -> 0.1f * sin(2.0 * PI * 997.0 * i / sampleRate).toFloat() }
+    }
+
+    private fun readMono16BitWav(resource: String): Pair<FloatArray, Int> {
+        val bytes = javaClass.getResourceAsStream(resource)!!.readBytes()
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        fun tag(): String = ByteArray(4).also { buf.get(it) }.toString(Charsets.US_ASCII)
+        require(tag() == "RIFF") { "$resource is not a WAV file" }
+        buf.int // file size
+        require(tag() == "WAVE") { "$resource is not a WAV file" }
+        var sampleRate = 0
+        var channels = 0
+        var bits = 0
+        var data: FloatArray? = null
+        while (buf.remaining() >= 8) {
+            val id = tag()
+            val size = buf.int
+            val next = buf.position() + size
+            when (id) {
+                "fmt " -> {
+                    val format = buf.short.toInt()
+                    channels = buf.short.toInt()
+                    sampleRate = buf.int
+                    buf.int // byte rate
+                    buf.short // block align
+                    bits = buf.short.toInt()
+                    require(format == 1) { "$resource is not PCM" }
+                }
+                "data" -> {
+                    require(bits == 16 && channels == 1) { "$resource is not mono 16-bit" }
+                    val count = size / 2
+                    data = FloatArray(count) { buf.short / 32768.0f }
+                }
+            }
+            buf.position(next)
+        }
+        return Pair(requireNotNull(data) { "$resource has no data chunk" }, sampleRate)
+    }
+
+    private fun writeMono16BitWav(file: File, samples: FloatArray, sampleRate: Int) {
+        val out = ByteArrayOutputStream()
+        fun tag(s: String) = out.write(s.toByteArray(Charsets.US_ASCII))
+        fun int(v: Int) = out.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(v).array())
+        fun short(v: Int) = out.write(ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(v.toShort()).array())
+        tag("RIFF")
+        int(36 + samples.size * 2)
+        tag("WAVE")
+        tag("fmt ")
+        int(16)
+        short(1)
+        short(1)
+        int(sampleRate)
+        int(sampleRate * 2)
+        short(2)
+        short(16)
+        tag("data")
+        int(samples.size * 2)
+        for (s in samples) {
+            val v = (s.coerceIn(-1f, 1f) * 32767.0f).toInt().coerceIn(-32768, 32767)
+            short(v and 0xFFFF)
+        }
+        file.writeBytes(out.toByteArray())
+    }
+
+    private fun findBuildDir(): File {
+        // Unit tests run with user.dir at the module (app/) or the repo root.
+        val userDir = File(checkNotNull(System.getProperty("user.dir")) { "user.dir is not set" })
+        if (File(userDir, "src/main/java").isDirectory) return File(userDir, "build")
+        val app = File(userDir, "app")
+        if (File(app, "src/main/java").isDirectory) return File(app, "build")
+        return File(userDir, "build")
     }
 
     companion object {

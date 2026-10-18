@@ -1,12 +1,16 @@
 package app.readly.tts.pocket
 
 import java.util.Locale
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
+import kotlin.math.tan
 
 /**
  * Text and audio helpers for Pocket TTS Farsi v1, ported from the tested Rust engine for
@@ -19,9 +23,29 @@ object PocketAudio {
     /** Samples at or below this magnitude count as silence. */
     const val TRIM_THRESHOLD = 0.01f
 
-    /** Loudness target and limiter ceiling (−1 dBFS). */
-    const val TARGET_LUFS = -16.0
-    const val PEAK_CEILING = 0.8912515f
+    /** Mastered chunk target: about −12 LUFS after compression and limiting. */
+    const val TARGET_LUFS = -12.0
+
+    /** Pre-compressor level: each chunk is gained here first (gain clamped below). */
+    const val PRE_TARGET_LUFS = -20.0
+
+    /** Pre-gain clamp in dB, so near-silent chunks can't explode. */
+    const val PRE_GAIN_MIN_DB = -12.0
+    const val PRE_GAIN_MAX_DB = 24.0
+
+    /** Compressor: threshold, ratio, RMS detector ballistics (ffmpeg-approved chain). */
+    const val COMP_THRESHOLD_DB = -24.0
+    const val COMP_RATIO = 4.0
+    const val COMP_ATTACK_MS = 5.0
+    const val COMP_RELEASE_MS = 80.0
+
+    /** Look-ahead limiter ceiling and ballistics; output never exceeds the ceiling. */
+    const val PEAK_CEILING = 0.95f
+    const val LIMITER_LOOKAHEAD_MS = 5.0
+    const val LIMITER_RELEASE_MS = 50.0
+
+    /** Second-order Butterworth high-pass in front of the chain. */
+    const val HIGHPASS_FREQ_HZ = 70.0
 
     /** A generation longer than this share of its length cap never said EOS. */
     const val RUNAWAY_RATIO = 0.97
@@ -173,38 +197,79 @@ object PocketAudio {
     }
 
     /**
-     * Lift quiet Pocket output (about −25 LUFS) to about −16 LUFS with a peak limiter.
-     * Loudness is estimated from RMS with the usual −0.69 dB K-weighting offset for
-     * speech-band audio; the limiter is a whole-file gain reduction to the ceiling, which
-     * cannot pump. Returns the samples unchanged when they are silent.
+     * ITU-R BS.1770-4 integrated loudness in LUFS: K-weighting (high-shelf pre-filter +
+     * RLB high-pass, coefficients computed for [sampleRate] with the libebur128/pyloudnorm
+     * formulas), 400 ms blocks with 75 % overlap, −70 LUFS absolute gate and −10 LU
+     * relative gate. Shorter than one 400 ms block: one ungated block over the whole
+     * input. All-silent input returns [Double.NEGATIVE_INFINITY].
      */
-    fun normalizeLoudness(samples: FloatArray): FloatArray {
+    fun measureLufs(samples: FloatArray, sampleRate: Int): Double {
+        if (samples.isEmpty() || sampleRate <= 0) {
+            return Double.NEGATIVE_INFINITY
+        }
+        val input = DoubleArray(samples.size) { samples[it].toDouble() }
+        var weighted = applyBiquad(input, kShelfCoeffs(sampleRate))
+        weighted = applyBiquad(weighted, kHighPassCoeffs(sampleRate))
+        val blockSize = sampleRate * 400 / 1000
+        val hopSize = sampleRate * 100 / 1000
+        if (blockSize <= 0 || hopSize <= 0) {
+            return Double.NEGATIVE_INFINITY
+        }
+        if (weighted.size < blockSize) {
+            val meanSquare = meanSquare(weighted, 0, weighted.size)
+            if (meanSquare <= 0.0) return Double.NEGATIVE_INFINITY
+            return -0.691 + 10.0 * log10(meanSquare)
+        }
+        val blocks = ArrayList<Double>()
+        var start = 0
+        while (start + blockSize <= weighted.size) {
+            blocks += meanSquare(weighted, start, start + blockSize)
+            start += hopSize
+        }
+        if (blocks.isEmpty()) return Double.NEGATIVE_INFINITY
+        val absGate = 10.0.pow((-70.0 + 0.691) / 10.0)
+        val gated = blocks.filter { it > absGate }
+        if (gated.isEmpty()) return Double.NEGATIVE_INFINITY
+        val relativeLoudness = -0.691 + 10.0 * log10(gated.average())
+        val relGate = 10.0.pow((relativeLoudness - 10.0 + 0.691) / 10.0)
+        val kept = gated.filter { it > relGate }
+        if (kept.isEmpty()) return Double.NEGATIVE_INFINITY
+        return -0.691 + 10.0 * log10(kept.average())
+    }
+
+    /**
+     * Master one chunk to about [TARGET_LUFS]: 70 Hz high-pass, pre-gain to
+     * [PRE_TARGET_LUFS] (clamped), 4:1 compression, make-up gain to [TARGET_LUFS], and a
+     * look-ahead peak limiter at [PEAK_CEILING]. Output length equals input length.
+     * All-zero input passes through unchanged.
+     */
+    fun masterChunk(samples: FloatArray, sampleRate: Int): FloatArray {
         if (samples.isEmpty()) {
             return FloatArray(0)
         }
-        var sumSquares = 0.0
+        var allZero = true
         for (s in samples) {
-            sumSquares += s.toDouble() * s.toDouble()
-        }
-        val meanSquare = sumSquares / samples.size
-        if (meanSquare <= 0.0) {
-            return samples.copyOf()
-        }
-        val estimatedLufs = 10.0 * log10(meanSquare) - 0.69
-        val gainDb = (TARGET_LUFS - estimatedLufs).coerceIn(-12.0, 24.0)
-        val gain = 10.0.pow(gainDb / 20.0).toFloat()
-        val out = FloatArray(samples.size) { samples[it] * gain }
-        var peak = 0f
-        for (s in out) {
-            peak = maxOf(peak, abs(s))
-        }
-        if (peak > PEAK_CEILING) {
-            val reduce = PEAK_CEILING / peak
-            for (i in out.indices) {
-                out[i] = out[i] * reduce
+            if (s != 0f) {
+                allZero = false
+                break
             }
         }
-        return out
+        if (allZero) {
+            return samples.copyOf()
+        }
+        var out = applyHighPass(samples, sampleRate)
+        val preLoudness = measureLufs(out, sampleRate)
+        if (preLoudness.isInfinite() && preLoudness < 0.0) {
+            return samples.copyOf()
+        }
+        out = applyGainDb(out, (PRE_TARGET_LUFS - preLoudness).coerceIn(PRE_GAIN_MIN_DB, PRE_GAIN_MAX_DB))
+        out = applyCompressor(out, sampleRate)
+        val postLoudness = measureLufs(out, sampleRate)
+        if (postLoudness.isInfinite() && postLoudness < 0.0) {
+            return samples.copyOf()
+        }
+        out = applyGainDb(out, TARGET_LUFS - postLoudness)
+        return applyLimiter(out, sampleRate)
     }
 
     /**
@@ -220,6 +285,163 @@ object PocketAudio {
         frameRate: Double = 12.5,
         ratio: Double = RUNAWAY_RATIO,
     ): Double = ceil((tokenCount / tokensPerSecond + paddingSeconds) * frameRate) / frameRate * ratio
+
+    /** Second-order direct-form biquad: y = b0·x + b1·x1 + b2·x2 − a1·y1 − a2·y2. */
+    private data class Biquad(
+        val b0: Double,
+        val b1: Double,
+        val b2: Double,
+        val a1: Double,
+        val a2: Double,
+    )
+
+    /** K-weighting high-shelf pre-filter (libebur128/pyloudnorm formula for [sampleRate]). */
+    private fun kShelfCoeffs(sampleRate: Int): Biquad {
+        val f0 = 1681.974450955533
+        val gain = 3.737636852614458
+        val q = 0.7071752369554196
+        val k = tan(PI * f0 / sampleRate)
+        val vh = 10.0.pow(gain / 20.0)
+        val vb = vh.pow(0.4996667741545416)
+        val a0 = 1.0 + k / q + k * k
+        return Biquad(
+            (vh + vb * k / q + k * k) / a0,
+            2.0 * (k * k - vh) / a0,
+            (vh - vb * k / q + k * k) / a0,
+            2.0 * (k * k - 1.0) / a0,
+            (1.0 - k / q + k * k) / a0,
+        )
+    }
+
+    /** K-weighting RLB high-pass (libebur128/pyloudnorm formula for [sampleRate]). */
+    private fun kHighPassCoeffs(sampleRate: Int): Biquad =
+        highPassCoeffs(38.13547087602444, 0.5003270373238773, sampleRate)
+
+    /** Second-order high-pass with cutoff [f0] Hz and Q [q] at [sampleRate]. */
+    private fun highPassCoeffs(f0: Double, q: Double, sampleRate: Int): Biquad {
+        val k = tan(PI * f0 / sampleRate)
+        val a0 = 1.0 + k / q + k * k
+        return Biquad(
+            1.0 / a0,
+            -2.0 / a0,
+            1.0 / a0,
+            2.0 * (k * k - 1.0) / a0,
+            (1.0 - k / q + k * k) / a0,
+        )
+    }
+
+    private fun applyBiquad(input: DoubleArray, c: Biquad): DoubleArray {
+        val out = DoubleArray(input.size)
+        var x1 = 0.0
+        var x2 = 0.0
+        var y1 = 0.0
+        var y2 = 0.0
+        for (n in input.indices) {
+            val x0 = input[n]
+            val y0 = c.b0 * x0 + c.b1 * x1 + c.b2 * x2 - c.a1 * y1 - c.a2 * y2
+            out[n] = y0
+            x2 = x1
+            x1 = x0
+            y2 = y1
+            y1 = y0
+        }
+        return out
+    }
+
+    private fun applyHighPass(samples: FloatArray, sampleRate: Int): FloatArray {
+        // Second-order Butterworth: Q = 1/sqrt(2).
+        val c = highPassCoeffs(HIGHPASS_FREQ_HZ, 0.7071067811865475, sampleRate)
+        val out = FloatArray(samples.size)
+        var x1 = 0.0
+        var x2 = 0.0
+        var y1 = 0.0
+        var y2 = 0.0
+        for (n in samples.indices) {
+            val x0 = samples[n].toDouble()
+            val y0 = c.b0 * x0 + c.b1 * x1 + c.b2 * x2 - c.a1 * y1 - c.a2 * y2
+            out[n] = y0.toFloat()
+            x2 = x1
+            x1 = x0
+            y2 = y1
+            y1 = y0
+        }
+        return out
+    }
+
+    private fun applyGainDb(samples: FloatArray, gainDb: Double): FloatArray {
+        if (gainDb == 0.0) return samples.copyOf()
+        val gain = 10.0.pow(gainDb / 20.0).toFloat()
+        return FloatArray(samples.size) { samples[it] * gain }
+    }
+
+    /**
+     * Downward compressor with an RMS detector: the squared signal is smoothed with the
+     * attack/release ballistics, then the static 4:1 curve above the threshold is applied.
+     */
+    private fun applyCompressor(samples: FloatArray, sampleRate: Int): FloatArray {
+        val attack = 1.0 - exp(-1.0 / (COMP_ATTACK_MS / 1000.0 * sampleRate))
+        val release = 1.0 - exp(-1.0 / (COMP_RELEASE_MS / 1000.0 * sampleRate))
+        val out = FloatArray(samples.size)
+        var envelope = 0.0
+        for (n in samples.indices) {
+            val x = samples[n].toDouble()
+            val squared = x * x
+            envelope += (if (squared > envelope) attack else release) * (squared - envelope)
+            val detector = sqrt(envelope)
+            if (detector < 1e-10) {
+                out[n] = samples[n]
+                continue
+            }
+            val detectorDb = 20.0 * log10(detector)
+            if (detectorDb > COMP_THRESHOLD_DB) {
+                val gainDb =
+                    (COMP_THRESHOLD_DB + (detectorDb - COMP_THRESHOLD_DB) / COMP_RATIO) - detectorDb
+                out[n] = (x * 10.0.pow(gainDb / 20.0)).toFloat()
+            } else {
+                out[n] = samples[n]
+            }
+        }
+        return out
+    }
+
+    /**
+     * Look-ahead peak limiter: each sample's gain sees the peak [LIMITER_LOOKAHEAD_MS]
+     * ahead, attacks instantly and releases over [LIMITER_RELEASE_MS]. Offline, so the
+     * look-ahead delay is compensated (no extra samples); the final clamp guarantees the
+     * ceiling against float error.
+     */
+    private fun applyLimiter(samples: FloatArray, sampleRate: Int): FloatArray {
+        if (samples.isEmpty()) return FloatArray(0)
+        val lookAhead = maxOf(1, (LIMITER_LOOKAHEAD_MS / 1000.0 * sampleRate).roundToInt())
+        val release = 1.0 - exp(-1.0 / (LIMITER_RELEASE_MS / 1000.0 * sampleRate))
+        val targets = FloatArray(samples.size)
+        for (n in samples.indices) {
+            var peak = 0f
+            val end = minOf(samples.size, n + lookAhead + 1)
+            for (k in n until end) {
+                peak = maxOf(peak, abs(samples[k]))
+            }
+            targets[n] = if (peak < 1e-10f) 1f else minOf(1f, PEAK_CEILING / peak)
+        }
+        val out = FloatArray(samples.size)
+        var smooth = 1.0
+        for (n in samples.indices) {
+            val target = targets[n].toDouble()
+            smooth = if (target < smooth) target else smooth + (target - smooth) * release
+            var y = (samples[n] * smooth).toFloat()
+            if (y > PEAK_CEILING) y = PEAK_CEILING else if (y < -PEAK_CEILING) y = -PEAK_CEILING
+            out[n] = y
+        }
+        return out
+    }
+
+    private fun meanSquare(samples: DoubleArray, from: Int, to: Int): Double {
+        var sum = 0.0
+        for (i in from until to) {
+            sum += samples[i] * samples[i]
+        }
+        return sum / (to - from)
+    }
 
     /** Rust `char::is_whitespace` (Unicode White_Space) for a code point. */
     private fun isWhitespaceCp(cp: Int): Boolean = when (cp) {
