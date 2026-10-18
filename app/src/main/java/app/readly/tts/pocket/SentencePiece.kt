@@ -23,7 +23,9 @@ class SentencePiece internal constructor(
         if (text.isEmpty()) return IntArray(0)
         val normalized = buildString(text.length + 1) {
             if (addDummyPrefix) append(SPACE)
-            for (c in text) append(if (c == ' ') SPACE else c)
+            // The model's normalizer maps ZWNJ to a word boundary too: no vocab piece
+            // contains U+200C, and Python splits half-spaces ([▁می][▁شود]).
+            for (c in text) append(if (c == ' ' || c == ZWNJ) SPACE else c)
         }
         // One symbol per code point so a merge never splits a surrogate pair.
         val symbols = ArrayList<String>(normalized.length)
@@ -69,6 +71,7 @@ class SentencePiece internal constructor(
 
     companion object {
         private const val SPACE = '▁'
+        private const val ZWNJ = '\u200C'
         private const val UNK_ID = 0
         private const val NORMAL = 1
         private const val UNKNOWN = 2
