@@ -187,8 +187,15 @@ class SmartVoiceTest {
     }
 
     @Test
-    fun recommendedPack_fa_returnsPocket() {
-        assertEquals("pocket-farsi-v1", SmartVoice.recommendedPack("fa")!!.id)
+    fun recommendedPack_fa_returnsPocketV2() {
+        assertEquals("pocket-farsi-v2", SmartVoice.recommendedPack("fa")!!.id)
+    }
+
+    @Test
+    fun recommendedPack_fa_withoutV2_fallsBackToV1() {
+        val v1 = pack("pocket-farsi-v1")
+        val piper = pack("piper-fa_IR-amir-medium")
+        assertEquals(v1, SmartVoice.recommendedPack("fa", listOf(piper, v1)))
     }
 
     @Test
@@ -210,6 +217,17 @@ class SmartVoiceTest {
         val installed = listOf(pack("piper-fa_IR-amir-medium"), pack("pocket-farsi-v1"))
         assertEquals(
             SmartVoice.Choice.Use(pack("pocket-farsi-v1")),
+            SmartVoice.pick("fa", installed, null, emptyMap(), true),
+        )
+    }
+
+    @Test
+    fun pick_prefersPocketV2OverV1() {
+        assertTrue(SmartVoice.rank(pack("pocket-farsi-v2")) > SmartVoice.rank(pack("pocket-farsi-v1")))
+        assertTrue(SmartVoice.rank(pack("pocket-farsi-v1")) > SmartVoice.rank(pack("kokoro-en")))
+        val installed = listOf(pack("pocket-farsi-v1"), pack("pocket-farsi-v2"))
+        assertEquals(
+            SmartVoice.Choice.Use(pack("pocket-farsi-v2")),
             SmartVoice.pick("fa", installed, null, emptyMap(), true),
         )
     }

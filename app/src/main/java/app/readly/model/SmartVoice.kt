@@ -27,13 +27,14 @@ object SmartVoice {
     const val MAX_AUTO_DOWNLOAD_BYTES = 70L * 1_000_000
 
     /**
-     * Quality rank for [pack] (higher is better): Pocket Farsi > Kokoro Full >
-     * Supertonic 3 > Kokoro Compact > Supertonic 2 > Piper HD > Standard > Low >
-     * Tiny > Piper Compact (any int8) > Kitten. Pocket only reads Persian, so
-     * its top rank just makes it the preferred Persian voice.
+     * Quality rank for [pack] (higher is better): Pocket Farsi v2 > v1 > Kokoro
+     * Full > Supertonic 3 > Kokoro Compact > Supertonic 2 > Piper HD > Standard >
+     * Low > Tiny > Piper Compact (any int8) > Kitten. Pocket only reads
+     * Persian, so its top ranks just make it the preferred Persian voice.
      */
     fun rank(pack: VoicePack): Int {
         when (pack.id) {
+            "pocket-farsi-v2" -> return 11
             "pocket-farsi-v1" -> return 10
             "kokoro-en" -> return 9
             "supertonic-3" -> return 8
@@ -55,16 +56,18 @@ object SmartVoice {
     }
 
     /**
-     * Recommended download for 2-letter [lang]: Pocket Farsi for Persian, else
-     * the first Piper voice A–Z for that language, as Compact when it has one,
-     * else Standard, else its smallest pack (so Ask can show a size). When no
-     * Piper voice covers [lang] but Supertonic 3 does, recommends Supertonic 3.
-     * Null when nothing covers [lang].
+     * Recommended download for 2-letter [lang]: Pocket Farsi v2 for Persian
+     * (v1 when v2 isn't listed), else the first Piper voice A–Z for that
+     * language, as Compact when it has one, else Standard, else its smallest
+     * pack (so Ask can show a size). When no Piper voice covers [lang] but
+     * Supertonic 3 does, recommends Supertonic 3. Null when nothing covers
+     * [lang].
      */
     fun recommendedPack(lang: String, all: List<VoicePack> = VoiceCatalog.ALL): VoicePack? {
         // A pack with no download host is never a download recommendation.
         val downloadable = all.filter { it.downloadable }
         if (lang == "fa") {
+            downloadable.find { it.id == "pocket-farsi-v2" }?.let { return it }
             downloadable.find { it.id == "pocket-farsi-v1" }?.let { return it }
         }
         val piper = downloadable.filter { it.family == VoiceFamily.PIPER && lang in it.languages() }

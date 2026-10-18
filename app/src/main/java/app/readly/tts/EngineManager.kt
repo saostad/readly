@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.util.Log
 import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
+import app.readly.tts.pocket.G2p
 import java.io.File
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
@@ -140,7 +141,8 @@ class EngineManager(appContext: Context) {
         engines[packId]?.let { return it.engine }
         val pack = VoiceCatalog.byId(packId) ?: throw IllegalStateException("Unknown voice pack $packId")
         val store = VoiceModelStore(pack, File(app.noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
-        val engine = SpeechEngine(store)
+        // Pocket v2 pronounces through the G2P in app assets; v1 never calls this.
+        val engine = SpeechEngine(store) { G2p.fromAssets(app.assets) }
         engines[packId] = EngineSlot(engine, engine.sampleRate)
         while (engines.size > MAX_ENGINES) {
             val eldest = engines.entries.iterator().next()

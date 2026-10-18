@@ -78,9 +78,16 @@ class G2p private constructor(encoderBytes: ByteArray, decoderBytes: ByteArray) 
 
     override fun close() {
         try {
-            encoder.close()
-        } finally {
-            decoder.close()
+            try {
+                encoder.close()
+            } finally {
+                decoder.close()
+            }
+        } catch (e: Exception) {
+            throw IOException(
+                "Couldn't close the Persian pronunciation model: ${e.javaClass.name}: ${e.message}",
+                e,
+            )
         }
     }
 

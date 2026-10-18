@@ -24,14 +24,18 @@ import org.json.JSONException
 import org.json.JSONObject
 
 /**
- * Pocket TTS (Farsi v1) engine on ONNX Runtime: a port of the tested reference engine
- * (`.agents/handoff/ref/pocket.rs`) for the same model.
+ * Pocket TTS (Farsi v1/v2) engine on ONNX Runtime: a port of the tested reference engine
+ * (`.agents/handoff/ref/pocket.rs`) for the same model family.
  *
  * The exported `.onnx` is one streaming step: text, voice conditioning, or the previous
  * latent goes in; one 80 ms audio frame plus the updated caches come out. This class
  * drives that graph with the Farsi generation recipe: 18-token chunks, runaway
  * retry/split, a 150 ms pause between chunks, silence trim, and a mastering chain to
  * about −12 LUFS, compressed.
+ *
+ * The front end comes from the model's metadata flags: v1 speaks normalized Persian
+ * script (capitalized, terminal period); v2 speaks G2P phonemes (no capitalisation,
+ * terminal punctuation or padding) and needs [g2pProvider] to pronounce them.
  *
  * Runtime sharing: only the ORT Java API ships with readly (the java-only AAR); the
  * native `libonnxruntime.so` is sherpa-onnx's — one ONNX Runtime in the process.
@@ -42,12 +46,13 @@ import org.json.JSONObject
  * @throws IOException if the voice file is missing or the model fails to load, naming
  *   the path and the real error.
  */
-class PocketEngine(modelFile: File) : Closeable {
+class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeable {
 
     private val env: OrtEnvironment
     private val session: OrtSession
     private val config: PocketConfig
     private val tokenizer: SentencePiece
+    private val g2p: G2p?
 
     /** Flow-LM cache rows for the voice prompt, reused by every chunk. */
     private val voiceFlow: FloatArray
@@ -80,6 +85,23 @@ class PocketEngine(modelFile: File) : Closeable {
         }
         config = readConfig(metadata, path)
         tokenizer = readTokenizer(metadata, path)
+        g2p = if (config.isV2) {
+            try {
+                (g2pProvider ?: throw IOException(
+                    "Couldn't load the Pocket voice from $path: this model speaks " +
+                        "phonemes (v2) but no pronunciation model was provided",
+                ))()
+            } catch (e: IOException) {
+                try {
+                    session.close()
+                } catch (closeError: OrtException) {
+                    e.addSuppressed(closeError)
+                }
+                throw e
+            }
+        } else {
+            null
+        }
         val voice = readVoice(metadata, config, path)
         // Prefill the voice once; every chunk restarts from this cache.
         voiceLen = voice.frames
@@ -105,16 +127,20 @@ class PocketEngine(modelFile: File) : Closeable {
         onChunk: ((FloatArray) -> Unit)? = null,
     ): FloatArray {
         val clean = text.replace("\u0000", "")
-        val normalized = NormalizeFa.normalize(clean)
-        if (normalized.isEmpty()) {
-            Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
-            return FloatArray(0)
+        val chunks = if (!config.isV2) {
+            val normalized = NormalizeFa.normalize(clean)
+            if (normalized.isEmpty()) {
+                Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
+                return FloatArray(0)
+            }
+            PocketAudio.splitText(
+                normalized,
+                { piece -> tokenizer.encode(piece).size },
+                MAX_TOKENS_PER_CHUNK,
+            )
+        } else {
+            v2Chunks(clean, isStopped) ?: return FloatArray(0)
         }
-        val chunks = PocketAudio.splitText(
-            normalized,
-            { piece -> tokenizer.encode(piece).size },
-            MAX_TOKENS_PER_CHUNK,
-        )
         if (chunks.isEmpty()) {
             Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
             return FloatArray(0)
@@ -154,12 +180,61 @@ class PocketEngine(modelFile: File) : Closeable {
             session.close()
         } catch (e: OrtException) {
             throw IOException("Couldn't close the Pocket voice: ${e.message}", e)
+        } finally {
+            g2p?.close()
         }
+    }
+
+    /**
+     * v2 chunk list: normalize, split into sentences, pronounce each one, and
+     * split the phonemes into 18/8-token chunks (ezafe marks guide the split
+     * and are stripped before the model). Null means a logged skip (nothing
+     * speakable). Sentences are pronounced as their turn comes rather than
+     * all upfront, so stopping stays responsive and the first chunk streams
+     * without waiting for every sentence's G2P; the chunk sequence — and so
+     * the pauses — is the same either way.
+     */
+    private fun v2Chunks(clean: String, isStopped: () -> Boolean): List<String>? {
+        val engine = g2p ?: error("v2 voice without a pronunciation model")
+        val normalized = try {
+            PocketTextV2.normalizeForModel(clean)
+        } catch (e: IllegalArgumentException) {
+            Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
+            return null
+        }
+        val sentences = PocketTextV2.splitSentences(normalized)
+        if (sentences.isEmpty()) {
+            Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
+            return null
+        }
+        val chunks = ArrayList<String>()
+        for (sentence in sentences) {
+            if (isStopped()) break
+            val phonemes = engine.phonemise(PocketTextV2.cleanSentenceForG2p(sentence))
+            if (phonemes.isBlank()) {
+                Log.i("Readly", "Pocket: no phonemes for ${sentence.take(40)}")
+                continue
+            }
+            val translated = PocketTextV2.translatePhonemes(phonemes)
+            chunks += PocketTextV2.splitChunks(
+                translated,
+                { piece -> tokenizer.encode(PocketTextV2.stripEzafe(piece)).size },
+                MAX_TOKENS_PER_CHUNK,
+                PocketTextV2.MIN_TOKENS,
+            ).map { PocketTextV2.stripEzafe(it) }
+        }
+        return chunks
     }
 
     /** Generate one chunk in a single attempt (no runaway recovery). */
     private fun generateOnce(chunk: String, isStopped: () -> Boolean): FloatArray {
-        val prepared = tokenizer.encode(PocketAudio.prepareTextPrompt(chunk))
+        val prepared = tokenizer.encode(
+            PocketAudio.prepareTextPrompt(
+                chunk,
+                config.capitalizeFirstLetter,
+                config.appendTerminalPunctuation,
+            ),
+        )
         if (prepared.isEmpty()) return FloatArray(0)
         val tokens = LongArray(prepared.size) { prepared[it].toLong() }
         val maxFrames = ceil(
@@ -478,6 +553,8 @@ class PocketEngine(modelFile: File) : Closeable {
                     samplerDecodeSteps = json.getDouble("sampler_decode_steps").toFloat(),
                     tokensPerSecondEstimate = json.getDouble("tokens_per_second_estimate"),
                     genSecondsPadding = json.getDouble("gen_seconds_padding"),
+                    capitalizeFirstLetter = json.optBoolean("capitalize_first_letter", true),
+                    appendTerminalPunctuation = json.optBoolean("append_terminal_punctuation", true),
                     voices = buildMap {
                         for (name in voices.keys()) {
                             val shape = voices.getJSONArray(name)
@@ -492,6 +569,9 @@ class PocketEngine(modelFile: File) : Closeable {
                 config.frameSize == 0
             ) {
                 fail("model config has a zero sample rate or dimension")
+            }
+            if (json.optBoolean("pad_with_spaces_for_short_inputs", false)) {
+                fail("model wants space padding for short inputs, which readly doesn't implement")
             }
             return config
         }
@@ -588,8 +668,13 @@ private data class PocketConfig(
     val samplerDecodeSteps: Float,
     val tokensPerSecondEstimate: Double,
     val genSecondsPadding: Double,
+    val capitalizeFirstLetter: Boolean,
+    val appendTerminalPunctuation: Boolean,
     val voices: Map<String, List<Int>>,
 ) {
+    /** v2 speaks G2P phonemes; anything else is the v1 Persian-script path. */
+    val isV2: Boolean get() = !capitalizeFirstLetter && !appendTerminalPunctuation
+
     fun flowStride(): Int = flowLayers * 2 * flowHeads * flowHeadDim
 
     fun mimiStride(): Int = mimiLayers * 2 * mimiHeads * mimiHeadDim

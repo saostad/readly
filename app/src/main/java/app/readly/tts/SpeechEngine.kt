@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import app.readly.model.VoiceFamily
 import app.readly.model.VoiceModelStore
+import app.readly.tts.pocket.G2p
 import app.readly.tts.pocket.PocketEngine
 import com.k2fsa.sherpa.onnx.GenerationConfig
 import com.k2fsa.sherpa.onnx.OfflineTts
@@ -28,7 +29,7 @@ import java.util.Locale
  * @throws IllegalStateException if the voice pack [is not installed][VoiceModelStore.isInstalled].
  * @throws IOException if the native voice fails to load, naming the dir and the real error.
  */
-class SpeechEngine(store: VoiceModelStore) : Closeable {
+class SpeechEngine(store: VoiceModelStore, g2pProvider: (() -> G2p)? = null) : Closeable {
 
     private val pack = store.pack
     private val dir = store.modelDir.absolutePath
@@ -40,7 +41,7 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
         val startMs = SystemClock.elapsedRealtime()
         if (pack.family == VoiceFamily.POCKET) {
             pocket = try {
-                PocketEngine(File(store.modelDir, pack.modelFile))
+                PocketEngine(File(store.modelDir, pack.modelFile), g2pProvider)
             } catch (e: Exception) {
                 throw IOException(loadError(dir, e), e)
             } catch (e: LinkageError) {
