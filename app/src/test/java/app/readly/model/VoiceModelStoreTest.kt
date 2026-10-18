@@ -85,21 +85,121 @@ class VoiceModelStoreTest {
     }
 
     @Test
-    fun install_pocketPack_throwsCopyByHandMessage() {
-        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+    fun install_nonDownloadablePack_throwsCopyByHandMessage() {
+        // No catalog pack is non-downloadable now; a future pack without a host
+        // keeps the copy-by-hand message.
+        val pack = piperTestPack.copy(archive = "", fileUrl = null)
         val base = temp.newFolder("voices")
-        val store = VoiceModelStore(pocket, base, { error("must not download") })
+        val store = VoiceModelStore(pack, base, { error("must not download") })
 
         try {
             store.install(progress = { _, _, _ -> }, cancelled = { false })
             fail("expected IOException")
         } catch (e: IOException) {
             assertEquals(
-                "Pocket Farsi can't be downloaded yet: copy pocket-farsi-v1.onnx to the " +
+                "Test Piper can't be downloaded yet: copy test.onnx to the " +
                     "phone by hand (see tools/pocket-export/README.md)",
                 e.message,
             )
         }
+    }
+
+    @Test
+    fun pocketPack_isDownloadableFromHuggingFace() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        assertTrue(pocket.downloadable)
+        assertEquals(
+            "https://huggingface.co/saostad/readly-voices/resolve/main/pocket-farsi-v1/pocket-farsi-v1.onnx",
+            pocket.url,
+        )
+        assertEquals(
+            "3f3322396a6f8a65e970438f0a58b146e90cd49283cf8c46cef7f3f877cdca30",
+            pocket.sha256,
+        )
+    }
+
+    @Test
+    fun install_singleFile_success_writesModelAndMarker() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val bytes = "fake-onnx-model".toByteArray()
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(pocket, base, fakeOpener(bytes), sha256(bytes), bytes.size.toLong())
+        assertFalse(store.isInstalled())
+
+        val stages = mutableListOf<InstallStage>()
+        store.install(progress = { stage, _, _ -> stages.add(stage) }, cancelled = { false })
+
+        assertTrue(store.isInstalled())
+        assertEquals("fake-onnx-model", File(base, "pocket-farsi-v1/pocket-farsi-v1.onnx").readText())
+        assertTrue(File(base, "pocket-farsi-v1/.complete").isFile)
+        assertFalse(File(base, "pocket-farsi-v1.tmp").exists())
+        assertTrue(stages.contains(InstallStage.DOWNLOADING))
+        assertTrue(stages.contains(InstallStage.VERIFYING))
+    }
+
+    @Test
+    fun install_singleFile_wrongHash_throwsCorruptedAndCleansUp() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val bytes = "fake-onnx-model".toByteArray()
+        val actual = sha256(bytes)
+        val wrong = (if (actual[0] == '0') "1" else "0") + actual.substring(1)
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(pocket, base, fakeOpener(bytes), wrong, bytes.size.toLong())
+
+        try {
+            store.install(progress = { _, _, _ -> }, cancelled = { false })
+            fail("expected IOException")
+        } catch (e: IOException) {
+            assertEquals("Voice download is corrupted: expected SHA-256 $wrong, got $actual", e.message)
+        }
+        assertFalse(File(base, "pocket-farsi-v1.tmp").exists())
+        assertFalse(store.isInstalled())
+    }
+
+    @Test
+    fun install_singleFile_truncated_throwsIncompleteAndCleansUp() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val bytes = "fake-onnx-model".toByteArray()
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(
+            pocket, base, fakeOpener(bytes), sha256(bytes), bytes.size.toLong() + 10,
+        )
+
+        try {
+            store.install(progress = { _, _, _ -> }, cancelled = { false })
+            fail("expected IOException")
+        } catch (e: IOException) {
+            assertEquals(
+                "Voice download is incomplete: expected ${bytes.size + 10} bytes, got ${bytes.size}",
+                e.message,
+            )
+        }
+        assertFalse(File(base, "pocket-farsi-v1.tmp").exists())
+        assertFalse(store.isInstalled())
+    }
+
+    @Test
+    fun install_singleFile_http404_includesStatusAndUrl() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(
+            pocket,
+            base,
+            { FakeConnection(404, "Not Found", ByteArray(0)) },
+            pocket.sha256,
+        )
+
+        try {
+            store.install(progress = { _, _, _ -> }, cancelled = { false })
+            fail("expected IOException")
+        } catch (e: IOException) {
+            assertEquals(
+                "Voice download failed: HTTP 404 Not Found from ${pocket.url}",
+                e.message,
+            )
+        }
+        assertFalse(File(base, "pocket-farsi-v1.tmp").exists())
+        assertFalse(store.isInstalled())
     }
 
     @Test
