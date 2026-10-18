@@ -45,6 +45,19 @@ class PocketTextTest {
     }
 
     @Test
+    fun highestScoreMergeWinsOverLongerPiece() {
+        val toy = SentencePiece(
+            scores = floatArrayOf(0f, 0f, 0f, 0f, 0f, 1f, 9f),
+            ids = mapOf("a" to 1, "b" to 2, "c" to 3, "d" to 4, "abcd" to 5, "bc" to 6),
+            byteIds = emptyMap(),
+            addDummyPrefix = false,
+        )
+        // "bc" (score 9) merges first, so the longer "abcd" (score 1) never forms.
+        assertEquals(listOf(1, 6, 4), toy.encode("abcd").toList())
+        assertEquals(listOf(1, 0), toy.encode("ax").toList())
+    }
+
+    @Test
     fun numbersReadAsPersianWords() {
         assertEquals("هزار و چهارصد و دو", NormalizeFa.numberToWords(1402))
         assertEquals("صفر", NormalizeFa.numberToWords(0))
