@@ -74,6 +74,7 @@ class VoiceModelStore(
             if (!File(dir, COMPLETE_MARKER).isFile) return false
             if (requiredFiles(pack).any { !File(dir, it).isFile }) return false
             return pack.family == VoiceFamily.SUPERTONIC ||
+                pack.family == VoiceFamily.POCKET ||
                 File(dir, "espeak-ng-data").isDirectory
         }
 
@@ -81,6 +82,7 @@ class VoiceModelStore(
             VoiceFamily.KOKORO, VoiceFamily.KITTEN ->
                 listOf(pack.modelFile, "voices.bin", "tokens.txt")
             VoiceFamily.PIPER -> listOf(pack.modelFile, "tokens.txt")
+            VoiceFamily.POCKET -> listOf(pack.modelFile)
             VoiceFamily.SUPERTONIC -> listOf(
                 "duration_predictor.int8.onnx",
                 "text_encoder.int8.onnx",
@@ -123,6 +125,12 @@ class VoiceModelStore(
      *   hash, unsafe path).
      */
     fun install(progress: (InstallStage, Long, Long) -> Unit, cancelled: () -> Boolean) {
+        if (!pack.downloadable) {
+            throw IOException(
+                "${pack.displayName} can't be downloaded yet: copy ${pack.modelFile} to the " +
+                    "phone by hand (see tools/pocket-export/README.md)",
+            )
+        }
         baseDir.mkdirs()
         val usable = baseDir.usableSpace
         if (usable < REQUIRED_FREE_BYTES) {

@@ -12,6 +12,7 @@ enum class VoiceFamily {
     PIPER,
     SUPERTONIC,
     KITTEN,
+    POCKET,
 }
 
 /** Card order, titles and taglines for the family-grouped Voices screen. */
@@ -32,7 +33,8 @@ data class VoiceFamilyInfo(
  * @param rtfNote honest speed note, measured on a Pixel 11 Pro.
  * @param sampleRes raw resource id of the spoken sample clip (all clips say the same
  *   sentence). The file is `res/raw/<sampleName>.ogg`. `0` when [sampleUrl] is used.
- * @param lang Piper lang code from the JSON (e.g. `en_US`, `fa_IR`); null otherwise.
+ * @param lang Piper lang code from the JSON (e.g. `en_US`, `fa_IR`), or Pocket's
+ *   2-letter code (`fa`); null otherwise.
  * @param sampleUrl remote sample clip for generated Piper packs (the official
  *   piper-samples mp3); null means the bundled [sampleRes] clip.
  */
@@ -61,6 +63,13 @@ data class VoicePack(
     val sizeMb: Int
         get() = ((sizeBytes + 500_000) / 1_000_000).toInt()
 
+    /**
+     * False while the pack has no download host (Pocket v1): the file is copied
+     * to the phone by hand, so nothing may offer or start a download for it.
+     */
+    val downloadable: Boolean
+        get() = archive.isNotEmpty()
+
     /** Base name of the sample clip in `res/raw` (`.ogg` suffix not included). */
     val sampleName: String
         get() = "sample_" + id.replace('-', '_')
@@ -72,13 +81,14 @@ data class VoicePack(
             if (code == "fa_en") return setOf("fa", "en")
             return setOf(code.substringBefore("_"))
         }
+        if (family == VoiceFamily.POCKET) return setOf("fa")
         if (id == "supertonic-3") return VoiceCatalog.SUPERTONIC3_LANGS
         return setOf("en")
     }
 }
 
 /**
- * Voice packs: 5 hand-written packs plus the generated Piper list from
+ * Voice packs: 6 hand-written packs plus the generated Piper list from
  * `assets/piper_voices.json` (see `scripts/gen_piper_catalog.py`).
  *
  * The Piper list needs a [Context] to load, so call [ensureLoaded] from
@@ -194,6 +204,22 @@ object VoiceCatalog {
             speakers = numberedVoices(8),
             rtfNote = "About 2× faster",
             sampleRes = R.raw.sample_kitten_mini,
+        ),
+        VoicePack(
+            id = "pocket-farsi-v1",
+            displayName = "Pocket Farsi",
+            variant = "v1",
+            voiceName = null,
+            family = VoiceFamily.POCKET,
+            archive = "",
+            sizeBytes = 226396445L,
+            sha256 = "",
+            topDir = "pocket-farsi-v1",
+            modelFile = "pocket-farsi-v1.onnx",
+            speakers = listOf("Voice A"),
+            rtfNote = "Speed on phones not measured yet",
+            sampleRes = R.raw.sample_pocket_farsi_v1,
+            lang = "fa",
         ),
     )
 
@@ -345,6 +371,7 @@ object VoiceCatalog {
             VoiceFamilyInfo(VoiceFamily.KOKORO, "Kokoro", "Most natural · 11 voices"),
             VoiceFamilyInfo(VoiceFamily.PIPER, "Piper", piperTagline()),
             VoiceFamilyInfo(VoiceFamily.KITTEN, "Kitten", "Compact · 8 voices"),
+            VoiceFamilyInfo(VoiceFamily.POCKET, "Pocket", "Natural Persian · 1 voice"),
         )
     }
 

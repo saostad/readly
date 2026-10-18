@@ -72,6 +72,37 @@ class VoiceModelStoreTest {
     }
 
     @Test
+    fun isInstalled_pocketPack_needsOnlyOnnxAndMarker() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val base = temp.newFolder("voices")
+        touch(base, "pocket-farsi-v1/pocket-farsi-v1.onnx")
+        val store = VoiceModelStore(pocket, base, { error("must not download") })
+
+        assertFalse(store.isInstalled())
+        touch(base, "pocket-farsi-v1/.complete")
+        assertTrue(store.isInstalled())
+        assertEquals(File(base, "pocket-farsi-v1"), store.modelDir)
+    }
+
+    @Test
+    fun install_pocketPack_throwsCopyByHandMessage() {
+        val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
+        val base = temp.newFolder("voices")
+        val store = VoiceModelStore(pocket, base, { error("must not download") })
+
+        try {
+            store.install(progress = { _, _, _ -> }, cancelled = { false })
+            fail("expected IOException")
+        } catch (e: IOException) {
+            assertEquals(
+                "Pocket Farsi can't be downloaded yet: copy pocket-farsi-v1.onnx to the " +
+                    "phone by hand (see tools/pocket-export/README.md)",
+                e.message,
+            )
+        }
+    }
+
+    @Test
     fun install_success_installsModelAndCleansUp() {
         val archive = fixtureArchive(modelEntries())
         val base = temp.newFolder("voices")
