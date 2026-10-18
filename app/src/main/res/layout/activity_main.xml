@@ -113,6 +113,21 @@
 
                     <Button
                         style="@style/Btn.Ghost"
+                        android:id="@+id/pocketButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:maxLines="2" />
+
+                    <TextView
+                        android:id="@+id/pocketHelp"
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/persian_only_help" />
+
+                    <Button
+                        style="@style/Btn.Ghost"
                         android:id="@+id/chooseVoiceButton"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"

@@ -1,6 +1,7 @@
 package app.readly.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -210,6 +211,39 @@ class SmartVoiceTest {
         assertEquals(
             SmartVoice.Choice.Use(pack("pocket-farsi-v1")),
             SmartVoice.pick("fa", installed, null, emptyMap(), true),
+        )
+    }
+
+    @Test
+    fun needsMissingMain_mainVoiceChoiceWithoutMainInstall() {
+        val main = pack("supertonic-2")
+        assertTrue(SmartVoice.needsMissingMain(SmartVoice.Choice.MainVoice, main, false))
+        assertFalse(SmartVoice.needsMissingMain(SmartVoice.Choice.MainVoice, main, true))
+    }
+
+    @Test
+    fun needsMissingMain_useOfMainWithoutMainInstall() {
+        val main = pack("supertonic-2")
+        assertTrue(SmartVoice.needsMissingMain(SmartVoice.Choice.Use(main), main, false))
+        assertFalse(SmartVoice.needsMissingMain(SmartVoice.Choice.Use(main), main, true))
+        // Any other installed voice reads fine without the main voice.
+        assertFalse(
+            SmartVoice.needsMissingMain(
+                SmartVoice.Choice.Use(pack("pocket-farsi-v1")), main, false,
+            ),
+        )
+    }
+
+    @Test
+    fun needsMissingMain_neverForAskOrAutoDownload() {
+        val main = pack("supertonic-2")
+        assertFalse(
+            SmartVoice.needsMissingMain(SmartVoice.Choice.Ask(pack("pocket-farsi-v1")), main, false),
+        )
+        assertFalse(
+            SmartVoice.needsMissingMain(
+                SmartVoice.Choice.AutoDownload(pack("piper-es_MX-ald-medium-compact")), main, false,
+            ),
         )
     }
 

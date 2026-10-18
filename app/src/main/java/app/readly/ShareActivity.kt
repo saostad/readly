@@ -29,9 +29,9 @@ class ShareActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val pack = ReaderService.activePack(this)
-        val store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
-        if (!store.isInstalled()) {
+        // Setup shows only when nothing is installed: a Persian-only setup
+        // (Pocket, no main voice) reads shares without a detour.
+        if (!VoiceModelStore.anyInstalled(File(noBackupFilesDir, "voices"))) {
             startActivity(
                 Intent(this, MainActivity::class.java)
                     .putExtra(MainActivity.EXTRA_NEED_VOICE, true),

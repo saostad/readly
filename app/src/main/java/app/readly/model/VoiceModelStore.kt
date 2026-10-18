@@ -68,6 +68,13 @@ class VoiceModelStore(
         fun installedIds(base: File): List<String> =
             VoiceCatalog.ALL.filter { isPackInstalled(base, it) }.map { it.id }
 
+        /**
+         * True when any voice pack is installed under [base]. Setup gates on
+         * this, not on the main voice: a Persian-only install (Pocket, no
+         * English voice) is a working setup.
+         */
+        fun anyInstalled(base: File): Boolean = installedIds(base).isNotEmpty()
+
         /** File-level install check, shared by [VoiceModelStore.isInstalled]. */
         internal fun isPackInstalled(base: File, pack: VoicePack): Boolean {
             val dir = File(base, pack.topDir)

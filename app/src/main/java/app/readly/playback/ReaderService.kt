@@ -796,12 +796,18 @@ class ReaderService : Service() {
         val lang = detected.lang
         val smartOn = isSmartOn(this)
         val mainPack = activePack(this)
+        val mainInstalled =
+            VoiceModelStore(mainPack, voicesDir(), VoiceModelStore::httpUrlOpener).isInstalled()
         if (forceMain) {
             Log.i(
                 "Readly",
                 "Smart voice: lang=$lang (conf ${detected.confidence}, ${detected.source}) " +
                     "→ ReadAnyway ${mainPack.id}",
             )
+            if (SmartVoice.needsMissingMain(SmartVoice.Choice.MainVoice, mainPack, mainInstalled)) {
+                showMissingMain(title, lang, mainPack, onRequestDone)
+                return
+            }
             startWithPack(title, clean, lang, mainPack, notice, onRequestDone)
             return
         }
@@ -817,6 +823,10 @@ class ReaderService : Service() {
             "Smart voice: lang=$lang (conf ${detected.confidence}, ${detected.source}) " +
                 "→ ${describe(choice, mainPack)}",
         )
+        if (SmartVoice.needsMissingMain(choice, mainPack, mainInstalled)) {
+            showMissingMain(title, lang, mainPack, onRequestDone)
+            return
+        }
         when (choice) {
             is SmartVoice.Choice.Use -> {
                 setSmartLine(lang, choice.pack)
@@ -872,6 +882,30 @@ class ReaderService : Service() {
             "Nothing to read: the text was empty after removing formatting, " +
             "links and symbols."
         Log.w("Readly", "READ produced no chunks ($inChars chars in)")
+        terminalError(title, message, onRequestDone)
+    }
+
+    /**
+     * The choice needs the main voice but it isn't installed (Persian-only
+     * setup reading another language). Points at Voices instead of starting.
+     */
+    private fun showMissingMain(
+        title: String,
+        lang: String,
+        mainPack: VoicePack,
+        onRequestDone: () -> Unit,
+    ) {
+        val message = "This text looks ${langName(lang)}, but no voice for it is installed. " +
+            "Open Voices to download one."
+        Log.w("Readly", "lang=$lang main voice ${mainPack.id} is not installed: $message")
+        terminalError(title, message, onRequestDone)
+    }
+
+    /**
+     * A read that can't start for lack of a voice: shows [message] verbatim on
+     * the main screen and as a Toast (unlike [postError], no exception prefix).
+     */
+    private fun terminalError(title: String, message: String, onRequestDone: () -> Unit) {
         ReaderState.update {
             it.copy(
                 status = ReaderStatus.ERROR,
@@ -1379,6 +1413,14 @@ class ReaderService : Service() {
             if (destroyed) return
             val mainId = activePackId(this)
             if (engines.isLoaded(mainId)) return
+            // A warm-up, not a request: skip quietly when the main voice isn't
+            // installed (Persian-only setup) instead of posting a load error.
+            val mainPack = VoiceCatalog.byId(mainId)
+            if (mainPack == null ||
+                !VoiceModelStore(mainPack, voicesDir(), VoiceModelStore::httpUrlOpener).isInstalled()
+            ) {
+                return
+            }
             try {
                 engines.preload(mainId)
             } catch (e: InterruptedException) {

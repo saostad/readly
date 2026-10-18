@@ -448,6 +448,17 @@ class VoiceModelStoreTest {
     }
 
     @Test
+    fun anyInstalled_falseWhenEmpty_trueWhenAnyPackComplete() {
+        val base = temp.newFolder("voices")
+        assertFalse(VoiceModelStore.anyInstalled(base))
+        // Files without the marker don't count.
+        touch(base, "pocket-farsi-v1/pocket-farsi-v1.onnx")
+        assertFalse(VoiceModelStore.anyInstalled(base))
+        touch(base, "pocket-farsi-v1/.complete")
+        assertTrue(VoiceModelStore.anyInstalled(base))
+    }
+
+    @Test
     fun delete_removesPackDirAndLogs() {
         val base = temp.newFolder("voices")
         touch(base, "kokoro-en-v0_19/model.onnx")
