@@ -6,6 +6,8 @@
     <string name="setup_body">Readly reads aloud with %1$s, a natural-sounding voice that runs entirely on your phone. It needs a one-time %2$d MB download. After that, reading works offline and nothing you read leaves your device.</string>
     <string name="download_button">Download voice (%1$d MB)</string>
     <string name="download_help">Starts the one-time download. Afterwards reading works offline.</string>
+    <string name="persian_only_button">Only reading Persian? Download Pocket Farsi (%1$d MB)</string>
+    <string name="persian_only_help">A natural Persian voice. You can add an English voice later in Voices.</string>
     <string name="progress_desc">Voice download progress</string>
     <string name="downloading_format">Downloading and unpacking… %1$d of %2$d MB</string>
     <string name="verifying_label">Checking the download…</string>

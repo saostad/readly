@@ -39,6 +39,8 @@ import kotlin.math.roundToInt
  * First-run voice download, then Home: a card to read text aloud, voice chips,
  * a phone-voice tip and a footer hint. Playback state arrives from [ReaderState],
  * so rotation never loses it; voice and speed live in the settings sheet.
+ * Setup shows only when nothing is installed, and offers Persian-only readers
+ * Pocket Farsi as an alternative to the main voice.
  */
 class MainActivity : Activity(), InstallTask.Listener {
 
@@ -46,6 +48,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var prefs: SharedPreferences
     private var task: InstallTask? = null
     private var lastSetupError: Exception? = null
+    private var installingPackId: String? = null
     private val setupSamples = SamplePlayer()
     private var setupPlaying = false
     private var setupLoading = false
@@ -59,6 +62,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var chooseVoiceButton: Button
     private lateinit var downloadButton: Button
     private lateinit var downloadHelp: TextView
+    private lateinit var pocketButton: Button
+    private lateinit var pocketHelp: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var progressLabel: TextView
     private lateinit var cancelButton: Button
@@ -109,6 +114,8 @@ class MainActivity : Activity(), InstallTask.Listener {
         chooseVoiceButton = findViewById(R.id.chooseVoiceButton)
         downloadButton = findViewById(R.id.downloadButton)
         downloadHelp = findViewById(R.id.downloadHelp)
+        pocketButton = findViewById(R.id.pocketButton)
+        pocketHelp = findViewById(R.id.pocketHelp)
         progressBar = findViewById(R.id.progressBar)
         progressLabel = findViewById(R.id.progressLabel)
         cancelButton = findViewById(R.id.cancelButton)
@@ -153,14 +160,21 @@ class MainActivity : Activity(), InstallTask.Listener {
         body.text = getString(R.string.setup_body, setupVoiceName(), pack.sizeMb)
         downloadButton.text = getString(R.string.download_button, pack.sizeMb)
         updateSetupEstimate(pack.sizeMb)
+        val pocket = VoiceCatalog.byId(POCKET_PACK_ID)!!
+        pocketButton.text = getString(R.string.persian_only_button, pocket.sizeMb)
 
         setupSampleButton.setOnClickListener { toggleSetupSample() }
         chooseVoiceButton.setOnClickListener {
             startActivity(Intent(this, VoicesActivity::class.java))
             overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
         }
-        downloadButton.setOnClickListener { startInstall() }
-        retryButton.setOnClickListener { startInstall() }
+        downloadButton.setOnClickListener { startInstall(store) }
+        pocketButton.setOnClickListener {
+            startInstall(VoiceModelStore(pocket, voicesDir(), VoiceModelStore::httpUrlOpener))
+        }
+        retryButton.setOnClickListener {
+            startInstall(setupTarget(installingPackId ?: store.pack.id))
+        }
         cancelButton.setOnClickListener { task?.cancel() }
 
         readButton.setOnClickListener { readInputAloud() }
@@ -203,14 +217,16 @@ class MainActivity : Activity(), InstallTask.Listener {
         miniToggle.setOnClickListener { sendAction(ReaderService.ACTION_TOGGLE) }
         refreshChips()
 
-        if (store.isInstalled()) {
+        if (VoiceModelStore.anyInstalled(voicesDir())) {
             showReader()
         } else {
             // Re-attach to the running install after rotation instead of restarting it
-            // (only when it is ours; another pack's install belongs to its own screen).
+            // (only when it is ours: the main voice or Pocket; another pack's
+            // install belongs to its own screen).
             val running = (application as ReadlyApp).installTask
-            if (running != null && !running.isDone && running.packId == store.pack.id) {
+            if (running != null && !running.isDone && isSetupPack(running.packId)) {
                 task = running
+                installingPackId = running.packId
                 running.listener = this
                 showProgress()
                 updateProgress(running.lastStage, running.lastDoneBytes, running.lastTotalBytes)
@@ -247,6 +263,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         if (pack.id != store.pack.id) {
             task = null
             lastSetupError = null
+            installingPackId = null
             store = VoiceModelStore(pack, File(noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
             body.text = getString(R.string.setup_body, setupVoiceName(), pack.sizeMb)
             downloadButton.text = getString(R.string.download_button, pack.sizeMb)
@@ -281,13 +298,14 @@ class MainActivity : Activity(), InstallTask.Listener {
      * re-attach to our still-running install.
      */
     private fun syncSetupState() {
-        if (store.isInstalled()) {
+        if (VoiceModelStore.anyInstalled(voicesDir())) {
             showReader()
             return
         }
         val running = (application as ReadlyApp).installTask
-        if (running != null && !running.isDone && running.packId == store.pack.id) {
+        if (running != null && !running.isDone && isSetupPack(running.packId)) {
             task = running
+            installingPackId = running.packId
             running.listener = this
             showProgress()
             updateProgress(running.lastStage, running.lastDoneBytes, running.lastTotalBytes)
@@ -489,20 +507,34 @@ class MainActivity : Activity(), InstallTask.Listener {
     // Voice install (first run)
     // ------------------------------------------------------------------
 
-    private fun startInstall() {
+    private fun startInstall(target: VoiceModelStore) {
         val app = application as ReadlyApp
         if (app.installTask?.isDone == false) return
         lastSetupError = null
-        val newTask = InstallTask(store) { finished ->
+        installingPackId = target.pack.id
+        val newTask = InstallTask(target) { finished ->
             if (app.installTask === finished) app.installTask = null
         }
         task = newTask
         newTask.listener = this
         app.installTask = newTask
         showProgress()
-        updateProgress(InstallStage.DOWNLOADING, 0, store.pack.sizeBytes)
+        updateProgress(InstallStage.DOWNLOADING, 0, target.pack.sizeBytes)
         app.ioExecutor.execute { newTask.run() }
     }
+
+    private fun voicesDir(): File = File(noBackupFilesDir, "voices")
+
+    /** A setup install target: the main voice or Pocket Farsi. */
+    private fun setupTarget(packId: String): VoiceModelStore =
+        if (packId == store.pack.id) {
+            store
+        } else {
+            VoiceModelStore(VoiceCatalog.byId(packId)!!, voicesDir(), VoiceModelStore::httpUrlOpener)
+        }
+
+    private fun isSetupPack(packId: String): Boolean =
+        packId == store.pack.id || packId == POCKET_PACK_ID
 
     override fun onProgress(stage: InstallStage, bytesDone: Long, bytesTotal: Long) {
         updateProgress(stage, bytesDone, bytesTotal)
@@ -510,6 +542,13 @@ class MainActivity : Activity(), InstallTask.Listener {
 
     override fun onDone() {
         Log.i("Readly", "Voice install complete")
+        if (installingPackId == POCKET_PACK_ID) {
+            // A Persian-only setup reads Persian right away, Smart voice or
+            // not: the explicit fa pick covers MainVoice mode too.
+            ReaderService.setPackIdForLang(this, "fa", POCKET_PACK_ID)
+            Log.i("Readly", "Persian voice set to Pocket Farsi after setup install")
+        }
+        installingPackId = null
         task = null
         lastSetupError = null
         showReader()
@@ -519,12 +558,14 @@ class MainActivity : Activity(), InstallTask.Listener {
         Log.i("Readly", "Voice install cancelled by user")
         task = null
         lastSetupError = null
+        installingPackId = null
         showIdle()
     }
 
     override fun onError(e: Exception) {
         Log.e("Readly", "Voice download failed", e)
         task = null
+        // installingPackId stays: retry reinstalls the same pack.
         lastSetupError = e
         errorText.text = getString(
             R.string.error_format,
@@ -620,12 +661,13 @@ class MainActivity : Activity(), InstallTask.Listener {
     }
 
     private fun updateProgress(stage: InstallStage, bytesDone: Long, bytesTotal: Long) {
+        val totalMb = installingPackId?.let { VoiceCatalog.byId(it)?.sizeMb } ?: store.pack.sizeMb
         progressLabel.text = when (stage) {
             InstallStage.DOWNLOADING ->
                 getString(
                     R.string.downloading_format,
                     bytesDone / 1_000_000,
-                    store.pack.sizeMb,
+                    totalMb,
                 )
             InstallStage.VERIFYING -> getString(R.string.verifying_label)
         }
@@ -648,6 +690,8 @@ class MainActivity : Activity(), InstallTask.Listener {
         setSetupVisible(true)
         downloadButton.visibility = View.GONE
         downloadHelp.visibility = View.GONE
+        pocketButton.visibility = View.GONE
+        pocketHelp.visibility = View.GONE
         setProgressVisible(true)
         setErrorVisible(false)
         updateMiniBar(ReaderState.snapshot)
@@ -659,6 +703,8 @@ class MainActivity : Activity(), InstallTask.Listener {
         setSetupVisible(true)
         downloadButton.visibility = View.GONE
         downloadHelp.visibility = View.GONE
+        pocketButton.visibility = View.GONE
+        pocketHelp.visibility = View.GONE
         setProgressVisible(false)
         setErrorVisible(true)
         updateMiniBar(ReaderState.snapshot)
@@ -677,6 +723,8 @@ class MainActivity : Activity(), InstallTask.Listener {
         body.visibility = v
         downloadButton.visibility = v
         downloadHelp.visibility = v
+        pocketButton.visibility = v
+        pocketHelp.visibility = v
     }
 
     private fun setProgressVisible(visible: Boolean) {
@@ -699,5 +747,8 @@ class MainActivity : Activity(), InstallTask.Listener {
 
         /** Boolean extra: a share arrived before the voice was installed. */
         const val EXTRA_NEED_VOICE = "needVoice"
+
+        /** The Persian-only setup alternative to the main voice. */
+        const val POCKET_PACK_ID = "pocket-farsi-v1"
     }
 }

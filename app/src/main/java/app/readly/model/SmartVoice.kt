@@ -124,6 +124,19 @@ object SmartVoice {
         return Choice.Ask(recommended)
     }
 
+    /**
+     * True when [choice] would read with the main voice ([Choice.MainVoice], or
+     * [Choice.Use] of [mainPack] via the main-supports-lang exception — the
+     * `forceMain` "Read anyway" path passes [Choice.MainVoice]) but the main
+     * pack isn't installed. The read path shows the missing-voice message
+     * instead of starting.
+     */
+    fun needsMissingMain(choice: Choice, mainPack: VoicePack, mainInstalled: Boolean): Boolean =
+        !mainInstalled && (
+            choice is Choice.MainVoice ||
+                (choice is Choice.Use && choice.pack.id == mainPack.id)
+            )
+
     /** Only a small Piper Compact or Standard is ever auto-downloaded. */
     private fun isAutoDownloadable(pack: VoicePack): Boolean {
         // A pack with no download host can never auto-download.
