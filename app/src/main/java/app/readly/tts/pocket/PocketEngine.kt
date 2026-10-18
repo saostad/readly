@@ -30,8 +30,8 @@ import org.json.JSONObject
  * The exported `.onnx` is one streaming step: text, voice conditioning, or the previous
  * latent goes in; one 80 ms audio frame plus the updated caches come out. This class
  * drives that graph with the Farsi generation recipe: 18-token chunks, runaway
- * retry/split, a 150 ms pause between chunks, silence trim, and a loudness lift to
- * about −16 LUFS.
+ * retry/split, a 150 ms pause between chunks, silence trim, and a mastering chain to
+ * about −12 LUFS, compressed.
  *
  * Runtime sharing: only the ORT Java API ships with readly (the java-only AAR); the
  * native `libonnxruntime.so` is sherpa-onnx's — one ONNX Runtime in the process.
@@ -128,7 +128,7 @@ class PocketEngine(modelFile: File) : Closeable {
             var piece = generateChunk(chunk, 0, isStopped)
             piece = PocketAudio.trimSilence(piece, config.sampleRate)
             piece = PocketAudio.applySpeed(piece, clampedSpeed)
-            piece = PocketAudio.normalizeLoudness(piece)
+            piece = PocketAudio.masterChunk(piece, config.sampleRate)
             onChunk?.invoke(piece)
             pieces += piece
             if (index + 1 < chunks.size && !isStopped()) {
