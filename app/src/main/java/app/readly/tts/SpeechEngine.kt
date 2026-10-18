@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import app.readly.model.VoiceFamily
 import app.readly.model.VoiceModelStore
+import app.readly.tts.pocket.PocketEngine
 import com.k2fsa.sherpa.onnx.GenerationConfig
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
@@ -13,6 +14,7 @@ import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsSupertonicModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
 import java.io.Closeable
+import java.io.File
 import java.io.IOException
 import java.util.Locale
 
@@ -30,25 +32,40 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
 
     private val pack = store.pack
     private val dir = store.modelDir.absolutePath
-    private val tts: OfflineTts
+    private val tts: OfflineTts?
+    private val pocket: PocketEngine?
 
     init {
         if (!store.isInstalled()) throw IllegalStateException("Voice model is not installed")
         val startMs = SystemClock.elapsedRealtime()
-        tts = try {
-            OfflineTts(null, buildConfig(dir))
-        } catch (e: Exception) {
-            throw IOException(loadError(dir, e), e)
-        } catch (e: LinkageError) {
-            // Missing native libs surface as UnsatisfiedLinkError, not Exception.
-            throw IOException(loadError(dir, e), e)
+        if (pack.family == VoiceFamily.POCKET) {
+            pocket = try {
+                PocketEngine(File(store.modelDir, pack.modelFile))
+            } catch (e: Exception) {
+                throw IOException(loadError(dir, e), e)
+            } catch (e: LinkageError) {
+                // A missing libonnxruntime4j_jni.so surfaces as UnsatisfiedLinkError,
+                // not Exception; loadError names the missing library.
+                throw IOException(loadError(dir, e), e)
+            }
+            tts = null
+        } else {
+            tts = try {
+                OfflineTts(null, buildConfig(dir))
+            } catch (e: Exception) {
+                throw IOException(loadError(dir, e), e)
+            } catch (e: LinkageError) {
+                // Missing native libs surface as UnsatisfiedLinkError, not Exception.
+                throw IOException(loadError(dir, e), e)
+            }
+            pocket = null
         }
         Log.i("Readly", "${pack.displayName} voice loaded from $dir in ${SystemClock.elapsedRealtime() - startMs} ms")
     }
 
     /** Sample rate of [synthesize] output. */
     val sampleRate: Int
-        get() = tts.sampleRate()
+        get() = pocket?.sampleRate ?: tts!!.sampleRate()
 
     /**
      * Synthesizes [text] to mono float PCM. Generation stops early (returning audio so far)
@@ -70,6 +87,8 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
                 "(0..${speakers.size - 1})"
         }
         if (text.isBlank()) return FloatArray(0)
+        // Pocket ignores lang (Persian only) and logs its own synthesize line.
+        pocket?.let { return it.synthesize(text, speed, isStopped, onChunk) }
         val startMs = SystemClock.elapsedRealtime()
         val callback: (FloatArray) -> Int =
             if (onChunk != null) StreamingCallback(isStopped, onChunk) else StopCallback(isStopped)
@@ -99,7 +118,7 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
     }
 
     override fun close() {
-        tts.release()
+        if (pocket != null) pocket.close() else tts?.release()
     }
 
     private fun buildConfig(dir: String): OfflineTtsConfig {
@@ -155,6 +174,7 @@ class SpeechEngine(store: VoiceModelStore) : Closeable {
                 debug = false,
                 provider = "cpu",
             )
+            VoiceFamily.POCKET -> error("Pocket is not a sherpa-onnx voice")
         }
         return OfflineTtsConfig(model = model, maxNumSentences = 1)
     }

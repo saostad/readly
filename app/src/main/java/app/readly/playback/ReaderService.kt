@@ -170,11 +170,12 @@ class ReaderService : Service() {
         }
 
         /**
-         * Language bucket for [pack]: `"fa"` for Persian Piper packs (lang `fa`,
-         * `fa_IR`, `fa_en`), `"ar"` for Arabic ones, null for everything else
-         * (those are main-voice packs).
+         * Language bucket for [pack]: `"fa"` for Persian packs (Piper lang `fa`,
+         * `fa_IR`, `fa_en`, or Pocket Farsi), `"ar"` for Arabic Piper ones, null
+         * for everything else (those are main-voice packs).
          */
         fun bucketForPack(pack: VoicePack): String? = when {
+            pack.family == VoiceFamily.POCKET -> if (pack.lang == "fa") "fa" else null
             pack.family != VoiceFamily.PIPER || pack.lang == null -> null
             pack.lang.startsWith("fa") -> "fa"
             pack.lang.startsWith("ar") -> "ar"
