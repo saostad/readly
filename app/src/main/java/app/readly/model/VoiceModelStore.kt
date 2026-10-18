@@ -114,10 +114,13 @@ class VoiceModelStore(
     /**
      * Downloads, verifies and installs the voice pack in a single pass: download, hash
      * and unpack run at the same time, so bzip2 decoding overlaps the network.
+     * Single-file packs ([VoicePack.fileUrl]) stream straight to
+     * `<tmpDir>/<modelFile>` instead of being unpacked; the size, hash, marker
+     * and rename steps below are shared.
      *
      * @param progress called as `(stage, bytesDone, bytesTotal)`; totals are the expected
-     *   archive size (the pack's [VoicePack.sizeBytes] in production). DOWNLOADING reports
-     *   compressed bytes consumed, throttled to at most every 256 KB plus once at the end;
+     *   download size (the pack's [VoicePack.sizeBytes] in production). DOWNLOADING reports
+     *   bytes consumed, throttled to at most every 256 KB plus once at the end;
      *   VERIFYING is reported once for the final size and hash checks.
      * @param cancelled polled during download, extraction and draining; abort throws
      *   [CancellationException].
@@ -143,7 +146,11 @@ class VoiceModelStore(
         val finalDir = File(baseDir, pack.topDir)
         try {
             val digest = MessageDigest.getInstance("SHA-256")
-            val consumed = streamDownloadAndUnpack(tmpDir, digest, progress, cancelled)
+            val consumed = if (pack.fileUrl != null) {
+                streamDownloadToFile(tmpDir, digest, progress, cancelled)
+            } else {
+                streamDownloadAndUnpack(tmpDir, digest, progress, cancelled)
+            }
             progress(InstallStage.VERIFYING, consumed, expectedSizeBytes)
             if (consumed != expectedSizeBytes) {
                 throw IOException(
@@ -166,6 +173,73 @@ class VoiceModelStore(
     }
 
     /**
+     * Single pass for single-file packs: streams HTTP through the hash into
+     * `<tmpDir>/<modelFile>`. Same progress throttle and cancel checks as the
+     * archive path. Returns the bytes consumed.
+     */
+    private fun streamDownloadToFile(
+        tmpDir: File,
+        digest: MessageDigest,
+        progress: (InstallStage, Long, Long) -> Unit,
+        cancelled: () -> Boolean,
+    ): Long {
+        tmpDir.deleteRecursively()
+        tmpDir.mkdirs()
+        urlOpener(pack.url).use { conn ->
+            throwIfHttpError(conn)
+            val counting = countedDigestStream(conn, digest)
+            try {
+                val target = File(tmpDir, pack.modelFile)
+                target.parentFile?.mkdirs()
+                var lastReported = 0L
+                target.outputStream().use { out ->
+                    val buf = ByteArray(READ_BUFFER_BYTES)
+                    while (true) {
+                        if (cancelled()) throw CancellationException("Voice download cancelled")
+                        val n = counting.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        if (counting.count - lastReported >= PROGRESS_MIN_DELTA_BYTES) {
+                            progress(InstallStage.DOWNLOADING, counting.count, expectedSizeBytes)
+                            lastReported = counting.count
+                        }
+                    }
+                }
+                if (counting.count != lastReported) {
+                    progress(InstallStage.DOWNLOADING, counting.count, expectedSizeBytes)
+                }
+                return counting.count
+            } finally {
+                counting.close()
+            }
+        }
+    }
+
+    /** Throws the shared HTTP-failure message unless [conn] is 2xx. */
+    private fun throwIfHttpError(conn: DownloadConnection) {
+        if (conn.statusCode !in 200..299) {
+            val detail = if (conn.statusMessage.isBlank()) "" else " ${conn.statusMessage}"
+            throw IOException(
+                "Voice download failed: HTTP ${conn.statusCode}$detail from ${pack.url}",
+            )
+        }
+    }
+
+    /**
+     * HTTP bytes through the hash with a byte counter on top. Buffered:
+     * commons-compress pulls its input one byte at a time, which is ~5x slower
+     * unbuffered (round 9 host benchmark: 1.6 vs 8.7 MB/s). The digest and the
+     * counter sit above the buffer so they see every byte consumed.
+     */
+    private fun countedDigestStream(conn: DownloadConnection, digest: MessageDigest): CountingInputStream =
+        CountingInputStream(
+            DigestInputStream(
+                BufferedInputStream(conn.input(), READ_BUFFER_BYTES),
+                digest,
+            ),
+        )
+
+    /**
      * Single pass: reads the archive from HTTP through the hash into the bzip2/tar
      * decoders and extracts into [tmpDir]. No `download.part` is written, which halves the
      * disk needed. Returns the compressed bytes consumed.
@@ -180,21 +254,8 @@ class VoiceModelStore(
         tmpDir.mkdirs()
         val base = tmpDir.toPath().toAbsolutePath().normalize()
         urlOpener(pack.url).use { conn ->
-            if (conn.statusCode !in 200..299) {
-                val detail = if (conn.statusMessage.isBlank()) "" else " ${conn.statusMessage}"
-                throw IOException(
-                    "Voice download failed: HTTP ${conn.statusCode}$detail from ${pack.url}",
-                )
-            }
-            // Buffered: commons-compress pulls its input one byte at a time, which is ~5x
-            // slower unbuffered (round 9 host benchmark: 1.6 vs 8.7 MB/s). The digest and
-            // the counter sit above the buffer so they see every compressed byte consumed.
-            val counting = CountingInputStream(
-                DigestInputStream(
-                    BufferedInputStream(conn.input(), READ_BUFFER_BYTES),
-                    digest,
-                ),
-            )
+            throwIfHttpError(conn)
+            val counting = countedDigestStream(conn, digest)
             var lastReported = 0L
             fun maybeReport() {
                 if (counting.count - lastReported >= PROGRESS_MIN_DELTA_BYTES) {

@@ -26,6 +26,8 @@ class VoiceCatalogTest {
     @Test
     fun urls_endWithArchiveName() {
         for (pack in VoiceCatalog.ALL) {
+            // Single-file packs (Pocket) use their direct host URL instead.
+            if (pack.fileUrl != null) continue
             assertTrue("${pack.id}: ${pack.url}", pack.url.endsWith("/${pack.archive}"))
         }
     }

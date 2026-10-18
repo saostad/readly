@@ -37,6 +37,9 @@ data class VoiceFamilyInfo(
  *   2-letter code (`fa`); null otherwise.
  * @param sampleUrl remote sample clip for generated Piper packs (the official
  *   piper-samples mp3); null means the bundled [sampleRes] clip.
+ * @param fileUrl direct URL of a single raw model file (Pocket v1 on Hugging
+ *   Face); null means the pack is a sherpa tar.bz2 archive. A single-file pack
+ *   downloads straight to `<topDir>/<modelFile>` instead of being unpacked.
  */
 data class VoicePack(
     val id: String,
@@ -54,21 +57,26 @@ data class VoicePack(
     @RawRes val sampleRes: Int,
     val lang: String? = null,
     val sampleUrl: String? = null,
+    val fileUrl: String? = null,
 ) {
-    /** Download URL: every pack lives in the sherpa-onnx `tts-models` release. */
+    /**
+     * Download URL: [fileUrl] for single-file packs, else the sherpa-onnx
+     * `tts-models` release.
+     */
     val url: String
-        get() = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$archive"
+        get() = fileUrl
+            ?: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$archive"
 
     /** [sizeBytes] in decimal MB, rounded; the progress label shows this total. */
     val sizeMb: Int
         get() = ((sizeBytes + 500_000) / 1_000_000).toInt()
 
     /**
-     * False while the pack has no download host (Pocket v1): the file is copied
-     * to the phone by hand, so nothing may offer or start a download for it.
+     * False while the pack has no download host: the file is copied to the
+     * phone by hand, so nothing may offer or start a download for it.
      */
     val downloadable: Boolean
-        get() = archive.isNotEmpty()
+        get() = archive.isNotEmpty() || fileUrl != null
 
     /** Base name of the sample clip in `res/raw` (`.ogg` suffix not included). */
     val sampleName: String
@@ -213,13 +221,14 @@ object VoiceCatalog {
             family = VoiceFamily.POCKET,
             archive = "",
             sizeBytes = 226396445L,
-            sha256 = "",
+            sha256 = "3f3322396a6f8a65e970438f0a58b146e90cd49283cf8c46cef7f3f877cdca30",
             topDir = "pocket-farsi-v1",
             modelFile = "pocket-farsi-v1.onnx",
             speakers = listOf("Voice A"),
             rtfNote = "Speed on phones not measured yet",
             sampleRes = R.raw.sample_pocket_farsi_v1,
             lang = "fa",
+            fileUrl = "https://huggingface.co/saostad/readly-voices/resolve/main/pocket-farsi-v1/pocket-farsi-v1.onnx",
         ),
     )
 

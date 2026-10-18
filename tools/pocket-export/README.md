@@ -12,8 +12,10 @@ Adapted from smart-voices PR #4.
 
 ## Put the voice on a phone
 
-No download host yet, so the model file is copied by hand for now. From this
-directory, with a debug build installed (so `run-as` works):
+The app downloads `pocket-farsi-v1.onnx` itself from Hugging Face
+(`saostad/readly-voices`), like any other voice. For testing a new export,
+copy the file by hand instead. From this directory, with a debug build
+installed (so `run-as` works):
 
 ```
 adb push out/pocket-farsi-v1.onnx /data/local/tmp/
