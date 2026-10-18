@@ -12,7 +12,10 @@ dependencies = [
     "pocket-tts-onnx @ git+https://github.com/thewh1teagle/pocket-tts-onnx",
     "sentencepiece>=0.2",
     "soundfile>=0.12",
+    "sphn>=0.2",
     "torch>=2.4",
+    "transformers>=4.48",
+    "typer>=0.9",
 ]
 
 [tool.uv]
