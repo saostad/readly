@@ -66,6 +66,14 @@ class EngineManager(appContext: Context) {
     @Volatile
     private var rateByPack: Map<String, Int> = emptyMap()
 
+    /**
+     * Loaded engines by pack id. Written on `readly-tts`, read anywhere; lets
+     * [prefetch]/[cancelPrefetch] reach the engine without queueing behind a
+     * running synthesis on `readly-tts` (which would erase the head start).
+     */
+    @Volatile
+    private var engineSnapshot: Map<String, SpeechEngine> = emptyMap()
+
     /** True when [packId]'s engine is currently loaded (snapshot read, never blocks). */
     fun isLoaded(packId: String): Boolean = packId in loadedPackIds
 
@@ -110,6 +118,32 @@ class EngineManager(appContext: Context) {
             updateRtf(packId, if (audioMs > 0) synthMs / audioMs else 0.0)
         }
         return audio
+    }
+
+    /**
+     * Starts pronouncing [text] ahead for [packId]'s voice (Pocket v2 only;
+     * no-op when the engine isn't loaded or isn't v2). Non-blocking and
+     * thread-safe: it reads the engine snapshot, so the producer thread can
+     * start the next chunk's G2P while the current chunk synthesizes. Never
+     * throws.
+     */
+    fun prefetch(packId: String, text: String) {
+        try {
+            engineSnapshot[packId]?.prefetch(text)
+        } catch (_: Exception) {
+            // Prefetch never fails synthesis.
+        }
+    }
+
+    /** Cancels prefetched work on every loaded engine. Non-blocking. */
+    fun cancelPrefetch() {
+        for (engine in engineSnapshot.values) {
+            try {
+                engine.cancelPrefetch()
+            } catch (_: Exception) {
+                // Prefetch never fails playback control.
+            }
+        }
     }
 
     /** Closes every loaded engine on `readly-tts`. Blocks the caller. */
@@ -162,6 +196,7 @@ class EngineManager(appContext: Context) {
     private fun publishSnapshot() {
         loadedPackIds = engines.keys.toSet()
         rateByPack = engines.mapValues { it.value.rate }
+        engineSnapshot = engines.mapValues { it.value.engine }
         engineLoaded = engines.isNotEmpty()
     }
 

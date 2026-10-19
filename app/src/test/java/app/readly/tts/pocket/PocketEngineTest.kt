@@ -77,6 +77,66 @@ class PocketEngineTest {
     }
 
     @Test
+    fun prefetchedResultEqualsInlineResult() {
+        val compute: (String) -> V2PrefetchData = { text ->
+            V2PrefetchData(
+                listOf(TextChunk("phonemes for $text", PocketAudio.PieceEnd.SENTENCE)),
+                listOf(),
+            )
+        }
+        V2Prefetcher(compute).use { prefetcher ->
+            prefetcher.prefetch("hello")
+            val take = awaitTake(prefetcher, "hello")
+            assertTrue("expected Ready, was $take", take is V2PrefetchTake.Ready)
+            assertEquals(compute("hello"), (take as V2PrefetchTake.Ready).data)
+        }
+    }
+
+    @Test
+    fun staleTextIgnored() {
+        V2Prefetcher { text ->
+            V2PrefetchData(
+                listOf(TextChunk(text, PocketAudio.PieceEnd.SENTENCE)),
+                emptyList(),
+            )
+        }.use { prefetcher ->
+            prefetcher.prefetch("aaa")
+            assertTrue(prefetcher.take("bbb") is V2PrefetchTake.Miss)
+            val take = awaitTake(prefetcher, "aaa")
+            assertTrue("expected Ready, was $take", take is V2PrefetchTake.Ready)
+            assertEquals("aaa", (take as V2PrefetchTake.Ready).data.chunks!!.single().text)
+        }
+    }
+
+    @Test
+    fun prefetchErrorSurfacesFromInlinePath() {
+        val message = "Pronunciation step failed for \"bad\": test boom"
+        val compute: (String) -> V2PrefetchData = { throw IOException(message) }
+        V2Prefetcher(compute).use { prefetcher ->
+            prefetcher.prefetch("bad")
+            val take = awaitTake(prefetcher, "bad")
+            assertTrue("expected Failed, was $take", take is V2PrefetchTake.Failed)
+            try {
+                compute("bad")
+                fail("inline compute must throw")
+            } catch (e: IOException) {
+                assertEquals(message, e.message)
+            }
+        }
+    }
+
+    private fun awaitTake(prefetcher: V2Prefetcher, text: String): V2PrefetchTake {
+        val end = System.nanoTime() + 10_000_000_000L
+        while (true) {
+            val take = prefetcher.take(text)
+            // Ready/Failed/Miss consume the entry; Pending leaves it for the retry.
+            if (take !is V2PrefetchTake.Pending) return take
+            if (System.nanoTime() > end) return take
+            Thread.sleep(10)
+        }
+    }
+
+    @Test
     fun missingFileGivesThePathInTheMessage() {
         val missing = File(temp.root, "pocket-farsi-v1/pocket-farsi-v1.onnx")
         try {

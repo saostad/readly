@@ -14,6 +14,12 @@ import java.nio.ByteOrder
 import java.util.Base64
 import java.util.Locale
 import java.util.SplittableRandom
+import java.util.concurrent.Callable
+import java.util.concurrent.CancellationException
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.RejectedExecutionException
 import kotlin.math.PI
 import kotlin.math.ceil
 import kotlin.math.cos
@@ -41,8 +47,10 @@ import org.json.JSONObject
  * Runtime sharing: only the ORT Java API ships with readly (the java-only AAR); the
  * native `libonnxruntime.so` is sherpa-onnx's — one ONNX Runtime in the process.
  *
- * Not thread-safe: every call (including [close]) must come from one owner thread.
- * The playback service owns it on `readly-tts` via [SpeechEngine][app.readly.tts.SpeechEngine].
+ * Not thread-safe: every call (including [close]) must come from one owner thread,
+ * except [prefetch] and [cancelPrefetch], which are thread-safe and may be called
+ * from the producer thread while synthesis runs. The playback service owns it on
+ * `readly-tts` via [SpeechEngine][app.readly.tts.SpeechEngine].
  *
  * @throws IOException if the voice file is missing or the model fails to load, naming
  *   the path and the real error.
@@ -54,6 +62,14 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
     private val config: PocketConfig
     private val tokenizer: SentencePiece
     private val g2p: G2p?
+
+    /**
+     * Guards every [G2p.phonemise] call (inline synthesis and the prefetch
+     * thread): the G2P ORT sessions run one call at a time, and the synth
+     * thread waits on this lock rather than entering concurrently.
+     */
+    private val g2pLock = Any()
+    private val prefetcher: V2Prefetcher?
 
     /** Flow-LM cache rows for the voice prompt, reused by every chunk. */
     private val voiceFlow: FloatArray
@@ -108,6 +124,23 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         voiceLen = voice.frames
         voiceFlow = prefillVoice(voice.conditioning, voice.frames)
         sampleRate = config.sampleRate
+        prefetcher = if (config.isV2) V2Prefetcher(::computePrefetch) else null
+    }
+
+    /**
+     * Starts pronouncing [text] on the single prefetch thread (the whole v2
+     * front end: normalize, split, clean, phonemise, translate, split pieces)
+     * so the next chunk's synthesis can reuse it. Thread-safe; no-op for v1.
+     * A G2P error here is stored, never reported: the inline call recomputes
+     * and reports it with the existing message.
+     */
+    fun prefetch(text: String) {
+        prefetcher?.prefetch(text.replace("\u0000", ""))
+    }
+
+    /** Cancels any prefetched work. Thread-safe; no-op for v1. */
+    fun cancelPrefetch() {
+        prefetcher?.cancelAll()
     }
 
     /**
@@ -132,6 +165,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         // including v2's per-sentence G2P (counted separately in g2pMs).
         val startMs = SystemClock.elapsedRealtime()
         var g2pMs = 0L
+        var prefetched = false
         val chunks = if (!config.isV2) {
             val normalized = NormalizeFa.normalize(clean)
             if (normalized.isEmpty()) {
@@ -144,8 +178,9 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
                 MAX_TOKENS_PER_CHUNK,
             ).map { TextChunk(it, PocketAudio.classifyPieceEnd(it)) }
         } else {
-            val v2 = v2Chunks(clean, isStopped)
+            val v2 = v2ChunksWithPrefetch(clean, isStopped)
             g2pMs = v2.g2pMs
+            prefetched = v2.prefetched
             v2.chunks ?: return FloatArray(0)
         }
         if (chunks.isEmpty()) {
@@ -170,27 +205,105 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         val synthMs = SystemClock.elapsedRealtime() - startMs
         val audioMs = if (config.sampleRate > 0) audio.size * 1000.0 / config.sampleRate else 0.0
         val rtf = if (audioMs > 0) synthMs / audioMs else 0.0
+        val g2pPart = if (prefetched) "0 (prefetched)" else g2pMs.toString()
         Log.i(
             "Readly",
             "synthesize: chars=${text.length} speed=$speed " +
-                "synthMs=$synthMs g2pMs=$g2pMs masterMs=$masterMs audioMs=${audioMs.toLong()} " +
+                "synthMs=$synthMs g2pMs=$g2pPart masterMs=$masterMs audioMs=${audioMs.toLong()} " +
                 "rtf=${String.format(Locale.US, "%.3f", rtf)}",
         )
         return audio
     }
 
     override fun close() {
+        prefetcher?.close()
         try {
             session.close()
         } catch (e: OrtException) {
             throw IOException("Couldn't close the Pocket voice: ${e.message}", e)
         } finally {
-            g2p?.close()
+            synchronized(g2pLock) {
+                g2p?.close()
+            }
         }
     }
 
     /** v2 chunk list plus the time spent in G2P (for the `synthesize:` log). */
-    private data class V2Chunks(val chunks: List<TextChunk>?, val g2pMs: Long)
+    private data class V2Chunks(val chunks: List<TextChunk>?, val g2pMs: Long, val prefetched: Boolean = false)
+
+    /**
+     * v2 chunks, reusing a prefetched front end when it is ready for exactly
+     * [clean]; otherwise the inline path below (which also reports G2P errors).
+     * A prefetch still running for this text is cancelled first, so the inline
+     * call runs alone instead of contending for the G2P session.
+     */
+    private fun v2ChunksWithPrefetch(clean: String, isStopped: () -> Boolean): V2Chunks {
+        val p = prefetcher
+        if (p != null) {
+            when (val take = p.take(clean)) {
+                is V2PrefetchTake.Ready -> {
+                    for (blank in take.data.blanks) {
+                        Log.i("Readly", "Pocket: no phonemes for ${blank.take(40)}")
+                    }
+                    val chunks = take.data.chunks
+                    if (chunks == null) {
+                        Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
+                        return V2Chunks(null, 0, true)
+                    }
+                    return V2Chunks(chunks, 0, true)
+                }
+                is V2PrefetchTake.Pending -> p.cancelFor(clean)
+                is V2PrefetchTake.Miss, is V2PrefetchTake.Failed -> Unit
+            }
+        }
+        return v2Chunks(clean, isStopped)
+    }
+
+    /**
+     * The whole v2 front end for one clean chunk, for the prefetch thread: the
+     * same normalize/split/clean/phonemise/translate/split as [v2Chunks] but
+     * without stop checks or timing. Blank sentences are collected so the
+     * synth thread can log them when the result is used. An [IOException]
+     * from G2P propagates to the future (never logged here); the inline call
+     * recomputes and reports it.
+     */
+    private fun computePrefetch(clean: String): V2PrefetchData {
+        if (Thread.currentThread().isInterrupted) throw InterruptedException()
+        val normalized = try {
+            PocketTextV2.normalizeForModel(clean)
+        } catch (e: IllegalArgumentException) {
+            return V2PrefetchData(null, emptyList())
+        }
+        val sentences = PocketTextV2.splitSentences(normalized)
+        if (sentences.isEmpty()) return V2PrefetchData(null, emptyList())
+        val unitsPerSentence = ArrayList<List<String>>()
+        val blanks = ArrayList<String>()
+        for (sentence in sentences) {
+            if (Thread.currentThread().isInterrupted) throw InterruptedException()
+            val phonemes = phonemiseLocked(PocketTextV2.cleanSentenceForG2p(sentence))
+            if (phonemes.isBlank()) {
+                blanks += sentence
+                continue
+            }
+            unitsPerSentence += chunkTranslatedPhonemes(PocketTextV2.translatePhonemes(phonemes))
+        }
+        return V2PrefetchData(v2TextChunks(unitsPerSentence), blanks)
+    }
+
+    /** One G2P call, serialized with the prefetch thread on [g2pLock]. */
+    private fun phonemiseLocked(clean: String): String =
+        synchronized(g2pLock) {
+            (g2p ?: error("v2 voice without a pronunciation model")).phonemise(clean)
+        }
+
+    /** Translated phonemes split into model-sized pieces (ezafe stripped). */
+    private fun chunkTranslatedPhonemes(translated: String): List<String> =
+        PocketTextV2.splitChunks(
+            translated,
+            { piece -> tokenizer.encode(PocketTextV2.stripEzafe(piece)).size },
+            MAX_TOKENS_PER_CHUNK,
+            PocketTextV2.MIN_TOKENS,
+        ).map { PocketTextV2.stripEzafe(it) }
 
     /**
      * v2 chunk list: normalize, split into sentences, pronounce each one, and
@@ -202,7 +315,6 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
      * sequence — and so the pauses — is the same either way.
      */
     private fun v2Chunks(clean: String, isStopped: () -> Boolean): V2Chunks {
-        val engine = g2p ?: error("v2 voice without a pronunciation model")
         val normalized = try {
             PocketTextV2.normalizeForModel(clean)
         } catch (e: IllegalArgumentException) {
@@ -219,19 +331,13 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         for (sentence in sentences) {
             if (isStopped()) break
             val g2pStart = SystemClock.elapsedRealtime()
-            val phonemes = engine.phonemise(PocketTextV2.cleanSentenceForG2p(sentence))
+            val phonemes = phonemiseLocked(PocketTextV2.cleanSentenceForG2p(sentence))
             g2pMs += SystemClock.elapsedRealtime() - g2pStart
             if (phonemes.isBlank()) {
                 Log.i("Readly", "Pocket: no phonemes for ${sentence.take(40)}")
                 continue
             }
-            val translated = PocketTextV2.translatePhonemes(phonemes)
-            unitsPerSentence += PocketTextV2.splitChunks(
-                translated,
-                { piece -> tokenizer.encode(PocketTextV2.stripEzafe(piece)).size },
-                MAX_TOKENS_PER_CHUNK,
-                PocketTextV2.MIN_TOKENS,
-            ).map { PocketTextV2.stripEzafe(it) }
+            unitsPerSentence += chunkTranslatedPhonemes(PocketTextV2.translatePhonemes(phonemes))
         }
         return V2Chunks(v2TextChunks(unitsPerSentence), g2pMs)
     }
@@ -697,6 +803,107 @@ private data class BakedVoice(val name: String, val frames: Int, val conditionin
 
 /** One text chunk to generate, plus how its end sounds. */
 internal data class TextChunk(val text: String, val end: PocketAudio.PieceEnd)
+
+/**
+ * A prefetched v2 front end: the chunk list (null when nothing was speakable)
+ * plus the sentences whose phonemes came back blank, so the synth thread can
+ * log them when the result is used.
+ */
+internal data class V2PrefetchData(val chunks: List<TextChunk>?, val blanks: List<String>)
+
+/** Outcome of asking the prefetcher for one exact clean text. */
+internal sealed interface V2PrefetchTake {
+    /** Ready to use (consumed: a second take for the same text misses). */
+    data class Ready(val data: V2PrefetchData) : V2PrefetchTake
+
+    /** Still computing; the caller computes inline instead of waiting. */
+    object Pending : V2PrefetchTake
+
+    /** Nothing was prefetched for this text. */
+    object Miss : V2PrefetchTake
+
+    /** Prefetch failed or was cancelled; the inline call recomputes. */
+    object Failed : V2PrefetchTake
+}
+
+/**
+ * Pronounces v2 chunks one text ahead on a single background thread. The cache
+ * is keyed by the exact clean text; a take for any other text misses, and a
+ * compute failure is stored (never thrown here) so the inline path reports it.
+ * Pure JVM (no Android or ORT): [compute] carries the front end, so tests use
+ * a fake. Thread-safe.
+ */
+internal class V2Prefetcher(private val compute: (String) -> V2PrefetchData) : Closeable {
+    private val executor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "readly-g2p-prefetch").apply { isDaemon = true }
+    }
+    private val lock = Any()
+    private val cache = LinkedHashMap<String, Future<V2PrefetchData>>()
+
+    @Volatile
+    private var closed = false
+
+    /** Starts computing [text] unless it is already cached or computing. */
+    fun prefetch(text: String) {
+        if (closed) return
+        synchronized(lock) {
+            if (cache.containsKey(text)) return
+            while (cache.size >= MAX_CACHED) {
+                val eldest = cache.entries.iterator().next()
+                cache.remove(eldest.key)
+                if (!eldest.value.isDone) eldest.value.cancel(true)
+            }
+            val future = try {
+                executor.submit(Callable { compute(text) })
+            } catch (e: RejectedExecutionException) {
+                return
+            }
+            cache[text] = future
+        }
+    }
+
+    /** Takes the prefetched result for [text], if it finished successfully. */
+    fun take(text: String): V2PrefetchTake {
+        val future = synchronized(lock) { cache[text] } ?: return V2PrefetchTake.Miss
+        if (!future.isDone) return V2PrefetchTake.Pending
+        synchronized(lock) { cache.remove(text) }
+        return try {
+            V2PrefetchTake.Ready(future.get())
+        } catch (e: CancellationException) {
+            V2PrefetchTake.Miss
+        } catch (e: ExecutionException) {
+            V2PrefetchTake.Failed
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            V2PrefetchTake.Failed
+        }
+    }
+
+    /** Drops the prefetched work for [text], cancelling it when still running. */
+    fun cancelFor(text: String) {
+        synchronized(lock) {
+            cache.remove(text)?.cancel(true)
+        }
+    }
+
+    /** Drops all prefetched work. */
+    fun cancelAll() {
+        synchronized(lock) {
+            for (future in cache.values) future.cancel(true)
+            cache.clear()
+        }
+    }
+
+    override fun close() {
+        closed = true
+        cancelAll()
+        executor.shutdownNow()
+    }
+
+    companion object {
+        private const val MAX_CACHED = 4
+    }
+}
 
 /**
  * v2 chunk boundaries from the phoneme texts the pieces came from: a piece ending
