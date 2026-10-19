@@ -30,11 +30,12 @@ the 4 check texts.
 
 ## G2P (Persian pronunciation model)
 
-`mehdi-hf/Homo-GE2PE-Persian-HF` (tiny ByT5, 8.3 M params) as plain
-encoder + decoder ONNX with no KV cache — every decode step feeds the full
-decoder prefix. Beam search (width 5, max 512, early stopping, length
-penalty 1.0) lives in the Kotlin `G2p` class; this script's numpy
-implementation of the same algorithm is the check.
+`mehdi-hf/Homo-GE2PE-Persian-HF` (tiny ByT5, 8.3 M params) as
+encoder + KV-cache decoder ONNX: the encoder computes each decoder layer's
+cross-attention K/V once, and every decode step feeds one token plus the
+past self K/V. Beam search (width 5, max 512, early stopping, length
+penalty 1.0, cache reorder) lives in the Kotlin `G2p` class; this
+script's numpy implementation of the same algorithm is the check.
 
     uv run python export_g2p.py          # export + quantize + check
     uv run python export_g2p.py --check  # verify out/ge2pe/ against torch
