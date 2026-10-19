@@ -1649,7 +1649,9 @@ class ReaderService : Service() {
             chunks = chunks,
             startIndex = startIndex,
             sampleRate = rate,
-            synth = { index, isStopped -> synthChunk(chunks[index].text, isStopped, docPack, lang) },
+            synth = { index, isStopped, emit ->
+                synthChunk(chunks[index].text, isStopped, emit, docPack, lang)
+            },
             sink = TrackSink(track),
             onChunkStarted = { index ->
                 // A stopped generation never calls back; this guard is belt and braces
@@ -1749,26 +1751,33 @@ class ReaderService : Service() {
      * Synthesizes one chunk with [pack]'s voice for 2-letter [lang], reading speaker
      * and speed from settings every time so changes apply from the next sentence.
      * Runs on the producer thread; the engine call itself runs on `readly-tts`
-     * inside [EngineManager] (which also records the per-pack RTF EMA).
+     * inside [EngineManager] (which also records the per-pack RTF EMA). Pocket
+     * streams partial pieces through [emit] as they finish (emitted on `readly-tts`);
+     * sherpa engines emit once at the end, as before. The time-left stats below
+     * still use the whole chunk's audio.
      */
     private fun synthChunk(
         text: String,
         isStopped: () -> Boolean,
+        emit: (FloatArray) -> Unit,
         pack: VoicePack,
         lang: String,
-    ): FloatArray {
+    ) {
         val speakerId = speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
         val speed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
         val begin = SystemClock.elapsedRealtime()
-        val audio = engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped)
+        val audio = if (pack.family == VoiceFamily.POCKET) {
+            engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped, onChunk = emit)
+        } else {
+            engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped).also { emit(it) }
+        }
         val synthMs = SystemClock.elapsedRealtime() - begin
         val rate = engines.sampleRateIfLoaded(pack.id) ?: 0
         val audioMs = if (rate > 0) audio.size * 1000.0 / rate else 0.0
         docAudioMs += audioMs
         docChars += text.length
         ReaderState.update { it.copy(lastRtf = if (audioMs > 0) synthMs / audioMs else 0.0) }
-        return audio
     }
 
     /** Average audio-ms per char synthesized so far in this document (0 = unknown). */
