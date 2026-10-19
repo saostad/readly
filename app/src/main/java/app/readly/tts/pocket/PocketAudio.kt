@@ -17,8 +17,20 @@ import kotlin.math.tan
  * the same model (`.agents/handoff/ref/pocket.rs`). Pure Kotlin: no Android or ORT imports.
  */
 object PocketAudio {
-    /** Silence kept at each end when trimming a chunk. */
+    /** Silence kept at each end when trimming a chunk (outer ends always keep this). */
     const val TRIM_KEEP_MS = 120L
+
+    /** Silence kept at the cut side of a clause boundary (`،`, `؛`, …). */
+    const val TRIM_KEEP_CLAUSE_MS = 60L
+
+    /** Silence kept at the cut side of a mid-sentence cut (no punctuation). */
+    const val TRIM_KEEP_MID_MS = 25L
+
+    /** Pause after a sentence-final piece; mid-sentence cuts get no pause. */
+    const val PAUSE_SENTENCE_MS = 150L
+
+    /** Pause after a clause-final piece. */
+    const val PAUSE_CLAUSE_MS = 60L
 
     /** Samples at or below this magnitude count as silence. */
     const val TRIM_THRESHOLD = 0.01f
@@ -173,19 +185,62 @@ object PocketAudio {
     }
 
     /**
-     * Trim leading/trailing silence (samples at or below the threshold) while keeping
-     * [TRIM_KEEP_MS] of it at each end. An all-silent input stays as-is shortened to the
-     * kept ends, so a silent chunk still has its shape.
+     * How the boundary after a piece sounds: a full stop keeps the old 120 ms
+     * keeps and 150 ms pause, a clause mark keeps 60 ms and pauses 60 ms, and
+     * a mid-sentence cut keeps 25 ms at each cut side with no pause.
      */
-    fun trimSilence(samples: FloatArray, sampleRate: Int): FloatArray {
-        val keep = (TRIM_KEEP_MS / 1000.0 * sampleRate).roundToInt()
+    enum class PieceEnd {
+        SENTENCE,
+        CLAUSE,
+        MID,
+    }
+
+    /**
+     * Classify a piece's end by its last character: sentence punctuation (`.`,
+     * `!`, `؟`, `?`), clause marks (`،`, `؛`, `:`, `,`, `;`), or a mid-sentence
+     * cut (anything else, including empty text).
+     */
+    fun classifyPieceEnd(text: String): PieceEnd = when (text.lastOrNull()) {
+        '.', '!', '؟', '?' -> PieceEnd.SENTENCE
+        '،', '؛', ':', ',', ';' -> PieceEnd.CLAUSE
+        else -> PieceEnd.MID
+    }
+
+    /** Silence kept where a piece meets a boundary of [end] (outer ends keep [TRIM_KEEP_MS]). */
+    fun trimKeepMs(end: PieceEnd): Long = when (end) {
+        PieceEnd.SENTENCE -> TRIM_KEEP_MS
+        PieceEnd.CLAUSE -> TRIM_KEEP_CLAUSE_MS
+        PieceEnd.MID -> TRIM_KEEP_MID_MS
+    }
+
+    /** Pause after a piece ending with [end] (mid-sentence cuts get none). */
+    fun pauseAfterMs(end: PieceEnd): Long = when (end) {
+        PieceEnd.SENTENCE -> PAUSE_SENTENCE_MS
+        PieceEnd.CLAUSE -> PAUSE_CLAUSE_MS
+        PieceEnd.MID -> 0L
+    }
+
+    /**
+     * Trim leading/trailing silence (samples at or below the threshold) while keeping
+     * [keepStartMs] of it at the start and [keepEndMs] at the end (both default to
+     * [TRIM_KEEP_MS]). An all-silent input stays as-is shortened to the kept ends, so a
+     * silent chunk still has its shape.
+     */
+    fun trimSilence(
+        samples: FloatArray,
+        sampleRate: Int,
+        keepStartMs: Long = TRIM_KEEP_MS,
+        keepEndMs: Long = TRIM_KEEP_MS,
+    ): FloatArray {
+        val keepStart = (keepStartMs / 1000.0 * sampleRate).roundToInt()
+        val keepEnd = (keepEndMs / 1000.0 * sampleRate).roundToInt()
         val first = samples.indexOfFirst { abs(it) > TRIM_THRESHOLD }
         val last = samples.indexOfLast { abs(it) > TRIM_THRESHOLD }
         if (first < 0 || last < 0) {
-            return samples.copyOfRange(0, minOf(keep * 2, samples.size))
+            return samples.copyOfRange(0, minOf(keepStart + keepEnd, samples.size))
         }
-        val start = maxOf(0, first - keep)
-        val end = minOf(last + 1 + keep, samples.size)
+        val start = maxOf(0, first - keepStart)
+        val end = minOf(last + 1 + keepEnd, samples.size)
         return samples.copyOfRange(start, end)
     }
 
@@ -308,6 +363,75 @@ object PocketAudio {
         frameRate: Double = 12.5,
         ratio: Double = RUNAWAY_RATIO,
     ): Double = ceil((tokenCount / tokensPerSecond + paddingSeconds) * frameRate) / frameRate * ratio
+
+    /**
+     * Raw generated audio for one piece, plus how its end sounds (decided from its
+     * text by the caller: [classifyPieceEnd] for v1, sentence position for v2).
+     */
+    data class RawPiece(val audio: FloatArray, val end: PieceEnd)
+
+    /** Finished audio plus the time spent in [masterChunk] (for the `synthesize:` log). */
+    data class FinishedSpeech(val audio: FloatArray, val masterMs: Long)
+
+    /**
+     * Finish raw pieces into playable audio: per piece, trim (the first piece's
+     * start and the last piece's end keep [TRIM_KEEP_MS]; cut sides keep
+     * [trimKeepMs] of their boundary), then speed, then [masterChunk]; between
+     * pieces, the boundary's pause ([pauseAfterMs], none mid-sentence). Each
+     * finished piece and pause also goes to [onChunk] as it is ready, so
+     * streaming callers hear pieces one by one with no crossfade; the returned
+     * array concatenates exactly what was emitted. [pieces] is pulled lazily,
+     * so generation can stream; the pause after a piece is skipped once
+     * [isStopped] is true. [clockMs] times the mastering.
+     */
+    fun finishSpeech(
+        pieces: Sequence<RawPiece>,
+        sampleRate: Int,
+        speed: Float,
+        isStopped: () -> Boolean,
+        onChunk: ((FloatArray) -> Unit)? = null,
+        clockMs: () -> Long = { System.nanoTime() / 1_000_000 },
+    ): FinishedSpeech {
+        val pauses = mapOf(
+            PieceEnd.SENTENCE to FloatArray((PAUSE_SENTENCE_MS / 1000.0 * sampleRate).toInt()),
+            PieceEnd.CLAUSE to FloatArray((PAUSE_CLAUSE_MS / 1000.0 * sampleRate).toInt()),
+        )
+        val out = ArrayList<FloatArray>()
+        var masterMs = 0L
+        val iter = pieces.iterator()
+        var carried = if (iter.hasNext()) iter.next() else null
+        var prevEnd: PieceEnd? = null
+        while (true) {
+            val raw = carried ?: break
+            carried = if (iter.hasNext()) iter.next() else null
+            val keepStart = if (prevEnd == null) TRIM_KEEP_MS else trimKeepMs(prevEnd)
+            val keepEnd = if (carried == null) TRIM_KEEP_MS else trimKeepMs(raw.end)
+            var piece = trimSilence(raw.audio, sampleRate, keepStart, keepEnd)
+            piece = applySpeed(piece, speed)
+            val t0 = clockMs()
+            piece = masterChunk(piece, sampleRate)
+            masterMs += clockMs() - t0
+            onChunk?.invoke(piece)
+            out += piece
+            if (carried != null && !isStopped()) {
+                val pause = pauses[raw.end]
+                if (pause != null) {
+                    onChunk?.invoke(pause.copyOf())
+                    out += pause
+                }
+            }
+            prevEnd = raw.end
+        }
+        var total = 0
+        for (part in out) total += part.size
+        val audio = FloatArray(total)
+        var offset = 0
+        for (part in out) {
+            part.copyInto(audio, offset)
+            offset += part.size
+        }
+        return FinishedSpeech(audio, masterMs)
+    }
 
     /** Second-order direct-form biquad: y = b0·x + b1·x1 + b2·x2 − a1·y1 − a2·y2. */
     private data class Biquad(

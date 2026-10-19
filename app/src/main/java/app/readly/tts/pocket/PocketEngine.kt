@@ -30,7 +30,8 @@ import org.json.JSONObject
  * The exported `.onnx` is one streaming step: text, voice conditioning, or the previous
  * latent goes in; one 80 ms audio frame plus the updated caches come out. This class
  * drives that graph with the Farsi generation recipe: 18-token chunks, runaway
- * retry/split, a 150 ms pause between chunks, silence trim, and a mastering chain to
+ * retry/split, boundary-dependent pauses (150 ms after a sentence, 60 ms after a
+ * clause, none mid-sentence), silence trim, and a mastering chain to
  * about −10 LUFS, compressed.
  *
  * The front end comes from the model's metadata flags: v1 speaks normalized Persian
@@ -113,7 +114,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
      * Synthesizes [text] to mono float PCM at [sampleRate]. Generation stops early
      * (returning audio so far, no error) once [isStopped] returns true. [speed] is
      * clamped to 0.5..2.0 (non-finite becomes 1.0). [onChunk] streams each finished
-     * chunk — and the pause after it — for the system TTS service.
+     * piece — and the pause after a sentence/clause-final piece — for the system TTS service.
      *
      * Loudness is applied per chunk, so streaming and non-streaming sound the same.
      * Text that normalizes to empty is a logged skip returning no audio: readly sends
@@ -131,7 +132,6 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         // including v2's per-sentence G2P (counted separately in g2pMs).
         val startMs = SystemClock.elapsedRealtime()
         var g2pMs = 0L
-        var masterMs = 0L
         val chunks = if (!config.isV2) {
             val normalized = NormalizeFa.normalize(clean)
             if (normalized.isEmpty()) {
@@ -142,7 +142,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
                 normalized,
                 { piece -> tokenizer.encode(piece).size },
                 MAX_TOKENS_PER_CHUNK,
-            )
+            ).map { TextChunk(it, PocketAudio.classifyPieceEnd(it)) }
         } else {
             val v2 = v2Chunks(clean, isStopped)
             g2pMs = v2.g2pMs
@@ -153,24 +153,20 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
             return FloatArray(0)
         }
         val clampedSpeed = if (speed.isFinite()) speed.coerceIn(0.5f, 2.0f) else 1.0f
-        val pause = FloatArray((PAUSE_BETWEEN_CHUNKS_MS / 1000.0 * config.sampleRate).toInt())
-        val pieces = ArrayList<FloatArray>()
-        for ((index, chunk) in chunks.withIndex()) {
-            if (isStopped()) break
-            var piece = generateChunk(chunk, 0, isStopped)
-            piece = PocketAudio.trimSilence(piece, config.sampleRate)
-            piece = PocketAudio.applySpeed(piece, clampedSpeed)
-            val masterStart = SystemClock.elapsedRealtime()
-            piece = PocketAudio.masterChunk(piece, config.sampleRate)
-            masterMs += SystemClock.elapsedRealtime() - masterStart
-            onChunk?.invoke(piece)
-            pieces += piece
-            if (index + 1 < chunks.size && !isStopped()) {
-                onChunk?.invoke(pause.copyOf())
-                pieces += pause
-            }
-        }
-        val audio = concatFloats(pieces)
+        val finished = PocketAudio.finishSpeech(
+            sequence {
+                for (chunk in chunks) {
+                    if (isStopped()) break
+                    yield(PocketAudio.RawPiece(generateChunk(chunk.text, 0, isStopped), chunk.end))
+                }
+            },
+            config.sampleRate,
+            clampedSpeed,
+            isStopped,
+            onChunk,
+        ) { SystemClock.elapsedRealtime() }
+        val audio = finished.audio
+        val masterMs = finished.masterMs
         val synthMs = SystemClock.elapsedRealtime() - startMs
         val audioMs = if (config.sampleRate > 0) audio.size * 1000.0 / config.sampleRate else 0.0
         val rtf = if (audioMs > 0) synthMs / audioMs else 0.0
@@ -194,7 +190,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
     }
 
     /** v2 chunk list plus the time spent in G2P (for the `synthesize:` log). */
-    private data class V2Chunks(val chunks: List<String>?, val g2pMs: Long)
+    private data class V2Chunks(val chunks: List<TextChunk>?, val g2pMs: Long)
 
     /**
      * v2 chunk list: normalize, split into sentences, pronounce each one, and
@@ -218,7 +214,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
             Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
             return V2Chunks(null, 0)
         }
-        val chunks = ArrayList<String>()
+        val unitsPerSentence = ArrayList<List<String>>()
         var g2pMs = 0L
         for (sentence in sentences) {
             if (isStopped()) break
@@ -230,14 +226,14 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
                 continue
             }
             val translated = PocketTextV2.translatePhonemes(phonemes)
-            chunks += PocketTextV2.splitChunks(
+            unitsPerSentence += PocketTextV2.splitChunks(
                 translated,
                 { piece -> tokenizer.encode(PocketTextV2.stripEzafe(piece)).size },
                 MAX_TOKENS_PER_CHUNK,
                 PocketTextV2.MIN_TOKENS,
             ).map { PocketTextV2.stripEzafe(it) }
         }
-        return V2Chunks(chunks, g2pMs)
+        return V2Chunks(v2TextChunks(unitsPerSentence), g2pMs)
     }
 
     /** Generate one chunk in a single attempt (no runaway recovery). */
@@ -334,11 +330,16 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         }
         Log.i("Readly", "Pocket TTS: chunk hit the length cap; splitting ${words.size} words")
         val half = words.size / 2
-        val seam = FloatArray((SPLIT_SEAM_MS / 1000.0 * config.sampleRate).toInt())
         val first = generateChunk(words.subList(0, half).joinToString(" "), depth + 1, isStopped)
         if (isStopped()) return first
         val second = generateChunk(words.subList(half, words.size).joinToString(" "), depth + 1, isStopped)
-        return concatFloats(listOf(first, seam, second))
+        // A word cut takes the mid-sentence rule: 25 ms kept at each cut side, no pause.
+        return concatFloats(
+            listOf(
+                PocketAudio.trimSilence(first, config.sampleRate, PocketAudio.TRIM_KEEP_MS, PocketAudio.TRIM_KEEP_MID_MS),
+                PocketAudio.trimSilence(second, config.sampleRate, PocketAudio.TRIM_KEEP_MID_MS, PocketAudio.TRIM_KEEP_MS),
+            ),
+        )
     }
 
     /**
@@ -529,8 +530,6 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         private const val EOS_THRESHOLD = -2.0f
         private const val FRAMES_AFTER_EOS = 0
         private const val MAX_TOKENS_PER_CHUNK = 18
-        private const val PAUSE_BETWEEN_CHUNKS_MS = 150.0
-        private const val SPLIT_SEAM_MS = 50.0
         private const val MAX_SPLIT_DEPTH = 2
 
         private val TEXT_GATE = floatArrayOf(1f, 0f, 0f)
@@ -695,6 +694,25 @@ private data class PocketConfig(
 }
 
 private data class BakedVoice(val name: String, val frames: Int, val conditioning: FloatArray)
+
+/** One text chunk to generate, plus how its end sounds. */
+internal data class TextChunk(val text: String, val end: PocketAudio.PieceEnd)
+
+/**
+ * v2 chunk boundaries from the phoneme texts the pieces came from: a piece ending
+ * at the end of its sentence's phonemes ends a sentence; ezafe/word cuts inside
+ * carry no punctuation, so they are mid-sentence. Never classified by last
+ * character: the phoneme alphabet's `?` is a phone, not a question mark.
+ */
+internal fun v2TextChunks(unitsPerSentence: List<List<String>>): List<TextChunk> =
+    unitsPerSentence.flatMap { units ->
+        units.mapIndexed { index, text ->
+            TextChunk(
+                text,
+                if (index == units.size - 1) PocketAudio.PieceEnd.SENTENCE else PocketAudio.PieceEnd.MID,
+            )
+        }
+    }
 
 /** Grow-once token-position cache, mirroring the reference `_Cache`. */
 internal class Cache(private val stride: Int, capacity: Int) {

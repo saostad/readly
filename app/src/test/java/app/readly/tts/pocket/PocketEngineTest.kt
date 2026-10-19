@@ -58,6 +58,25 @@ class PocketEngineTest {
     }
 
     @Test
+    fun v2SentenceFinalChunksEndSentences() {
+        // Each sentence's phonemes end a sentence; ezafe/word cuts inside don't.
+        val chunks = v2TextChunks(
+            listOf(
+                listOf("ketAbe1 jadide1", "duste1 man"),
+                listOf("miz ?ast"),
+            ),
+        )
+        assertEquals(
+            listOf(
+                TextChunk("ketAbe1 jadide1", PocketAudio.PieceEnd.MID),
+                TextChunk("duste1 man", PocketAudio.PieceEnd.SENTENCE),
+                TextChunk("miz ?ast", PocketAudio.PieceEnd.SENTENCE),
+            ),
+            chunks,
+        )
+    }
+
+    @Test
     fun missingFileGivesThePathInTheMessage() {
         val missing = File(temp.root, "pocket-farsi-v1/pocket-farsi-v1.onnx")
         try {
