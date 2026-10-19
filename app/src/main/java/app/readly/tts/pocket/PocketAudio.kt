@@ -249,8 +249,11 @@ object PocketAudio {
     /**
      * Master one chunk to about [TARGET_LUFS]: 70 Hz high-pass, pre-gain to
      * [PRE_TARGET_LUFS] (clamped), 6:1 compression, make-up gain to [TARGET_LUFS], and a
-     * look-ahead peak limiter at [PEAK_CEILING]. Output length equals input length.
-     * All-zero input passes through unchanged.
+     * look-ahead peak limiter at [PEAK_CEILING]. The limiter shaves loudness off the
+     * peaks it catches, so the make-up is re-applied after limiting (up to a few
+     * rounds) until the limited output measures at the target; the limiter still runs
+     * last, so no output sample exceeds [PEAK_CEILING]. Output length equals input
+     * length. All-zero input passes through unchanged.
      */
     fun masterChunk(samples: FloatArray, sampleRate: Int): FloatArray {
         if (samples.isEmpty()) {
@@ -278,6 +281,15 @@ object PocketAudio {
             return samples.copyOf()
         }
         out = applyGainDb(out, TARGET_LUFS - postLoudness)
+        // Limiting only ever lowers loudness; without this the −10 target measured
+        // −11.8 on the fixture (the limiter caught 1.8 LU of peaks). Each round's
+        // shave shrinks, so a few rounds land within 0.1 LU of the target.
+        repeat(3) {
+            out = applyLimiter(out, sampleRate)
+            val limited = measureLufs(out, sampleRate)
+            if (limited.isInfinite() || limited >= TARGET_LUFS - 0.1) return out
+            out = applyGainDb(out, TARGET_LUFS - limited)
+        }
         return applyLimiter(out, sampleRate)
     }
 
