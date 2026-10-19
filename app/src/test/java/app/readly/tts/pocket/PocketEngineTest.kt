@@ -2,6 +2,9 @@ package app.readly.tts.pocket
 
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -123,6 +126,51 @@ class PocketEngineTest {
                 assertEquals(message, e.message)
             }
         }
+    }
+
+    @Test
+    fun pendingSameTextPrefetchIsAwaited() {
+        val calls = AtomicInteger()
+        val started = CountDownLatch(1)
+        V2Prefetcher { text ->
+            calls.incrementAndGet()
+            started.countDown()
+            Thread.sleep(300)
+            V2PrefetchData(
+                listOf(TextChunk(text, PocketAudio.PieceEnd.SENTENCE)),
+                emptyList(),
+            )
+        }.use { prefetcher ->
+            prefetcher.prefetch("hello")
+            assertTrue("compute never started", started.await(10, TimeUnit.SECONDS))
+            assertTrue(prefetcher.take("hello") is V2PrefetchTake.Pending)
+            // Awaiting consumes the running compute instead of recomputing it.
+            val take = prefetcher.await("hello")
+            assertTrue("expected Ready, was $take", take is V2PrefetchTake.Ready)
+            assertEquals("hello", (take as V2PrefetchTake.Ready).data.chunks!!.single().text)
+            assertEquals(1, calls.get())
+            assertTrue(prefetcher.take("hello") is V2PrefetchTake.Miss)
+            // A different text still misses, so the caller computes inline.
+            assertTrue(prefetcher.await("other") is V2PrefetchTake.Miss)
+        }
+    }
+
+    @Test
+    fun pocketThreadCountIsClampedTo2To4() {
+        assertEquals(2, PocketEngine.MIN_THREADS)
+        assertEquals(4, PocketEngine.MAX_THREADS)
+        assertEquals(2, PocketEngine.threadCount(1))
+        assertEquals(2, PocketEngine.threadCount(2))
+        assertEquals(2, PocketEngine.threadCount(3))
+        assertEquals(3, PocketEngine.threadCount(4))
+        assertEquals(4, PocketEngine.threadCount(5))
+        assertEquals(4, PocketEngine.threadCount(8))
+    }
+
+    @Test
+    fun g2pSessionsAreSingleThreaded() {
+        assertEquals(1, G2p.INTRA_OP_THREADS)
+        assertEquals(1, G2p.INTER_OP_THREADS)
     }
 
     private fun awaitTake(prefetcher: V2Prefetcher, text: String): V2PrefetchTake {

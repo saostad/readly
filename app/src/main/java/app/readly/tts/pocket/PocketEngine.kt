@@ -87,9 +87,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         env = OrtEnvironment.getEnvironment()
         session = try {
             OrtSession.SessionOptions().use { options ->
-                options.setIntraOpNumThreads(
-                    (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 6),
-                )
+                options.setIntraOpNumThreads(threadCount(Runtime.getRuntime().availableProcessors()))
                 env.createSession(path, options)
             }
         } catch (e: OrtException) {
@@ -166,6 +164,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         val startMs = SystemClock.elapsedRealtime()
         var g2pMs = 0L
         var prefetched = false
+        var prefetchWait = false
         val chunks = if (!config.isV2) {
             val normalized = NormalizeFa.normalize(clean)
             if (normalized.isEmpty()) {
@@ -181,6 +180,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
             val v2 = v2ChunksWithPrefetch(clean, isStopped)
             g2pMs = v2.g2pMs
             prefetched = v2.prefetched
+            prefetchWait = v2.prefetchWait
             v2.chunks ?: return FloatArray(0)
         }
         if (chunks.isEmpty()) {
@@ -205,7 +205,11 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         val synthMs = SystemClock.elapsedRealtime() - startMs
         val audioMs = if (config.sampleRate > 0) audio.size * 1000.0 / config.sampleRate else 0.0
         val rtf = if (audioMs > 0) synthMs / audioMs else 0.0
-        val g2pPart = if (prefetched) "0 (prefetched)" else g2pMs.toString()
+        val g2pPart = when {
+            prefetched -> "0 (prefetched)"
+            prefetchWait -> "$g2pMs (prefetch wait)"
+            else -> g2pMs.toString()
+        }
         Log.i(
             "Readly",
             "synthesize: chars=${text.length} speed=$speed " +
@@ -229,34 +233,61 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
     }
 
     /** v2 chunk list plus the time spent in G2P (for the `synthesize:` log). */
-    private data class V2Chunks(val chunks: List<TextChunk>?, val g2pMs: Long, val prefetched: Boolean = false)
+    private data class V2Chunks(
+        val chunks: List<TextChunk>?,
+        val g2pMs: Long,
+        val prefetched: Boolean = false,
+        val prefetchWait: Boolean = false,
+    )
 
     /**
-     * v2 chunks, reusing a prefetched front end when it is ready for exactly
-     * [clean]; otherwise the inline path below (which also reports G2P errors).
-     * A prefetch still running for this text is cancelled first, so the inline
-     * call runs alone instead of contending for the G2P session.
+     * v2 chunks, reusing a prefetched front end for exactly [clean]; a
+     * prefetch still running for this text is awaited (its wait counts as
+     * G2P time, so the log stays honest) instead of being cancelled and
+     * recomputed. Only a different text or a failed/cancelled prefetch
+     * computes inline below (which also reports G2P errors).
      */
     private fun v2ChunksWithPrefetch(clean: String, isStopped: () -> Boolean): V2Chunks {
         val p = prefetcher
         if (p != null) {
             when (val take = p.take(clean)) {
-                is V2PrefetchTake.Ready -> {
-                    for (blank in take.data.blanks) {
-                        Log.i("Readly", "Pocket: no phonemes for ${blank.take(40)}")
+                is V2PrefetchTake.Ready -> return useReady(take.data, clean, 0, prefetched = true)
+                is V2PrefetchTake.Pending -> {
+                    val waitStart = SystemClock.elapsedRealtime()
+                    when (val awaited = p.await(clean)) {
+                        is V2PrefetchTake.Ready -> return useReady(
+                            awaited.data,
+                            clean,
+                            SystemClock.elapsedRealtime() - waitStart,
+                            prefetchWait = true,
+                        )
+                        is V2PrefetchTake.Miss, is V2PrefetchTake.Failed -> Unit
+                        is V2PrefetchTake.Pending -> Unit // unreachable: await never pends
                     }
-                    val chunks = take.data.chunks
-                    if (chunks == null) {
-                        Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
-                        return V2Chunks(null, 0, true)
-                    }
-                    return V2Chunks(chunks, 0, true)
                 }
-                is V2PrefetchTake.Pending -> p.cancelFor(clean)
                 is V2PrefetchTake.Miss, is V2PrefetchTake.Failed -> Unit
             }
         }
         return v2Chunks(clean, isStopped)
+    }
+
+    /** Uses a prefetched front end, logging its blank sentences (like the inline path). */
+    private fun useReady(
+        data: V2PrefetchData,
+        clean: String,
+        g2pMs: Long,
+        prefetched: Boolean = false,
+        prefetchWait: Boolean = false,
+    ): V2Chunks {
+        for (blank in data.blanks) {
+            Log.i("Readly", "Pocket: no phonemes for ${blank.take(40)}")
+        }
+        val chunks = data.chunks
+        if (chunks == null) {
+            Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
+            return V2Chunks(null, g2pMs, prefetched, prefetchWait)
+        }
+        return V2Chunks(chunks, g2pMs, prefetched, prefetchWait)
     }
 
     /**
@@ -638,6 +669,17 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         private const val MAX_TOKENS_PER_CHUNK = 18
         private const val MAX_SPLIT_DEPTH = 2
 
+        /**
+         * Synthesis threads: one core stays free for G2P prefetch and
+         * playback, and past 4 threads the phone gains nothing.
+         */
+        internal const val MIN_THREADS = 2
+        internal const val MAX_THREADS = 4
+
+        /** Synthesis threads for a host with [availableProcessors] cores. */
+        internal fun threadCount(availableProcessors: Int): Int =
+            (availableProcessors - 1).coerceIn(MIN_THREADS, MAX_THREADS)
+
         private val TEXT_GATE = floatArrayOf(1f, 0f, 0f)
         private val LATENT_GATE = floatArrayOf(0f, 1f, 0f)
         private val COND_GATE = floatArrayOf(0f, 0f, 1f)
@@ -816,7 +858,7 @@ internal sealed interface V2PrefetchTake {
     /** Ready to use (consumed: a second take for the same text misses). */
     data class Ready(val data: V2PrefetchData) : V2PrefetchTake
 
-    /** Still computing; the caller computes inline instead of waiting. */
+    /** Still computing; the caller waits for it ([V2Prefetcher.await]). */
     object Pending : V2PrefetchTake
 
     /** Nothing was prefetched for this text. */
@@ -872,6 +914,30 @@ internal class V2Prefetcher(private val compute: (String) -> V2PrefetchData) : C
         } catch (e: CancellationException) {
             V2PrefetchTake.Miss
         } catch (e: ExecutionException) {
+            V2PrefetchTake.Failed
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            V2PrefetchTake.Failed
+        }
+    }
+
+    /**
+     * Waits for the prefetched result for [text] and consumes it, like
+     * [take]. Never returns [V2PrefetchTake.Pending]: a stale entry (a
+     * different text, or one cancelled while waiting) misses, so the caller
+     * computes inline. A caller interrupt is retried inline too. Thread-safe.
+     */
+    fun await(text: String): V2PrefetchTake {
+        val future = synchronized(lock) { cache[text] } ?: return V2PrefetchTake.Miss
+        return try {
+            val data = future.get()
+            synchronized(lock) { cache.remove(text) }
+            V2PrefetchTake.Ready(data)
+        } catch (e: CancellationException) {
+            synchronized(lock) { cache.remove(text) }
+            V2PrefetchTake.Miss
+        } catch (e: ExecutionException) {
+            synchronized(lock) { cache.remove(text) }
             V2PrefetchTake.Failed
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()

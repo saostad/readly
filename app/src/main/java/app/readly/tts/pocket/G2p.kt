@@ -37,19 +37,19 @@ class G2p private constructor(encoderBytes: ByteArray, decoderBytes: ByteArray) 
     private val decoder: OrtSession
 
     init {
-        val threads = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 6)
-        encoder = openSession(encoderBytes, threads)
+        encoder = openSession(encoderBytes)
         decoder = try {
-            openSession(decoderBytes, threads)
+            openSession(decoderBytes)
         } catch (e: Exception) {
             encoder.close()
             throw e
         }
     }
 
-    private fun openSession(bytes: ByteArray, threads: Int): OrtSession {
+    private fun openSession(bytes: ByteArray): OrtSession {
         OrtSession.SessionOptions().use { options ->
-            options.setIntraOpNumThreads(threads)
+            options.setIntraOpNumThreads(INTRA_OP_THREADS)
+            options.setInterOpNumThreads(INTER_OP_THREADS)
             return env.createSession(bytes, options)
         }
     }
@@ -343,6 +343,13 @@ class G2p private constructor(encoderBytes: ByteArray, decoderBytes: ByteArray) 
         // parity test guards these (every step's bias comes from them).
         private const val NUM_BUCKETS = 32
         private const val MAX_DISTANCE = 128
+
+        /**
+         * G2P runs beside Pocket synthesis (prefetch), so each session takes
+         * one core: a single intra-op and inter-op thread.
+         */
+        internal const val INTRA_OP_THREADS = 1
+        internal const val INTER_OP_THREADS = 1
 
         private const val ENCODER_ASSET = "ge2pe/encoder.onnx"
         private const val DECODER_ASSET = "ge2pe/decoder.onnx"
