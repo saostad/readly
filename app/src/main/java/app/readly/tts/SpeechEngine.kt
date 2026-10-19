@@ -119,6 +119,28 @@ class SpeechEngine(store: VoiceModelStore, g2pProvider: (() -> G2p)? = null) : C
         return audio.samples
     }
 
+    /**
+     * Starts pronouncing [text] ahead on the prefetch thread, so the next
+     * chunk's synthesis can reuse it. Thread-safe (may be called from any
+     * thread); no-op unless this is a Pocket v2 voice. Never throws.
+     */
+    fun prefetch(text: String) {
+        try {
+            pocket?.prefetch(text)
+        } catch (_: Exception) {
+            // Prefetch never fails synthesis.
+        }
+    }
+
+    /** Cancels any prefetched work. Thread-safe; never throws. */
+    fun cancelPrefetch() {
+        try {
+            pocket?.cancelPrefetch()
+        } catch (_: Exception) {
+            // Prefetch never fails synthesis.
+        }
+    }
+
     override fun close() {
         if (pocket != null) pocket.close() else tts?.release()
     }

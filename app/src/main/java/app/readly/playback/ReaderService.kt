@@ -1650,7 +1650,7 @@ class ReaderService : Service() {
             startIndex = startIndex,
             sampleRate = rate,
             synth = { index, isStopped, emit ->
-                synthChunk(chunks[index].text, isStopped, emit, docPack, lang)
+                synthChunk(chunks[index].text, isStopped, emit, docPack, lang, chunks.getOrNull(index + 1)?.text)
             },
             sink = TrackSink(track),
             onChunkStarted = { index ->
@@ -1745,6 +1745,8 @@ class ReaderService : Service() {
             existing
         }
         current?.stop()
+        // Stop/NEXT/PREVIOUS/new READ: the prefetched next chunk is stale.
+        engines.cancelPrefetch()
     }
 
     /**
@@ -1753,8 +1755,9 @@ class ReaderService : Service() {
      * Runs on the producer thread; the engine call itself runs on `readly-tts`
      * inside [EngineManager] (which also records the per-pack RTF EMA). Pocket
      * streams partial pieces through [emit] as they finish (emitted on `readly-tts`);
-     * sherpa engines emit once at the end, as before. The time-left stats below
-     * still use the whole chunk's audio.
+     * sherpa engines emit once at the end, as before. [nextText] starts the next
+     * chunk's G2P on the prefetch thread (Pocket v2 only) while this chunk
+     * synthesizes. The time-left stats below still use the whole chunk's audio.
      */
     private fun synthChunk(
         text: String,
@@ -1762,7 +1765,11 @@ class ReaderService : Service() {
         emit: (FloatArray) -> Unit,
         pack: VoicePack,
         lang: String,
+        nextText: String?,
     ) {
+        if (nextText != null && pack.family == VoiceFamily.POCKET) {
+            engines.prefetch(pack.id, nextText)
+        }
         val speakerId = speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
         val speed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
