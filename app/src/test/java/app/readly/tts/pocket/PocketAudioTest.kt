@@ -107,6 +107,20 @@ class PocketAudioTest {
         assertTrue(silent.contentEquals(PocketAudio.masterChunk(silent, 24000)))
     }
 
+    @Test
+    fun masterChunkIsFastOnHost() {
+        // The phone build does this per chunk; on the host 6 s of audio must master
+        // well under a frame budget after JIT warm-up (round 14: was O(n·lookahead)).
+        val (raw, sampleRate) = readMono16BitWav("/pocket/raw-v1-6s.wav")
+        repeat(3) { PocketAudio.masterChunk(raw, sampleRate) }
+        val t0 = System.nanoTime()
+        val mastered = PocketAudio.masterChunk(raw, sampleRate)
+        val ms = (System.nanoTime() - t0) / 1e6
+        println("masterChunk 6 s fixture: %.1f ms".format(ms))
+        assertEquals(raw.size, mastered.size)
+        assertTrue("masterChunk took %.1f ms, expected < 60 ms".format(ms), ms < 60.0)
+    }
+
     private fun sine997(sampleRate: Int, seconds: Int): FloatArray {
         val n = sampleRate * seconds
         return FloatArray(n) { i -> 0.1f * sin(2.0 * PI * 997.0 * i / sampleRate).toFloat() }

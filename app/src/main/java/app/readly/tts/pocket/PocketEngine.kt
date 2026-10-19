@@ -131,6 +131,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         // including v2's per-sentence G2P (counted separately in g2pMs).
         val startMs = SystemClock.elapsedRealtime()
         var g2pMs = 0L
+        var masterMs = 0L
         val chunks = if (!config.isV2) {
             val normalized = NormalizeFa.normalize(clean)
             if (normalized.isEmpty()) {
@@ -159,7 +160,9 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
             var piece = generateChunk(chunk, 0, isStopped)
             piece = PocketAudio.trimSilence(piece, config.sampleRate)
             piece = PocketAudio.applySpeed(piece, clampedSpeed)
+            val masterStart = SystemClock.elapsedRealtime()
             piece = PocketAudio.masterChunk(piece, config.sampleRate)
+            masterMs += SystemClock.elapsedRealtime() - masterStart
             onChunk?.invoke(piece)
             pieces += piece
             if (index + 1 < chunks.size && !isStopped()) {
@@ -174,7 +177,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         Log.i(
             "Readly",
             "synthesize: chars=${text.length} speed=$speed " +
-                "synthMs=$synthMs g2pMs=$g2pMs audioMs=${audioMs.toLong()} " +
+                "synthMs=$synthMs g2pMs=$g2pMs masterMs=$masterMs audioMs=${audioMs.toLong()} " +
                 "rtf=${String.format(Locale.US, "%.3f", rtf)}",
         )
         return audio
