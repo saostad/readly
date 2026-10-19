@@ -127,6 +127,10 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         onChunk: ((FloatArray) -> Unit)? = null,
     ): FloatArray {
         val clean = text.replace("\u0000", "")
+        // The clock starts before chunking so synthMs/rtf reflect all work,
+        // including v2's per-sentence G2P (counted separately in g2pMs).
+        val startMs = SystemClock.elapsedRealtime()
+        var g2pMs = 0L
         val chunks = if (!config.isV2) {
             val normalized = NormalizeFa.normalize(clean)
             if (normalized.isEmpty()) {
@@ -139,7 +143,9 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
                 MAX_TOKENS_PER_CHUNK,
             )
         } else {
-            v2Chunks(clean, isStopped) ?: return FloatArray(0)
+            val v2 = v2Chunks(clean, isStopped)
+            g2pMs = v2.g2pMs
+            v2.chunks ?: return FloatArray(0)
         }
         if (chunks.isEmpty()) {
             Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
@@ -147,7 +153,6 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         }
         val clampedSpeed = if (speed.isFinite()) speed.coerceIn(0.5f, 2.0f) else 1.0f
         val pause = FloatArray((PAUSE_BETWEEN_CHUNKS_MS / 1000.0 * config.sampleRate).toInt())
-        val startMs = SystemClock.elapsedRealtime()
         val pieces = ArrayList<FloatArray>()
         for ((index, chunk) in chunks.withIndex()) {
             if (isStopped()) break
@@ -169,7 +174,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         Log.i(
             "Readly",
             "synthesize: chars=${text.length} speed=$speed " +
-                "synthMs=$synthMs audioMs=${audioMs.toLong()} " +
+                "synthMs=$synthMs g2pMs=$g2pMs audioMs=${audioMs.toLong()} " +
                 "rtf=${String.format(Locale.US, "%.3f", rtf)}",
         )
         return audio
@@ -185,32 +190,38 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         }
     }
 
+    /** v2 chunk list plus the time spent in G2P (for the `synthesize:` log). */
+    private data class V2Chunks(val chunks: List<String>?, val g2pMs: Long)
+
     /**
      * v2 chunk list: normalize, split into sentences, pronounce each one, and
      * split the phonemes into 18/8-token chunks (ezafe marks guide the split
-     * and are stripped before the model). Null means a logged skip (nothing
-     * speakable). Sentences are pronounced as their turn comes rather than
-     * all upfront, so stopping stays responsive and the first chunk streams
-     * without waiting for every sentence's G2P; the chunk sequence — and so
-     * the pauses — is the same either way.
+     * and are stripped before the model). Null chunks mean a logged skip
+     * (nothing speakable). Sentences are pronounced as their turn comes
+     * rather than all upfront, so stopping stays responsive and the first
+     * chunk streams without waiting for every sentence's G2P; the chunk
+     * sequence — and so the pauses — is the same either way.
      */
-    private fun v2Chunks(clean: String, isStopped: () -> Boolean): List<String>? {
+    private fun v2Chunks(clean: String, isStopped: () -> Boolean): V2Chunks {
         val engine = g2p ?: error("v2 voice without a pronunciation model")
         val normalized = try {
             PocketTextV2.normalizeForModel(clean)
         } catch (e: IllegalArgumentException) {
             Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
-            return null
+            return V2Chunks(null, 0)
         }
         val sentences = PocketTextV2.splitSentences(normalized)
         if (sentences.isEmpty()) {
             Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
-            return null
+            return V2Chunks(null, 0)
         }
         val chunks = ArrayList<String>()
+        var g2pMs = 0L
         for (sentence in sentences) {
             if (isStopped()) break
+            val g2pStart = SystemClock.elapsedRealtime()
             val phonemes = engine.phonemise(PocketTextV2.cleanSentenceForG2p(sentence))
+            g2pMs += SystemClock.elapsedRealtime() - g2pStart
             if (phonemes.isBlank()) {
                 Log.i("Readly", "Pocket: no phonemes for ${sentence.take(40)}")
                 continue
@@ -223,7 +234,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
                 PocketTextV2.MIN_TOKENS,
             ).map { PocketTextV2.stripEzafe(it) }
         }
-        return chunks
+        return V2Chunks(chunks, g2pMs)
     }
 
     /** Generate one chunk in a single attempt (no runaway recovery). */

@@ -1,30 +1,38 @@
 #!/usr/bin/env python3
-"""Export Homo-GE2PE-Persian-HF (ByT5 G2P) to encoder + decoder ONNX.
+"""Export Homo-GE2PE-Persian-HF (ByT5 G2P) to encoder + KV-cache decoder ONNX.
 
 The G2P turns one cleaned Persian sentence into a phoneme string for Pocket
-TTS Farsi v2. This script exports the torch model as two plain graphs with NO
-KV cache (every decode step feeds the full decoder prefix; the model is 8.3 M
-params, so a step is milliseconds): `out/ge2pe/encoder.onnx` and
-`out/ge2pe/decoder.onnx`. Both are weight-only int8 (per-channel int8
-weights, fp32 compute) when the check still passes on the quantized files,
-otherwise the fp32 files ship.
+TTS Farsi v2. This script exports the torch model as two graphs:
+`out/ge2pe/encoder.onnx` (hidden states plus each decoder layer's
+cross-attention K/V, computed once per sentence) and `out/ge2pe/decoder.onnx`
+(one single-token step: last token + past self K/V + cross K/V in, logits +
+grown self K/V out). Both are weight-only int8 (per-channel int8 weights,
+fp32 compute) when the check still passes on the quantized files, otherwise
+the fp32 files ship.
 
-Inputs are never padded (one sentence per call), so neither graph takes an
+Inputs are never padded (one sentence per call), so no graph takes an
 attention mask. ByT5 byte ids: UTF-8 byte b -> id b + 3; 0 = pad (also the
 decoder start token), 1 = EOS, 2 = unk; 259..383 are sentinels.
+
+The decoder's self-attention position bias comes from a `self_bias_buckets`
+input (one relative-position bucket per cached key, computed by the caller):
+the gather from the baked bias table stays in the graph, the bucket math
+stays exact integer code on the caller side.
 
 Usage (from repo root):
     uv run --project tools/pocket-export python tools/pocket-export/export_g2p.py
     uv run --project tools/pocket-export python tools/pocket-export/export_g2p.py --check
 
 --check runs a numpy beam search over the exported files (the same algorithm
-the Kotlin G2p runs: width 5, max 512, early stopping, length penalty 1.0)
-and requires byte-identical strings to torch `generate` on all 53 sentences.
+the Kotlin G2p runs: width 5, max 512, early stopping, length penalty 1.0,
+with cache reorder) and requires byte-identical strings to torch `generate`
+on all 55 sentences.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -34,7 +42,6 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 OUT_DIR = HERE / "out" / "ge2pe"
 FP32_DIR = HERE / "out" / "ge2pe-fp32"
-SENTENCES = HERE / "../../.agents/handoff/ref/v2/sentences.txt"
 G2P_MODEL_ID = "mehdi-hf/Homo-GE2PE-Persian-HF"
 
 PAD_ID = 0
@@ -44,6 +51,10 @@ NUM_BEAMS = 5
 MAX_LENGTH = 512
 LENGTH_PENALTY = 1.0
 OPSET = 17
+# GE2PE config (relative_attention_num_buckets/max_distance); the Kotlin G2p
+# hard-codes the same pair, and the parity checks guard both.
+NUM_BUCKETS = 32
+MAX_DISTANCE = 128
 
 GOLDEN = HERE / "../../app/src/test/resources/pocket/v2-golden.jsonl"
 
@@ -56,6 +67,31 @@ def decode_bytes(ids: list[int]) -> str:
     return bytes(i - BYTE_OFFSET for i in ids if 3 <= i <= 258).decode("utf-8", errors="ignore")
 
 
+def self_bias_buckets(past_len: int) -> list[int]:
+    """Relative-position buckets for one decode step (exact integer port).
+
+    Query position `past_len` over keys 0..past_len, decoder-style
+    (bidirectional=False): mirrors `T5Attention._relative_position_bucket`
+    with the GE2PE bucket constants. `check()` asserts this matches HF on
+    0..512 before trusting it.
+    """
+    buckets = NUM_BUCKETS
+    max_exact = buckets // 2
+    out = []
+    for key in range(past_len + 1):
+        rel = past_len - key  # -(memory - query), clamped to >= 0
+        if rel < max_exact:
+            out.append(rel)
+        else:
+            large = max_exact + int(
+                math.log(rel / max_exact)
+                / math.log(MAX_DISTANCE / max_exact)
+                * (buckets - max_exact)
+            )
+            out.append(min(large, buckets - 1))
+    return out
+
+
 def export() -> tuple[Path, Path]:
     import torch
     from transformers import T5ForConditionalGeneration
@@ -63,45 +99,118 @@ def export() -> tuple[Path, Path]:
     print(f"loading {G2P_MODEL_ID}")
     model = T5ForConditionalGeneration.from_pretrained(G2P_MODEL_ID)
     model.eval()
-    # Eager attention decomposes to plain MatMul/Add/Softmax, which traces.
-    # The causal mask is built explicitly in DecoderWrapper (below): the
-    # mask helpers return None and rely on SDPA's is_causal, which the trace
-    # decomposes into unmasked attention.
-    model.config._attn_implementation = "eager"
+    n_layers = len(model.decoder.block)
+    n_heads = model.config.num_heads
+    d_kv = model.config.d_kv
+    assert n_layers == 2, f"expected 2 decoder layers, got {n_layers}"
 
     class EncoderWrapper(torch.nn.Module):
         def __init__(self, m):
             super().__init__()
             self.encoder = m.encoder
+            self.cross_k = torch.nn.ModuleList(
+                [m.decoder.block[i].layer[1].EncDecAttention.k for i in range(n_layers)]
+            )
+            self.cross_v = torch.nn.ModuleList(
+                [m.decoder.block[i].layer[1].EncDecAttention.v for i in range(n_layers)]
+            )
 
         def forward(self, input_ids):
-            return self.encoder(input_ids=input_ids, return_dict=False)[0]
+            hidden = self.encoder(input_ids=input_ids, return_dict=False)[0]
+            b, s, _ = hidden.shape
+            outs: list[torch.Tensor] = [hidden]
+            for i in range(n_layers):
+                k = self.cross_k[i](hidden).view(b, s, n_heads, d_kv).transpose(1, 2)
+                v = self.cross_v[i](hidden).view(b, s, n_heads, d_kv).transpose(1, 2)
+                outs += [k, v]
+            return tuple(outs)
 
-    class DecoderWrapper(torch.nn.Module):
+    class DecoderStep(torch.nn.Module):
+        """One cached decode step: token in, logits + grown self K/V out.
+
+        The attention core is explicit (the HF stack's mask/cache plumbing
+        does not trace); every weight is the model's own submodule, called
+        directly. Layer 1 reuses layer 0's position bias, as the HF stack
+        does (only block 0 has a bias table).
+        """
+
         def __init__(self, m):
             super().__init__()
-            self.decoder = m.decoder
+            self.embed = m.decoder.embed_tokens
+            self.blocks = m.decoder.block
+            self.final_norm = m.decoder.final_layer_norm
             self.lm_head = m.lm_head
+            self.bias_table = (
+                m.decoder.block[0].layer[0].SelfAttention.relative_attention_bias
+            )
 
-        def forward(self, decoder_input_ids, encoder_hidden_states):
-            # Explicit 4D causal mask from dynamic shape ops (a 4D mask is
-            # passed through untouched, so the tracer cannot drop it).
-            seq = decoder_input_ids.shape[1]
-            pos = torch.arange(seq, device=decoder_input_ids.device)
-            causal = pos[:, None] >= pos[None, :]
-            mask = torch.zeros(
-                1, 1, seq, seq,
-                dtype=torch.float32,
-                device=decoder_input_ids.device,
-            ).masked_fill(~causal, torch.finfo(torch.float32).min)
-            hidden = self.decoder(
-                input_ids=decoder_input_ids,
-                attention_mask=mask,
-                encoder_hidden_states=encoder_hidden_states,
-                use_cache=False,
-                return_dict=False,
-            )[0]
-            return self.lm_head(hidden)
+        def self_attn(self, x, layer, past_k, past_v, bias):
+            sa = layer.SelfAttention
+            b, q, _ = x.shape
+            h = sa.n_heads
+            d = sa.key_value_proj_dim
+            qn = sa.q(x).view(b, q, h, d).transpose(1, 2)
+            kn = sa.k(x).view(b, q, h, d).transpose(1, 2)
+            vn = sa.v(x).view(b, q, h, d).transpose(1, 2)
+            k = torch.cat([past_k, kn], dim=2)
+            v = torch.cat([past_v, vn], dim=2)
+            scores = torch.matmul(qn, k.transpose(2, 3)) + bias
+            w = torch.softmax(scores, dim=-1)
+            o = torch.matmul(w, v).transpose(1, 2).contiguous().view(b, q, h * d)
+            return sa.o(o), k, v
+
+        def cross_attn(self, x, layer, ck, cv):
+            ca = layer.EncDecAttention
+            b, q, _ = x.shape
+            h = ca.n_heads
+            d = ca.key_value_proj_dim
+            qn = ca.q(x).view(b, q, h, d).transpose(1, 2)
+            scores = torch.matmul(qn, ck.transpose(2, 3))
+            w = torch.softmax(scores, dim=-1)
+            o = torch.matmul(w, cv).transpose(1, 2).contiguous().view(b, q, h * d)
+            return ca.o(o)
+
+        def one_layer(self, x, block, past_k, past_v, ck, cv, bias):
+            h = block.layer[0].layer_norm(x)
+            h, out_k, out_v = self.self_attn(h, block.layer[0], past_k, past_v, bias)
+            x = x + h
+            h = self.cross_attn(block.layer[1].layer_norm(x), block.layer[1], ck, cv)
+            x = x + h
+            return block.layer[2](x), out_k, out_v
+
+        def forward(
+            self,
+            decoder_input_ids,
+            past_k_0,
+            past_v_0,
+            past_k_1,
+            past_v_1,
+            cross_k_0,
+            cross_v_0,
+            cross_k_1,
+            cross_v_1,
+            self_bias_buckets,
+        ):
+            x = self.embed(decoder_input_ids)
+            bias = (
+                self.bias_table(self_bias_buckets)
+                .permute(1, 0)
+                .unsqueeze(0)
+                .unsqueeze(2)
+            )
+            x, out_k_0, out_v_0 = self.one_layer(
+                x, self.blocks[0], past_k_0, past_v_0, cross_k_0, cross_v_0, bias
+            )
+            x, out_k_1, out_v_1 = self.one_layer(
+                x, self.blocks[1], past_k_1, past_v_1, cross_k_1, cross_v_1, bias
+            )
+            return (
+                self.lm_head(self.final_norm(x)),
+                out_k_0,
+                out_v_0,
+                out_k_1,
+                out_v_1,
+            )
 
     FP32_DIR.mkdir(parents=True, exist_ok=True)
     enc_path = FP32_DIR / "encoder.onnx"
@@ -113,26 +222,76 @@ def export() -> tuple[Path, Path]:
             (input_ids,),
             str(enc_path),
             input_names=["input_ids"],
-            output_names=["last_hidden_state"],
+            output_names=[
+                "last_hidden_state",
+                "cross_k_0",
+                "cross_v_0",
+                "cross_k_1",
+                "cross_v_1",
+            ],
             dynamic_axes={
                 "input_ids": {0: "batch", 1: "seq"},
                 "last_hidden_state": {0: "batch", 1: "seq"},
+                "cross_k_0": {0: "batch", 2: "enc"},
+                "cross_v_0": {0: "batch", 2: "enc"},
+                "cross_k_1": {0: "batch", 2: "enc"},
+                "cross_v_1": {0: "batch", 2: "enc"},
             },
             opset_version=OPSET,
             dynamo=False,
         )
         print(f"wrote {enc_path} ({enc_path.stat().st_size / 1e6:.1f} MB)")
-        hidden = torch.zeros(1, 16, model.config.d_model)
+        step_inputs = (
+            torch.ones(1, 1, dtype=torch.long),
+            torch.zeros(1, n_heads, 0, d_kv),
+            torch.zeros(1, n_heads, 0, d_kv),
+            torch.zeros(1, n_heads, 0, d_kv),
+            torch.zeros(1, n_heads, 0, d_kv),
+            torch.zeros(1, n_heads, 16, d_kv),
+            torch.zeros(1, n_heads, 16, d_kv),
+            torch.zeros(1, n_heads, 16, d_kv),
+            torch.zeros(1, n_heads, 16, d_kv),
+            torch.zeros(1, dtype=torch.long),
+        )
         torch.onnx.export(
-            DecoderWrapper(model),
-            (torch.ones(1, 4, dtype=torch.long), hidden),
+            DecoderStep(model),
+            step_inputs,
             str(dec_path),
-            input_names=["decoder_input_ids", "encoder_hidden_states"],
-            output_names=["logits"],
+            input_names=[
+                "decoder_input_ids",
+                "past_k_0",
+                "past_v_0",
+                "past_k_1",
+                "past_v_1",
+                "cross_k_0",
+                "cross_v_0",
+                "cross_k_1",
+                "cross_v_1",
+                "self_bias_buckets",
+            ],
+            output_names=[
+                "logits",
+                "present_k_0",
+                "present_v_0",
+                "present_k_1",
+                "present_v_1",
+            ],
             dynamic_axes={
-                "decoder_input_ids": {0: "batch", 1: "seq"},
-                "encoder_hidden_states": {0: "batch", 1: "enc_seq"},
-                "logits": {0: "batch", 1: "seq"},
+                "decoder_input_ids": {0: "batch"},
+                "past_k_0": {0: "batch", 2: "past"},
+                "past_v_0": {0: "batch", 2: "past"},
+                "past_k_1": {0: "batch", 2: "past"},
+                "past_v_1": {0: "batch", 2: "past"},
+                "cross_k_0": {0: "batch", 2: "enc"},
+                "cross_v_0": {0: "batch", 2: "enc"},
+                "cross_k_1": {0: "batch", 2: "enc"},
+                "cross_v_1": {0: "batch", 2: "enc"},
+                "self_bias_buckets": {0: "total"},
+                "logits": {0: "batch"},
+                "present_k_0": {0: "batch", 2: "total"},
+                "present_v_0": {0: "batch", 2: "total"},
+                "present_k_1": {0: "batch", 2: "total"},
+                "present_v_1": {0: "batch", 2: "total"},
             },
             opset_version=OPSET,
             dynamo=False,
@@ -205,12 +364,13 @@ def quantize(enc_fp32: Path, dec_fp32: Path, exclude: set[str]) -> tuple[Path, P
 
 
 class OnnxG2p:
-    """Numpy beam search over the exported encoder/decoder.
+    """Numpy beam search over the exported encoder + cached decoder step.
 
     A line-by-line port of `GenerationMixin._beam_search` in transformers
     5.20.1 for batch size 1, `num_beams=5`, `max_length=512`,
     `early_stopping=True`, `length_penalty=1.0`, `do_sample=False`, one EOS
-    token. The Kotlin G2p ports this again; the three must agree exactly.
+    token — plus the cache reorder `_reorder_cache` does. The Kotlin G2p
+    ports this again; the three must agree exactly.
     """
 
     def __init__(self, encoder_path: Path, decoder_path: Path):
@@ -224,12 +384,24 @@ class OnnxG2p:
 
     def generate(self, text: str) -> str:
         ids = encode_bytes(text)
-        enc = self.encoder.run(
+        _, ck0, cv0, ck1, cv1 = self.encoder.run(
             None, {"input_ids": np.asarray([ids], dtype=np.int64)}
-        )[0]
-        enc5 = np.repeat(enc, NUM_BEAMS, axis=0)
-        # Running beams all have length cur_len, so one batched decoder call
-        # per step works (no padding, no mask).
+        )
+        heads = ck0.shape[1]
+        d_kv = ck0.shape[3]
+        cross = {
+            "cross_k_0": np.repeat(ck0, NUM_BEAMS, axis=0).astype(np.float32),
+            "cross_v_0": np.repeat(cv0, NUM_BEAMS, axis=0).astype(np.float32),
+            "cross_k_1": np.repeat(ck1, NUM_BEAMS, axis=0).astype(np.float32),
+            "cross_v_1": np.repeat(cv1, NUM_BEAMS, axis=0).astype(np.float32),
+        }
+        # Running beams all have length cur_len; past self K/V grows one key
+        # per step and is reordered by the beam selection, like HF's cache.
+        past = {
+            f"past_{kv}_{i}": np.zeros((NUM_BEAMS, heads, 0, d_kv), dtype=np.float32)
+            for i in (0, 1)
+            for kv in ("k", "v")
+        }
         running = [[PAD_ID] for _ in range(NUM_BEAMS)]
         running_scores = [0.0] + [-1e9] * (NUM_BEAMS - 1)
         finalized: list[tuple[list[int], float, bool]] = [
@@ -239,14 +411,19 @@ class OnnxG2p:
         beams_to_keep = 2 * NUM_BEAMS
         heuristic_ok = True
         while True:
-            batch = np.asarray(running, dtype=np.int64)
-            logits = self.decoder.run(
-                None,
-                {
-                    "decoder_input_ids": batch,
-                    "encoder_hidden_states": enc5,
-                },
-            )[0][:, -1, :]
+            feeds = {
+                "decoder_input_ids": np.asarray(
+                    [[s[-1]] for s in running], dtype=np.int64
+                ),
+                "self_bias_buckets": np.asarray(
+                    self_bias_buckets(cur_len - 1), dtype=np.int64
+                ),
+                **past,
+                **cross,
+            }
+            outs = self.decoder.run(None, feeds)
+            logits = outs[0][:, 0, :]
+            present = outs[1:]
             shifted = logits - logits.max(axis=1, keepdims=True)
             log_probs = shifted - np.log(np.exp(shifted).sum(axis=1, keepdims=True))
             flat = (log_probs + np.asarray(running_scores)[:, None]).reshape(-1)
@@ -254,6 +431,7 @@ class OnnxG2p:
             # Stable top-K: score desc, flat index asc (HF torch.topk order).
             topk = sorted(range(flat.size), key=lambda i: (-flat[i], i))[:beams_to_keep]
             topk_scores = [float(flat[i]) for i in topk]
+            topk_beams = [i // vocab for i in topk]
             topk_seqs = [running[i // vocab] + [i % vocab] for i in topk]
             hits_stop = [
                 (s[-1] == EOS_ID) or (len(s) >= MAX_LENGTH) for s in topk_seqs
@@ -266,6 +444,15 @@ class OnnxG2p:
             order = sorted(range(beams_to_keep), key=lambda i: (-masked[i], i))[:NUM_BEAMS]
             running = [topk_seqs[i] for i in order]
             running_scores = [masked[i] for i in order]
+            # Reorder the grown cache by the selected beams.
+            past = {
+                name: np.stack(
+                    [arr[topk_beams[i]] for i in order]
+                ).astype(np.float32)
+                for name, arr in zip(
+                    ("past_k_0", "past_v_0", "past_k_1", "past_v_1"), present
+                )
+            }
             # Finalize: finished beams among the top num_beams only, merged
             # with the previous finalized set, best num_beams kept. Ties keep
             # the earlier entry (HF merges old-then-new and top-Ks).
@@ -316,10 +503,24 @@ def check(enc_path: Path, dec_path: Path, torch_ref=None) -> int:
     import json
 
     import torch
+    from transformers.models.t5.modeling_t5 import T5Attention
 
     if not GOLDEN.exists():
         print(f"FAIL: {GOLDEN} is missing; run make_v2_golden.py first")
         return 1
+    # The bucket helper is caller-side exact math (also ported to Kotlin):
+    # prove it against HF on every length the search can reach first.
+    for past_len in range(MAX_LENGTH):
+        want = T5Attention._relative_position_bucket(
+            torch.arange(past_len + 1) - past_len,
+            bidirectional=False,
+            num_buckets=NUM_BUCKETS,
+            max_distance=MAX_DISTANCE,
+        ).tolist()
+        got = self_bias_buckets(past_len)
+        if got != want:
+            print(f"FAIL: bucket helper drifts at past_len={past_len}")
+            return 1
     rows = [json.loads(line) for line in GOLDEN.read_text(encoding="utf-8").splitlines() if line.strip()]
     cleans = [
         (f"{i + 1:02d}" + (f".{j + 1}" if len(row["sentences"]) > 1 else ""), s["clean"], s["g2p_raw"])
