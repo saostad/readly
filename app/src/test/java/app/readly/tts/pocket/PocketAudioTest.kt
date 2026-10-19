@@ -48,6 +48,43 @@ class PocketAudioTest {
     }
 
     @Test
+    fun classifyPieceEndReadsTheLastCharacter() {
+        assertEquals(PocketAudio.PieceEnd.SENTENCE, PocketAudio.classifyPieceEnd("سلام دنیا."))
+        assertEquals(PocketAudio.PieceEnd.SENTENCE, PocketAudio.classifyPieceEnd("really?"))
+        assertEquals(PocketAudio.PieceEnd.SENTENCE, PocketAudio.classifyPieceEnd("خوبی؟"))
+        assertEquals(PocketAudio.PieceEnd.SENTENCE, PocketAudio.classifyPieceEnd("wow!"))
+        assertEquals(PocketAudio.PieceEnd.CLAUSE, PocketAudio.classifyPieceEnd("اول،"))
+        assertEquals(PocketAudio.PieceEnd.CLAUSE, PocketAudio.classifyPieceEnd("دوم؛"))
+        assertEquals(PocketAudio.PieceEnd.CLAUSE, PocketAudio.classifyPieceEnd("note:"))
+        assertEquals(PocketAudio.PieceEnd.CLAUSE, PocketAudio.classifyPieceEnd("a,"))
+        assertEquals(PocketAudio.PieceEnd.CLAUSE, PocketAudio.classifyPieceEnd("b;"))
+        assertEquals(PocketAudio.PieceEnd.MID, PocketAudio.classifyPieceEnd("نیمه کاره"))
+        assertEquals(PocketAudio.PieceEnd.MID, PocketAudio.classifyPieceEnd(""))
+    }
+
+    @Test
+    fun trimSilenceKeepsAsymmetricEnds() {
+        val sampleRate = 24000
+        // 500 ms silence, 100 ms tone, 500 ms silence; constant tone, exact edges.
+        val samples = FloatArray(24000) { i ->
+            if (i in 12000 until 14400) 0.5f else 0f
+        }
+        val trimmed = PocketAudio.trimSilence(samples, sampleRate, keepStartMs = 25, keepEndMs = 60)
+        assertEquals(600 + 2400 + 1440, trimmed.size)
+        assertEquals(0.5f, trimmed[600], 0f)
+        assertEquals(0.5f, trimmed[600 + 2399], 0f)
+        assertEquals(0f, trimmed[599], 0f)
+        assertEquals(0f, trimmed[600 + 2400], 0f)
+        // All-silent input shortens to the two keeps.
+        assertEquals(2040, PocketAudio.trimSilence(FloatArray(24000), sampleRate, 25, 60).size)
+        // Defaults are the old 120/120 path.
+        assertTrue(
+            PocketAudio.trimSilence(samples, sampleRate)
+                .contentEquals(PocketAudio.trimSilence(samples, sampleRate, 120, 120)),
+        )
+    }
+
+    @Test
     fun runawayLimitIs97PercentOfLengthCap() {
         val expected = ceil((18.0 / 3 + 2) * 12.5) / 12.5 * 0.97
         assertEquals(expected, PocketAudio.runawayLimitSeconds(18), 1e-12)
@@ -119,6 +156,145 @@ class PocketAudioTest {
         println("masterChunk 6 s fixture: %.1f ms".format(ms))
         assertEquals(raw.size, mastered.size)
         assertTrue("masterChunk took %.1f ms, expected < 60 ms".format(ms), ms < 60.0)
+    }
+
+    @Test
+    fun finishSpeechMidSentencePiecesLeaveAtMost60ms() {
+        val sampleRate = 24000
+        val emitted = mutableListOf<FloatArray>()
+        var ticks = 0L
+        val finished = PocketAudio.finishSpeech(
+            sequenceOf(
+                PocketAudio.RawPiece(squareBurst(sampleRate, toneMs = 80), PocketAudio.PieceEnd.MID),
+                PocketAudio.RawPiece(squareBurst(sampleRate, toneMs = 160), PocketAudio.PieceEnd.SENTENCE),
+            ),
+            sampleRate,
+            speed = 1.0f,
+            isStopped = { false },
+            onChunk = { emitted += it },
+            clockMs = { ++ticks * 1000 },
+        )
+        val audio = finished.audio
+        // (120 + 80 + 25) + (25 + 160 + 120) ms, no pause.
+        assertEquals((225 + 305) * sampleRate / 1000, audio.size)
+        val (bursts, gaps) = loudBursts(audio, sampleRate)
+        assertEquals(1, gaps.size)
+        assertTrue("mid-sentence gap is ${gaps[0]} samples", gaps[0] <= 60 * sampleRate / 1000)
+        // Order: the 80 ms tone plays before the 160 ms one.
+        assertEquals(2, bursts.size)
+        assertTrue("bursts $bursts", bursts[0] < bursts[1])
+        // Streaming hears exactly the returned audio (no pause emitted).
+        assertEquals(2, emitted.size)
+        assertTrue(audio.contentEquals(emitted[0] + emitted[1]))
+        // Mastering was timed per piece: two pieces, 1000 ms each on the fake clock.
+        assertEquals(2000L, finished.masterMs)
+    }
+
+    @Test
+    fun finishSpeechClauseBoundaryPauses60ms() {
+        val sampleRate = 24000
+        val emitted = mutableListOf<FloatArray>()
+        val finished = PocketAudio.finishSpeech(
+            sequenceOf(
+                PocketAudio.RawPiece(squareBurst(sampleRate, toneMs = 80), PocketAudio.PieceEnd.CLAUSE),
+                PocketAudio.RawPiece(squareBurst(sampleRate, toneMs = 160), PocketAudio.PieceEnd.SENTENCE),
+            ),
+            sampleRate,
+            speed = 1.0f,
+            isStopped = { false },
+            onChunk = { emitted += it },
+        )
+        val audio = finished.audio
+        // (120 + 80 + 60) + 60 pause + (60 + 160 + 120) ms.
+        assertEquals((260 + 60 + 340) * sampleRate / 1000, audio.size)
+        val (bursts, gaps) = loudBursts(audio, sampleRate)
+        assertEquals(1, gaps.size)
+        assertTrue("clause gap is ${gaps[0]} samples", gaps[0] <= 200 * sampleRate / 1000)
+        assertEquals(2, bursts.size)
+        assertTrue("bursts $bursts", bursts[0] < bursts[1])
+        assertEquals(3, emitted.size)
+        assertTrue(audio.contentEquals(emitted[0] + emitted[1] + emitted[2]))
+    }
+
+    @Test
+    fun finishSpeechSentenceEndMatchesLegacyAssembly() {
+        val sampleRate = 24000
+        val raw0 = squareBurst(sampleRate, toneMs = 80)
+        val raw1 = squareBurst(sampleRate, toneMs = 160)
+        val emitted = mutableListOf<FloatArray>()
+        val finished = PocketAudio.finishSpeech(
+            sequenceOf(
+                PocketAudio.RawPiece(raw0, PocketAudio.PieceEnd.SENTENCE),
+                PocketAudio.RawPiece(raw1, PocketAudio.PieceEnd.SENTENCE),
+            ),
+            sampleRate,
+            speed = 1.0f,
+            isStopped = { false },
+            onChunk = { emitted += it },
+        )
+        // The pre-round-15 assembly: 120/120 trims, 150 ms pause, same order.
+        fun legacy(raw: FloatArray): FloatArray {
+            var piece = PocketAudio.trimSilence(raw, sampleRate)
+            piece = PocketAudio.applySpeed(piece, 1.0f)
+            return PocketAudio.masterChunk(piece, sampleRate)
+        }
+        val pause = FloatArray((150.0 / 1000.0 * sampleRate).toInt())
+        val expected = legacy(raw0) + pause + legacy(raw1)
+        assertTrue(finished.audio.contentEquals(expected))
+        // Streaming hears the same bytes: piece, pause, piece.
+        assertEquals(3, emitted.size)
+        assertTrue(finished.audio.contentEquals(emitted[0] + emitted[1] + emitted[2]))
+    }
+
+    /**
+     * Raw model-like output: a loud 440 Hz square tone between 300 ms silences.
+     * Square edges are exactly loud, so trims land on exact samples; the tone
+     * survives the mastering chain far above TRIM_THRESHOLD.
+     */
+    private fun squareBurst(sampleRate: Int, toneMs: Int): FloatArray {
+        val lead = 300 * sampleRate / 1000
+        val tone = toneMs * sampleRate / 1000
+        val tail = 300 * sampleRate / 1000
+        return FloatArray(lead + tone + tail) { i ->
+            if (i in lead until lead + tone) {
+                val half = (2.0 * 440.0 * (i - lead) / sampleRate).toInt()
+                if (half % 2 == 0) 0.3f else -0.3f
+            } else {
+                0f
+            }
+        }
+    }
+
+    /**
+     * Loud bursts (above TRIM_THRESHOLD) with the silence gaps between them, in
+     * samples. Runs less than 10 ms apart merge, so ringing never splits a tone.
+     */
+    private fun loudBursts(audio: FloatArray, sampleRate: Int): Pair<List<Int>, List<Int>> {
+        val runs = mutableListOf<IntRange>()
+        var start = -1
+        for (i in audio.indices) {
+            if (abs(audio[i]) > PocketAudio.TRIM_THRESHOLD) {
+                if (start < 0) start = i
+            } else if (start >= 0) {
+                runs += start..i - 1
+                start = -1
+            }
+        }
+        if (start >= 0) runs += start..audio.size - 1
+        assertTrue("expected loud bursts, found silence", runs.isNotEmpty())
+        val mergeBelow = sampleRate * 10 / 1000
+        val bursts = mutableListOf(runs[0])
+        val gaps = mutableListOf<Int>()
+        for (run in runs.drop(1)) {
+            val gap = run.first - bursts.last().last - 1
+            if (gap < mergeBelow) {
+                bursts[bursts.size - 1] = bursts.last().first..run.last
+            } else {
+                gaps += gap
+                bursts += run
+            }
+        }
+        return Pair(bursts.map { it.last - it.first + 1 }, gaps)
     }
 
     private fun sine997(sampleRate: Int, seconds: Int): FloatArray {
