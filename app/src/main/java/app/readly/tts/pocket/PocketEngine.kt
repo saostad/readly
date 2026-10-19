@@ -31,7 +31,7 @@ import org.json.JSONObject
  * latent goes in; one 80 ms audio frame plus the updated caches come out. This class
  * drives that graph with the Farsi generation recipe: 18-token chunks, runaway
  * retry/split, a 150 ms pause between chunks, silence trim, and a mastering chain to
- * about −12 LUFS, compressed.
+ * about −10 LUFS, compressed.
  *
  * The front end comes from the model's metadata flags: v1 speaks normalized Persian
  * script (capitalized, terminal period); v2 speaks G2P phonemes (no capitalisation,
