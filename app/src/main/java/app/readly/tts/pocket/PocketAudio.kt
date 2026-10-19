@@ -250,10 +250,12 @@ object PocketAudio {
      * Master one chunk to about [TARGET_LUFS]: 70 Hz high-pass, pre-gain to
      * [PRE_TARGET_LUFS] (clamped), 6:1 compression, make-up gain to [TARGET_LUFS], and a
      * look-ahead peak limiter at [PEAK_CEILING]. The limiter shaves loudness off the
-     * peaks it catches, so the make-up is re-applied after limiting (up to a few
-     * rounds) until the limited output measures at the target; the limiter still runs
-     * last, so no output sample exceeds [PEAK_CEILING]. Output length equals input
-     * length. All-zero input passes through unchanged.
+     * peaks it catches, so the output is measured once more after limiting and the
+     * deficit is topped up at 4× as headroom — hotter peaks catch the final
+     * limit harder, so only part survives (the fixture's 1.8 LU deficit lands
+     * at −10.6) — before that final limit; the limiter still runs last, so no
+     * output sample exceeds [PEAK_CEILING]. Output length equals input length.
+     * All-zero input passes through unchanged.
      */
     fun masterChunk(samples: FloatArray, sampleRate: Int): FloatArray {
         if (samples.isEmpty()) {
@@ -282,15 +284,15 @@ object PocketAudio {
         }
         out = applyGainDb(out, TARGET_LUFS - postLoudness)
         // Limiting only ever lowers loudness; without this the −10 target measured
-        // −11.8 on the fixture (the limiter caught 1.8 LU of peaks). Each round's
-        // shave shrinks, so a few rounds land within 0.1 LU of the target.
-        repeat(3) {
-            out = applyLimiter(out, sampleRate)
-            val limited = measureLufs(out, sampleRate)
-            if (limited.isInfinite() || limited >= TARGET_LUFS - 0.1) return out
-            out = applyGainDb(out, TARGET_LUFS - limited)
+        // −11.8 on the fixture (the limiter caught 1.8 LU of peaks). The top-up
+        // quadruples the deficit as headroom: hotter peaks catch the final limit
+        // harder, so only part of the top-up survives on real speech.
+        out = applyLimiter(out, sampleRate)
+        val limited = measureLufs(out, sampleRate)
+        if (!limited.isInfinite() && limited < TARGET_LUFS - 0.1) {
+            out = applyLimiter(applyGainDb(out, (TARGET_LUFS - limited) * 4.0), sampleRate)
         }
-        return applyLimiter(out, sampleRate)
+        return out
     }
 
     /**
@@ -398,29 +400,27 @@ object PocketAudio {
     /**
      * Downward compressor with an RMS detector: the squared signal is smoothed with the
      * attack/release ballistics, then the static 6:1 curve above the threshold is applied.
+     * The threshold test runs in the power domain, so below-threshold samples skip the
+     * sqrt/pow entirely; above it the gain is one pow, with no log.
      */
     private fun applyCompressor(samples: FloatArray, sampleRate: Int): FloatArray {
         val attack = 1.0 - exp(-1.0 / (COMP_ATTACK_MS / 1000.0 * sampleRate))
         val release = 1.0 - exp(-1.0 / (COMP_RELEASE_MS / 1000.0 * sampleRate))
+        val threshPower = 10.0.pow(COMP_THRESHOLD_DB / 10.0)
+        val threshLin = 10.0.pow(COMP_THRESHOLD_DB / 20.0)
+        // gainDb = k·(thr − detDb), so gain = (thrLin/detector)^k.
+        val curve = 1.0 - 1.0 / COMP_RATIO
         val out = FloatArray(samples.size)
         var envelope = 0.0
         for (n in samples.indices) {
             val x = samples[n].toDouble()
             val squared = x * x
             envelope += (if (squared > envelope) attack else release) * (squared - envelope)
-            val detector = sqrt(envelope)
-            if (detector < 1e-10) {
+            if (envelope < threshPower) {
                 out[n] = samples[n]
                 continue
             }
-            val detectorDb = 20.0 * log10(detector)
-            if (detectorDb > COMP_THRESHOLD_DB) {
-                val gainDb =
-                    (COMP_THRESHOLD_DB + (detectorDb - COMP_THRESHOLD_DB) / COMP_RATIO) - detectorDb
-                out[n] = (x * 10.0.pow(gainDb / 20.0)).toFloat()
-            } else {
-                out[n] = samples[n]
-            }
+            out[n] = (x * (threshLin / sqrt(envelope)).pow(curve)).toFloat()
         }
         return out
     }
@@ -429,20 +429,32 @@ object PocketAudio {
      * Look-ahead peak limiter: each sample's gain sees the peak [LIMITER_LOOKAHEAD_MS]
      * ahead, attacks instantly and releases over [LIMITER_RELEASE_MS]. Offline, so the
      * look-ahead delay is compensated (no extra samples); the final clamp guarantees the
-     * ceiling against float error.
+     * ceiling against float error. The look-ahead peak is a sliding-window maximum over
+     * [n, n + lookAhead] with a monotonic deque, O(n).
      */
     private fun applyLimiter(samples: FloatArray, sampleRate: Int): FloatArray {
         if (samples.isEmpty()) return FloatArray(0)
         val lookAhead = maxOf(1, (LIMITER_LOOKAHEAD_MS / 1000.0 * sampleRate).roundToInt())
         val release = 1.0 - exp(-1.0 / (LIMITER_RELEASE_MS / 1000.0 * sampleRate))
         val targets = FloatArray(samples.size)
+        // Indices with decreasing |sample|; each sample enters and leaves once.
+        val deque = IntArray(samples.size)
+        var head = 0
+        var tail = 0
+        val firstEnd = minOf(samples.size, lookAhead + 1)
+        for (i in 0 until firstEnd) {
+            while (tail > head && abs(samples[deque[tail - 1]]) <= abs(samples[i])) tail--
+            deque[tail++] = i
+        }
         for (n in samples.indices) {
-            var peak = 0f
-            val end = minOf(samples.size, n + lookAhead + 1)
-            for (k in n until end) {
-                peak = maxOf(peak, abs(samples[k]))
-            }
+            val peak = abs(samples[deque[head]])
             targets[n] = if (peak < 1e-10f) 1f else minOf(1f, PEAK_CEILING / peak)
+            if (deque[head] == n) head++
+            val incoming = n + lookAhead + 1
+            if (incoming < samples.size) {
+                while (tail > head && abs(samples[deque[tail - 1]]) <= abs(samples[incoming])) tail--
+                deque[tail++] = incoming
+            }
         }
         val out = FloatArray(samples.size)
         var smooth = 1.0
