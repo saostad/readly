@@ -80,7 +80,7 @@ class PocketAudioTest {
     }
 
     @Test
-    fun rawClipMeasuresMinus218AndMastersToMinus12() {
+    fun rawClipMeasuresMinus218AndMastersToMinus10() {
         val (raw, sampleRate) = readMono16BitWav("/pocket/raw-v1-6s.wav")
         assertEquals(24000, sampleRate)
         // ffmpeg ebur128 says −21.8 LUFS for this clip.
@@ -88,7 +88,7 @@ class PocketAudioTest {
 
         val mastered = PocketAudio.masterChunk(raw, sampleRate)
         assertEquals(raw.size, mastered.size)
-        assertEquals(-12.0, PocketAudio.measureLufs(mastered, sampleRate), 1.0)
+        assertEquals(-10.0, PocketAudio.measureLufs(mastered, sampleRate), 1.0)
         val peak = mastered.maxOf { abs(it) }
         assertTrue("peak $peak exceeds ${PocketAudio.PEAK_CEILING}", peak <= PocketAudio.PEAK_CEILING)
 

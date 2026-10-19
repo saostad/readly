@@ -23,8 +23,8 @@ object PocketAudio {
     /** Samples at or below this magnitude count as silence. */
     const val TRIM_THRESHOLD = 0.01f
 
-    /** Mastered chunk target: about −12 LUFS after compression and limiting. */
-    const val TARGET_LUFS = -12.0
+    /** Mastered chunk target: about −10 LUFS after compression and limiting. */
+    const val TARGET_LUFS = -10.0
 
     /** Pre-compressor level: each chunk is gained here first (gain clamped below). */
     const val PRE_TARGET_LUFS = -20.0
@@ -34,8 +34,8 @@ object PocketAudio {
     const val PRE_GAIN_MAX_DB = 24.0
 
     /** Compressor: threshold, ratio, RMS detector ballistics (ffmpeg-approved chain). */
-    const val COMP_THRESHOLD_DB = -24.0
-    const val COMP_RATIO = 4.0
+    const val COMP_THRESHOLD_DB = -28.0
+    const val COMP_RATIO = 6.0
     const val COMP_ATTACK_MS = 5.0
     const val COMP_RELEASE_MS = 80.0
 
@@ -248,7 +248,7 @@ object PocketAudio {
 
     /**
      * Master one chunk to about [TARGET_LUFS]: 70 Hz high-pass, pre-gain to
-     * [PRE_TARGET_LUFS] (clamped), 4:1 compression, make-up gain to [TARGET_LUFS], and a
+     * [PRE_TARGET_LUFS] (clamped), 6:1 compression, make-up gain to [TARGET_LUFS], and a
      * look-ahead peak limiter at [PEAK_CEILING]. Output length equals input length.
      * All-zero input passes through unchanged.
      */
@@ -385,7 +385,7 @@ object PocketAudio {
 
     /**
      * Downward compressor with an RMS detector: the squared signal is smoothed with the
-     * attack/release ballistics, then the static 4:1 curve above the threshold is applied.
+     * attack/release ballistics, then the static 6:1 curve above the threshold is applied.
      */
     private fun applyCompressor(samples: FloatArray, sampleRate: Int): FloatArray {
         val attack = 1.0 - exp(-1.0 / (COMP_ATTACK_MS / 1000.0 * sampleRate))
