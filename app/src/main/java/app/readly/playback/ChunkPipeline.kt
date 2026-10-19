@@ -28,6 +28,10 @@ interface AudioSink {
  * thread writes each chunk to the sink in ~100 ms slices so pause and stop react quickly.
  * [startIndex] lets playback resume mid-document (previous/next sentence).
  *
+ * Each chunk's audio arrives in one or more pieces: [synth] emits partial audio through
+ * its `emit` callback as it finishes (Pocket streams per piece; sherpa engines emit
+ * once at the end), and playback of a chunk starts with its first piece.
+ *
  * Threading contract:
  * - [pause]/[resume] block and unblock the consumer only; the producer keeps filling
  *   until the budget is full, then waits.
@@ -43,14 +47,18 @@ class ChunkPipeline(
     private val chunks: List<Chunk>,
     private val startIndex: Int,
     private val sampleRate: Int,
-    private val synth: (index: Int, isStopped: () -> Boolean) -> FloatArray,
+    private val synth: (index: Int, isStopped: () -> Boolean, emit: (FloatArray) -> Unit) -> Unit,
     private val sink: AudioSink,
     private val onChunkStarted: (Int) -> Unit,
     private val onFinished: () -> Unit,
     private val onError: (Throwable) -> Unit,
     private val onUnderrun: (Int) -> Unit = {},
 ) {
-    private data class Ready(val index: Int, val samples: FloatArray)
+    /** One partial piece of a chunk's audio, played in arrival order. */
+    private data class Piece(val index: Int, val samples: FloatArray)
+
+    /** End of a chunk's audio (emitted even when no piece arrived). */
+    private data class ChunkDone(val index: Int)
 
     private object Finish
 
@@ -167,8 +175,8 @@ class ChunkPipeline(
                     }
                     if (stopped.get()) return
                 }
-                val samples = try {
-                    synth(index, isStopped)
+                try {
+                    synth(index, isStopped) { piece -> emitPiece(index, piece) }
                 } catch (e: Throwable) {
                     if (e is InterruptedException && stopped.get()) {
                         Thread.currentThread().interrupt()
@@ -180,11 +188,10 @@ class ChunkPipeline(
                 if (stopped.get()) return
                 synchronized(budgetLock) {
                     if (stopped.get()) return
-                    budgetedSamples += samples.size
                     budgetedChunks += 1
                 }
                 try {
-                    queue.put(Ready(index, samples))
+                    queue.put(ChunkDone(index))
                 } catch (_: InterruptedException) {
                     return
                 }
@@ -203,10 +210,30 @@ class ChunkPipeline(
         }
     }
 
+    /**
+     * Queues one partial piece of chunk [index], accounting its samples against the
+     * duration budget (the 20 s cap still holds plus at most one overshooting chunk,
+     * as before). Pieces arriving after [stop] are dropped: a stopped synth can still
+     * emit from another thread (Pocket's `onChunk` runs on `readly-tts`).
+     */
+    private fun emitPiece(index: Int, samples: FloatArray) {
+        if (stopped.get()) return
+        synchronized(budgetLock) {
+            if (stopped.get()) return
+            budgetedSamples += samples.size
+        }
+        try {
+            queue.put(Piece(index, samples))
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
     private fun runConsumer() {
         try {
             var firstTaken = false
             var nextIndex = startIndex.coerceIn(0, chunks.size)
+            var startedIndex: Int? = null
             var underrunFired = false
             while (true) {
                 if (stopped.get()) return
@@ -217,11 +244,12 @@ class ChunkPipeline(
                 }
                 if (item == null) {
                     // Queue empty while active: the producer can't keep up. The initial
-                    // fill before the first chunk is expected buffering, not an underrun.
+                    // fill before the first piece is expected buffering, not an underrun.
+                    // Mid-chunk, the awaited chunk is the one still streaming pieces.
                     if (firstTaken && !underrunFired && !paused && !stopped.get()) {
                         underrunFired = true
                         try {
-                            onUnderrun(nextIndex)
+                            onUnderrun(startedIndex ?: nextIndex)
                         } catch (_: Exception) {
                             // Best-effort signal; never break playback.
                         }
@@ -229,19 +257,43 @@ class ChunkPipeline(
                     continue
                 }
                 if (item === Finish) break
-                item as Ready
-                nextIndex = item.index + 1
+                firstTaken = true
                 underrunFired = false
                 if (stopped.get()) return
                 if (!waitIfPaused()) return
-                try {
-                    onChunkStarted(item.index)
-                } catch (e: Throwable) {
-                    fail(e)
-                    return
+                when (item) {
+                    is Piece -> {
+                        if (startedIndex != item.index) {
+                            startedIndex = item.index
+                            try {
+                                onChunkStarted(item.index)
+                            } catch (e: Throwable) {
+                                fail(e)
+                                return
+                            }
+                        }
+                        if (!writeSlices(item.samples)) return
+                    }
+                    is ChunkDone -> {
+                        if (startedIndex != item.index) {
+                            // No piece arrived (empty audio): the chunk still starts.
+                            startedIndex = item.index
+                            try {
+                                onChunkStarted(item.index)
+                            } catch (e: Throwable) {
+                                fail(e)
+                                return
+                            }
+                        }
+                        startedIndex = null
+                        nextIndex = item.index + 1
+                        synchronized(budgetLock) {
+                            budgetedChunks = (budgetedChunks - 1).coerceAtLeast(0)
+                            budgetLock.notifyAll()
+                        }
+                    }
+                    else -> throw IllegalStateException("unexpected queue item $item")
                 }
-                if (!writeSlices(item.samples)) return
-                firstTaken = true
             }
             if (stopped.get()) return
             // A pause landing on the last slice must hold the finish too: draining a
@@ -266,8 +318,9 @@ class ChunkPipeline(
     }
 
     /**
-     * Writes one chunk in ~100 ms slices, giving duration budget back slice by slice.
-     * Returns false when stopped.
+     * Writes one piece in ~100 ms slices, giving duration budget back slice by slice.
+     * The chunk count goes back when the chunk's [ChunkDone] arrives. Returns false
+     * when stopped.
      */
     private fun writeSlices(samples: FloatArray): Boolean {
         var offset = 0
@@ -286,10 +339,6 @@ class ChunkPipeline(
                 budgetLock.notifyAll()
             }
             offset = end
-        }
-        synchronized(budgetLock) {
-            budgetedChunks = (budgetedChunks - 1).coerceAtLeast(0)
-            budgetLock.notifyAll()
         }
         return !stopped.get()
     }
