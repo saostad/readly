@@ -33,6 +33,34 @@ class VoiceCatalogTest {
     }
 
     @Test
+    fun url_usesSherpaReleaseForBareArchive() {
+        val pack = testPack(archive = "test-pack.tar.bz2")
+        assertEquals(
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/test-pack.tar.bz2",
+            pack.url,
+        )
+    }
+
+    @Test
+    fun url_usesArchiveUrlForHostedArchive() {
+        val pack = testPack(
+            archive = "phonon-31m-en.tar.bz2",
+            archiveUrl = "https://huggingface.co/example/phonon-31m-en.tar.bz2",
+        )
+        assertEquals("https://huggingface.co/example/phonon-31m-en.tar.bz2", pack.url)
+    }
+
+    @Test
+    fun url_prefersFileUrlOverArchiveUrl() {
+        val pack = testPack(
+            archive = "unused.tar.bz2",
+            archiveUrl = "https://example.com/unused.tar.bz2",
+            fileUrl = "https://example.com/model.onnx",
+        )
+        assertEquals("https://example.com/model.onnx", pack.url)
+    }
+
+    @Test
     fun sha256_is64LowercaseHex() {
         val hex64 = Regex("[0-9a-f]{64}")
         for (pack in VoiceCatalog.ALL) {
@@ -389,4 +417,26 @@ class VoiceCatalogTest {
         assertEquals(setOf("ar"), langs("piper-ar_JO-kareem-low"))
         assertEquals(setOf("ru"), langs("piper-ru_RU-dmitri-medium"))
     }
+
+    private fun testPack(
+        archive: String,
+        archiveUrl: String? = null,
+        fileUrl: String? = null,
+    ) = VoicePack(
+        id = "test-pack",
+        displayName = "Test Pack",
+        variant = "test",
+        voiceName = null,
+        family = VoiceFamily.PIPER,
+        archive = archive,
+        sizeBytes = 0L,
+        sha256 = "unused",
+        topDir = "test-pack",
+        modelFile = "test.onnx",
+        speakers = listOf("Default"),
+        rtfNote = "test",
+        sampleRes = 0,
+        archiveUrl = archiveUrl,
+        fileUrl = fileUrl,
+    )
 }

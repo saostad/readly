@@ -41,6 +41,9 @@ data class VoiceFamilyInfo(
  * @param fileUrl direct URL of a single raw model file (Pocket v1 on Hugging
  *   Face); null means the pack is a sherpa tar.bz2 archive. A single-file pack
  *   downloads straight to `<topDir>/<modelFile>` instead of being unpacked.
+ * @param archiveUrl direct URL of a sherpa-style tar.bz2 archive hosted outside
+ *   the sherpa-onnx release (Phonon on Hugging Face); null means the sherpa
+ *   `tts-models` release URL. Ignored when [fileUrl] is set.
  */
 data class VoicePack(
     val id: String,
@@ -59,13 +62,15 @@ data class VoicePack(
     val lang: String? = null,
     val sampleUrl: String? = null,
     val fileUrl: String? = null,
+    val archiveUrl: String? = null,
 ) {
     /**
-     * Download URL: [fileUrl] for single-file packs, else the sherpa-onnx
-     * `tts-models` release.
+     * Download URL: [fileUrl] for single-file packs, then [archiveUrl] for
+     * archives hosted elsewhere, else the sherpa-onnx `tts-models` release.
      */
     val url: String
         get() = fileUrl
+            ?: archiveUrl
             ?: "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$archive"
 
     /** [sizeBytes] in decimal MB, rounded; the progress label shows this total. */
