@@ -85,6 +85,8 @@ dependencies {
     implementation(files("libs/onnxruntime-android-1.28.0-java-for-ort-1.28.2.aar"))
     // Compile-time resource annotations (@RawRes) for the voice sample clips.
     implementation(libs.annotation)
+    // JNA calls Phonon's libptts_ffi.so; the AAR packages the Android natives.
+    implementation(libs.jna) { artifact { type = "aar" } }
     testImplementation(libs.junit)
     // Real org.json for JVM unit tests: Android's stub throws on the host JVM.
     testImplementation(libs.json)

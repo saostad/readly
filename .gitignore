@@ -5,3 +5,5 @@ app/libs/*.aar
 .idea/
 *.iml
 .kotlin/
+# Phonon native library: built locally by tools/phonon/build-android-lib.sh.
+app/src/main/jniLibs/arm64-v8a/libptts_ffi.so

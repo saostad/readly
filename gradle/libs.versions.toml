@@ -7,6 +7,7 @@ readability4j = "1.0.8"
 junit = "4.13.2"
 json = "20240303"
 annotation = "1.9.1"
+jna = "5.17.0"
 
 [libraries]
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonsCompress" }
@@ -15,6 +16,7 @@ readability4j = { module = "net.dankito.readability4j:readability4j", version.re
 junit = { module = "junit:junit", version.ref = "junit" }
 json = { module = "org.json:json", version.ref = "json" }
 annotation = { module = "androidx.annotation:annotation", version.ref = "annotation" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
