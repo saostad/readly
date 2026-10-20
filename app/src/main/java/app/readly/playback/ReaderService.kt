@@ -1753,11 +1753,12 @@ class ReaderService : Service() {
      * Synthesizes one chunk with [pack]'s voice for 2-letter [lang], reading speaker
      * and speed from settings every time so changes apply from the next sentence.
      * Runs on the producer thread; the engine call itself runs on `readly-tts`
-     * inside [EngineManager] (which also records the per-pack RTF EMA). Pocket
-     * streams partial pieces through [emit] as they finish (emitted on `readly-tts`);
-     * sherpa engines emit once at the end, as before. [nextText] starts the next
-     * chunk's G2P on the prefetch thread (Pocket v2 only) while this chunk
-     * synthesizes. The time-left stats below still use the whole chunk's audio.
+     * inside [EngineManager] (which also records the per-pack RTF EMA). Pocket and
+     * Phonon stream partial pieces through [emit] as they finish (emitted on
+     * `readly-tts`); sherpa engines emit once at the end, as before. [nextText]
+     * starts the next chunk's G2P on the prefetch thread (Pocket v2 only) while
+     * this chunk synthesizes. The time-left stats below still use the whole chunk's
+     * audio.
      */
     private fun synthChunk(
         text: String,
@@ -1774,10 +1775,10 @@ class ReaderService : Service() {
         val speed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
         val begin = SystemClock.elapsedRealtime()
-        val audio = if (pack.family == VoiceFamily.POCKET) {
-            engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped, onChunk = emit)
-        } else {
-            engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped).also { emit(it) }
+        val audio = when (pack.family) {
+            VoiceFamily.POCKET, VoiceFamily.PHONON ->
+                engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped, onChunk = emit)
+            else -> engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped).also { emit(it) }
         }
         val synthMs = SystemClock.elapsedRealtime() - begin
         val rate = engines.sampleRateIfLoaded(pack.id) ?: 0

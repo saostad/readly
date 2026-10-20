@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import app.readly.model.VoiceFamily
 import app.readly.model.VoiceModelStore
+import app.readly.tts.phonon.PhononEngine
 import app.readly.tts.pocket.G2p
 import app.readly.tts.pocket.PocketEngine
 import com.k2fsa.sherpa.onnx.GenerationConfig
@@ -35,38 +36,57 @@ class SpeechEngine(store: VoiceModelStore, g2pProvider: (() -> G2p)? = null) : C
     private val dir = store.modelDir.absolutePath
     private val tts: OfflineTts?
     private val pocket: PocketEngine?
+    private val phonon: PhononEngine?
 
     init {
         if (!store.isInstalled()) throw IllegalStateException("Voice model is not installed")
         val startMs = SystemClock.elapsedRealtime()
-        if (pack.family == VoiceFamily.POCKET) {
-            pocket = try {
-                PocketEngine(File(store.modelDir, pack.modelFile), g2pProvider)
-            } catch (e: Exception) {
-                throw IOException(loadError(dir, e), e)
-            } catch (e: LinkageError) {
-                // A missing libonnxruntime4j_jni.so surfaces as UnsatisfiedLinkError,
-                // not Exception; loadError names the missing library.
-                throw IOException(loadError(dir, e), e)
+        when (pack.family) {
+            VoiceFamily.POCKET -> {
+                pocket = try {
+                    PocketEngine(File(store.modelDir, pack.modelFile), g2pProvider)
+                } catch (e: Exception) {
+                    throw IOException(loadError(dir, e), e)
+                } catch (e: LinkageError) {
+                    // A missing libonnxruntime4j_jni.so surfaces as UnsatisfiedLinkError,
+                    // not Exception; loadError names the missing library.
+                    throw IOException(loadError(dir, e), e)
+                }
+                tts = null
+                phonon = null
             }
-            tts = null
-        } else {
-            tts = try {
-                OfflineTts(null, buildConfig(dir))
-            } catch (e: Exception) {
-                throw IOException(loadError(dir, e), e)
-            } catch (e: LinkageError) {
-                // Missing native libs surface as UnsatisfiedLinkError, not Exception.
-                throw IOException(loadError(dir, e), e)
+            VoiceFamily.PHONON -> {
+                phonon = try {
+                    PhononEngine(store.modelDir)
+                } catch (e: Exception) {
+                    throw IOException(loadError(dir, e), e)
+                } catch (e: LinkageError) {
+                    // A missing libptts_ffi.so surfaces as UnsatisfiedLinkError, not
+                    // Exception; loadError names the missing library.
+                    throw IOException(loadError(dir, e), e)
+                }
+                tts = null
+                pocket = null
             }
-            pocket = null
+            else -> {
+                tts = try {
+                    OfflineTts(null, buildConfig(dir))
+                } catch (e: Exception) {
+                    throw IOException(loadError(dir, e), e)
+                } catch (e: LinkageError) {
+                    // Missing native libs surface as UnsatisfiedLinkError, not Exception.
+                    throw IOException(loadError(dir, e), e)
+                }
+                pocket = null
+                phonon = null
+            }
         }
         Log.i("Readly", "${pack.displayName} voice loaded from $dir in ${SystemClock.elapsedRealtime() - startMs} ms")
     }
 
     /** Sample rate of [synthesize] output. */
     val sampleRate: Int
-        get() = pocket?.sampleRate ?: tts!!.sampleRate()
+        get() = phonon?.sampleRate ?: pocket?.sampleRate ?: tts!!.sampleRate()
 
     /**
      * Synthesizes [text] to mono float PCM. Generation stops early (returning audio so far)
@@ -90,6 +110,8 @@ class SpeechEngine(store: VoiceModelStore, g2pProvider: (() -> G2p)? = null) : C
         if (text.isBlank()) return FloatArray(0)
         // Pocket ignores lang (Persian only) and logs its own synthesize line.
         pocket?.let { return it.synthesize(text, speed, isStopped, onChunk) }
+        // Phonon ignores lang too (English only) and logs its own synthesize line.
+        phonon?.let { return it.synthesize(text, speakerId, speed, isStopped, onChunk) }
         val sherpa = tts ?: error("no speech engine is loaded")
         val startMs = SystemClock.elapsedRealtime()
         val callback: (FloatArray) -> Int =
@@ -142,7 +164,13 @@ class SpeechEngine(store: VoiceModelStore, g2pProvider: (() -> G2p)? = null) : C
     }
 
     override fun close() {
-        if (pocket != null) pocket.close() else tts?.release()
+        if (phonon != null) {
+            phonon.close()
+        } else if (pocket != null) {
+            pocket.close()
+        } else {
+            tts?.release()
+        }
     }
 
     private fun buildConfig(dir: String): OfflineTtsConfig {
