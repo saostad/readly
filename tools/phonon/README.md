@@ -3,8 +3,10 @@
 Phonon is a small English text-to-speech model from
 [Gradium](https://github.com/gradium-ai/xn-ptts). It runs on the phone's CPU and is
 about 4× faster than real time on a Pixel 11 Pro. Readly uses it as an
-**experimental** voice: you install it by hand, and it is not offered for
-download in the app.
+**experimental** voice. The app downloads it for you: in **Voices**, pick
+**Phonon** and download the 52 MB pack. It is not part of the first-launch
+download. This page covers rebuilding the native library and installing a model
+by hand.
 
 Licences: the xn-ptts code is MIT or Apache-2.0. The
 [`phonon-31m-en`](https://huggingface.co/gradium/phonon-31m-en) weights and the
@@ -34,10 +36,11 @@ To build from an existing checkout instead, set `XN_PTTS_DIR` to its path. The
 build takes about 10 minutes. The `.so` is git-ignored: every checkout builds
 its own.
 
-## Copy the model to the phone
+## Install by hand (optional, for testing a new model)
 
-Install a **debug** build first (a release build does not allow `run-as`). Then
-download these files from
+The app normally downloads the pack, so this is only for a model you built or
+copied yourself. Install a **debug** build first (a release build does not allow
+`run-as`). Then download these files from
 [huggingface.co/gradium/phonon-31m-en](https://huggingface.co/gradium/phonon-31m-en)
 at commit `52433c46975bfa13144c56204c9f4ee1c5b148aa`:
 
@@ -86,3 +89,23 @@ adb shell run-as app.readly touch no_backup/voices/phonon-31m-en/.complete
 The last command marks the pack as installed; without it Readly treats the
 files as a half-copied download. Restart Readly, then pick **Phonon 31m** under
 Voices → Phonon.
+
+## How the hosted archive was made
+
+Readly downloads
+`https://huggingface.co/saostad/readly-voices/resolve/main/phonon-31m-en/phonon-31m-en.tar.bz2`
+(52,374,958 bytes, SHA-256
+`7b4ced4778b7311e7ea9e2e3a40819ff0f24655a8f6a65b066b449663911c79f`). It is a
+normal tar.bz2 with a single top dir, `phonon-31m-en/`, holding the files
+listed above plus:
+
+- `LICENSE`: the Apache-2.0 text.
+- `README.md`: the sources (the `gradium/phonon-31m-en` commit and the
+  `phonon-voices` files listed above).
+
+Reproducible build from a folder that already has those files:
+
+```sh
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='2026-10-20 00:00Z' \
+    -cjf phonon-31m-en.tar.bz2 phonon-31m-en
+```
