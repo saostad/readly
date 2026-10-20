@@ -381,15 +381,20 @@ class VoiceCatalogTest {
     }
 
     @Test
-    fun phononPack_isHandInstalledEnglish() {
+    fun phononPack_isDownloadableEnglish() {
         val phonon = VoiceCatalog.byId("phonon-31m-en")!!
         assertEquals(VoiceFamily.PHONON, phonon.family)
         assertEquals("Phonon English", phonon.displayName)
         assertEquals("31m", phonon.variant)
-        assertFalse(phonon.downloadable)
-        assertEquals(66_329_986L, phonon.sizeBytes)
+        assertTrue(phonon.downloadable)
+        assertEquals("phonon-31m-en.tar.bz2", phonon.archive)
         assertEquals(
-            "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae",
+            "https://huggingface.co/saostad/readly-voices/resolve/main/phonon-31m-en/phonon-31m-en.tar.bz2",
+            phonon.url,
+        )
+        assertEquals(52_374_958L, phonon.sizeBytes)
+        assertEquals(
+            "7b4ced4778b7311e7ea9e2e3a40819ff0f24655a8f6a65b066b449663911c79f",
             phonon.sha256,
         )
         assertEquals("phonon-31m-en", phonon.topDir)

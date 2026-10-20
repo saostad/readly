@@ -267,11 +267,11 @@ object VoiceCatalog {
             variant = "31m",
             voiceName = null,
             family = VoiceFamily.PHONON,
-            archive = "",
-            // Sum of the files in <noBackupFilesDir>/voices/phonon-31m-en.
-            sizeBytes = 66_329_986L,
-            // The model.q8.gguf hash; the pack is hand-installed, so nothing verifies it yet.
-            sha256 = "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae",
+            archive = "phonon-31m-en.tar.bz2",
+            archiveUrl = "https://huggingface.co/saostad/readly-voices/resolve/main/phonon-31m-en/phonon-31m-en.tar.bz2",
+            // SHA-256 of the archive.
+            sizeBytes = 52_374_958L,
+            sha256 = "7b4ced4778b7311e7ea9e2e3a40819ff0f24655a8f6a65b066b449663911c79f",
             topDir = "phonon-31m-en",
             modelFile = "model.q8.gguf",
             speakers = listOf(

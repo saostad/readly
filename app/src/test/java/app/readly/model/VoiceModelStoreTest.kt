@@ -464,6 +464,43 @@ class VoiceModelStoreTest {
     }
 
     @Test
+    fun install_phononArchive_usesArchiveUrlAndInstalls() {
+        val phonon = VoiceCatalog.byId("phonon-31m-en")!!
+        // Shaped like the hosted archive: one top dir with the model, the voices, LICENSE and README.
+        val entries = mutableMapOf(
+            "phonon-31m-en/LICENSE" to "fake-license".toByteArray(),
+            "phonon-31m-en/README.md" to "fake-readme".toByteArray(),
+            "phonon-31m-en/config.json" to "fake-config".toByteArray(),
+            "phonon-31m-en/model.q8.gguf" to "fake-model".toByteArray(),
+            "phonon-31m-en/tokenizer.json" to "fake-tokenizer".toByteArray(),
+        )
+        for (name in VoiceCatalog.PHONON_VOICE_FILES) {
+            entries["phonon-31m-en/voices/$name.safetensors"] = "fake-$name".toByteArray()
+        }
+        val archive = fixtureArchive(entries)
+        val base = temp.newFolder("voices")
+        val requested = mutableListOf<String>()
+        val store = VoiceModelStore(
+            phonon,
+            base,
+            { url, _ ->
+                requested.add(url)
+                FakeConnection(200, "OK", archive)
+            },
+            sha256(archive),
+            archive.size.toLong(),
+        )
+
+        assertFalse(store.isInstalled())
+        store.install(progress = { _, _, _ -> }, cancelled = { false })
+
+        assertEquals(listOf(phonon.archiveUrl), requested)
+        assertTrue(store.isInstalled())
+        assertTrue(File(base, "phonon-31m-en/voices/zoey.safetensors").isFile)
+        assertFalse(File(base, "phonon-31m-en.tmp").exists())
+    }
+
+    @Test
     fun archiveSizeMb_matchesDisplayedDownloadTotal() {
         assertEquals(320, kokoro.sizeMb)
     }

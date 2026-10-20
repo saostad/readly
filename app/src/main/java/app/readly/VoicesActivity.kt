@@ -684,13 +684,7 @@ class VoicesActivity : Activity(), InstallTask.Listener {
                 }
             }
             if (!installed && !pack.downloadable) {
-                noteText.setText(
-                    if (pack.family == VoiceFamily.PHONON) {
-                        R.string.not_downloadable_note_phonon
-                    } else {
-                        R.string.not_downloadable_note
-                    },
-                )
+                noteText.setText(R.string.not_downloadable_note)
                 noteText.visibility = View.VISIBLE
             } else {
                 noteText.setText(R.string.another_downloading_note)
