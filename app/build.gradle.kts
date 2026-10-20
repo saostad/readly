@@ -1,6 +1,9 @@
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -105,6 +108,53 @@ configurations.all {
     }
 }
 
+/**
+ * Downloads [url] to `<dest>.part`, verifies its SHA-256, then moves it to [dest].
+ * Downloading straight to [dest] would let a killed build leave a truncated AAR that
+ * `onlyIf { !exists() }` reuses forever; the final name must only appear once the
+ * checksum has passed. The `.part` file is deleted on any failure.
+ */
+fun fetchVerifiedAar(url: String, sha256: String, dest: File, name: String) {
+    dest.parentFile.mkdirs()
+    val part = File(dest.parentFile, dest.name + ".part")
+    var moved = false
+    try {
+        try {
+            URI(url).toURL().openStream().use { input ->
+                part.outputStream().use { output -> input.copyTo(output) }
+            }
+        } catch (e: Exception) {
+            throw GradleException(
+                "Could not download $name from $url: ${e.javaClass.name}: ${e.message}",
+                e,
+            )
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        part.inputStream().use { input ->
+            val buf = ByteArray(8192)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                digest.update(buf, 0, n)
+            }
+        }
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        if (!actual.equals(sha256, ignoreCase = true)) {
+            throw GradleException(
+                "$name checksum mismatch: expected $sha256, got $actual",
+            )
+        }
+        try {
+            Files.move(part.toPath(), dest.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (e: AtomicMoveNotSupportedException) {
+            Files.move(part.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+        moved = true
+    } finally {
+        if (!moved) part.delete()
+    }
+}
+
 val sherpaOnnxAarUrl =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-1.13.8.aar"
 val sherpaOnnxAarSha256 =
@@ -116,36 +166,12 @@ tasks.register("fetchSherpaOnnx") {
     onlyIf("sherpa-onnx AAR already present") { !sherpaOnnxAarFile.asFile.exists() }
     outputs.file(sherpaOnnxAarFile)
     doLast {
-        val dest = sherpaOnnxAarFile.asFile
-        dest.parentFile.mkdirs()
-        try {
-            URI(sherpaOnnxAarUrl).toURL().openStream().use { input ->
-                dest.outputStream().use { output -> input.copyTo(output) }
-            }
-        } catch (e: Exception) {
-            dest.delete()
-            throw GradleException(
-                "Could not download sherpa-onnx AAR from $sherpaOnnxAarUrl: " +
-                    "${e.javaClass.name}: ${e.message}",
-                e,
-            )
-        }
-        val digest = MessageDigest.getInstance("SHA-256")
-        dest.inputStream().use { input ->
-            val buf = ByteArray(8192)
-            while (true) {
-                val n = input.read(buf)
-                if (n < 0) break
-                digest.update(buf, 0, n)
-            }
-        }
-        val actual = digest.digest().joinToString("") { "%02x".format(it) }
-        if (!actual.equals(sherpaOnnxAarSha256, ignoreCase = true)) {
-            dest.delete()
-            throw GradleException(
-                "sherpa-onnx AAR checksum mismatch: expected $sherpaOnnxAarSha256, got $actual",
-            )
-        }
+        fetchVerifiedAar(
+            sherpaOnnxAarUrl,
+            sherpaOnnxAarSha256,
+            sherpaOnnxAarFile.asFile,
+            "sherpa-onnx AAR",
+        )
     }
 }
 
@@ -162,36 +188,12 @@ tasks.register("fetchOnnxRuntime") {
     onlyIf("onnxruntime-android AAR already present") { !onnxRuntimeAarFile.asFile.exists() }
     outputs.file(onnxRuntimeAarFile)
     doLast {
-        val dest = onnxRuntimeAarFile.asFile
-        dest.parentFile.mkdirs()
-        try {
-            URI(onnxRuntimeAarUrl).toURL().openStream().use { input ->
-                dest.outputStream().use { output -> input.copyTo(output) }
-            }
-        } catch (e: Exception) {
-            dest.delete()
-            throw GradleException(
-                "Could not download onnxruntime-android AAR from $onnxRuntimeAarUrl: " +
-                    "${e.javaClass.name}: ${e.message}",
-                e,
-            )
-        }
-        val digest = MessageDigest.getInstance("SHA-256")
-        dest.inputStream().use { input ->
-            val buf = ByteArray(8192)
-            while (true) {
-                val n = input.read(buf)
-                if (n < 0) break
-                digest.update(buf, 0, n)
-            }
-        }
-        val actual = digest.digest().joinToString("") { "%02x".format(it) }
-        if (!actual.equals(onnxRuntimeAarSha256, ignoreCase = true)) {
-            dest.delete()
-            throw GradleException(
-                "onnxruntime-android AAR checksum mismatch: expected $onnxRuntimeAarSha256, got $actual",
-            )
-        }
+        fetchVerifiedAar(
+            onnxRuntimeAarUrl,
+            onnxRuntimeAarSha256,
+            onnxRuntimeAarFile.asFile,
+            "onnxruntime-android AAR",
+        )
     }
 }
 
