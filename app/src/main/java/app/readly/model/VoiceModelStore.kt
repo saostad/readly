@@ -94,6 +94,7 @@ class VoiceModelStore(
             if (requiredFiles(pack).any { !File(dir, it).isFile }) return false
             return pack.family == VoiceFamily.SUPERTONIC ||
                 pack.family == VoiceFamily.POCKET ||
+                pack.family == VoiceFamily.PHONON ||
                 File(dir, "espeak-ng-data").isDirectory
         }
 
@@ -102,6 +103,9 @@ class VoiceModelStore(
                 listOf(pack.modelFile, "voices.bin", "tokens.txt")
             VoiceFamily.PIPER -> listOf(pack.modelFile, "tokens.txt")
             VoiceFamily.POCKET -> listOf(pack.modelFile)
+            VoiceFamily.PHONON ->
+                listOf("config.json", "model.q8.gguf", "tokenizer.json") +
+                    VoiceCatalog.PHONON_VOICE_FILES.map { "voices/$it.safetensors" }
             VoiceFamily.SUPERTONIC -> listOf(
                 "duration_predictor.int8.onnx",
                 "text_encoder.int8.onnx",

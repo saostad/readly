@@ -199,6 +199,7 @@ class SpeechEngine(store: VoiceModelStore, g2pProvider: (() -> G2p)? = null) : C
                 provider = "cpu",
             )
             VoiceFamily.POCKET -> error("Pocket is not a sherpa-onnx voice")
+            VoiceFamily.PHONON -> error("Phonon is not a sherpa-onnx voice")
         }
         return OfflineTtsConfig(model = model, maxNumSentences = 1)
     }

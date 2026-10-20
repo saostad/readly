@@ -13,6 +13,7 @@ enum class VoiceFamily {
     SUPERTONIC,
     KITTEN,
     POCKET,
+    PHONON,
 }
 
 /** Card order, titles and taglines for the family-grouped Voices screen. */
@@ -90,6 +91,7 @@ data class VoicePack(
             return setOf(code.substringBefore("_"))
         }
         if (family == VoiceFamily.POCKET) return setOf("fa")
+        if (family == VoiceFamily.PHONON) return setOf("en")
         if (id == "supertonic-3") return VoiceCatalog.SUPERTONIC3_LANGS
         return setOf("en")
     }
@@ -115,6 +117,13 @@ object VoiceCatalog {
         "fi", "fr", "hi", "hr", "hu", "id", "it", "lt", "lv", "nl", "pl",
         "pt", "ro", "ru", "sk", "sl", "sv", "tr", "uk", "vi",
     )
+
+    /**
+     * Phonon voice names, in speaker-id order: the speaker id is the index into
+     * this list, and each name is both the file `voices/<name>.safetensors` and
+     * the name passed to `ptts_set_voice`.
+     */
+    val PHONON_VOICE_FILES = listOf("zoey", "everly", "easton", "micah", "freya", "alfie")
 
     private fun numberedVoices(n: Int): List<String> = (1..n).map { "Voice $it" }
 
@@ -246,6 +255,31 @@ object VoiceCatalog {
             sampleRes = R.raw.sample_pocket_farsi_v2,
             lang = "fa",
             fileUrl = "https://huggingface.co/saostad/readly-voices/resolve/main/pocket-farsi-v2/pocket-farsi-v2.onnx",
+        ),
+        VoicePack(
+            id = "phonon-31m-en",
+            displayName = "Phonon English",
+            variant = "31m",
+            voiceName = null,
+            family = VoiceFamily.PHONON,
+            archive = "",
+            // Sum of the files in <noBackupFilesDir>/voices/phonon-31m-en.
+            sizeBytes = 66_329_986L,
+            // The model.q8.gguf hash; the pack is hand-installed, so nothing verifies it yet.
+            sha256 = "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae",
+            topDir = "phonon-31m-en",
+            modelFile = "model.q8.gguf",
+            speakers = listOf(
+                "Zoey (American, female)",
+                "Everly (American, female)",
+                "Easton (American, male)",
+                "Micah (American, male)",
+                "Freya (British, female)",
+                "Alfie (British, male)",
+            ),
+            rtfNote = "About 4× faster than real time on a Pixel 11 Pro",
+            sampleRes = R.raw.sample_phonon_31m_en,
+            lang = null,
         ),
     )
 
@@ -398,6 +432,7 @@ object VoiceCatalog {
             VoiceFamilyInfo(VoiceFamily.PIPER, "Piper", piperTagline()),
             VoiceFamilyInfo(VoiceFamily.KITTEN, "Kitten", "Compact · 8 voices"),
             VoiceFamilyInfo(VoiceFamily.POCKET, "Pocket", "Natural Persian · 2 voices"),
+            VoiceFamilyInfo(VoiceFamily.PHONON, "Phonon", "Natural English, experimental · 6 voices"),
         )
     }
 
@@ -502,7 +537,8 @@ object VoiceCatalog {
     fun shortName(pack: VoicePack): String {
         val title = familyInfo(pack.family).title
         return when (pack.family) {
-            VoiceFamily.SUPERTONIC, VoiceFamily.KITTEN, VoiceFamily.POCKET -> "$title ${pack.variant}"
+            VoiceFamily.SUPERTONIC, VoiceFamily.KITTEN, VoiceFamily.POCKET, VoiceFamily.PHONON ->
+                "$title ${pack.variant}"
             VoiceFamily.KOKORO -> "$title (${pack.variant})"
             VoiceFamily.PIPER -> {
                 val short = pack.voiceName?.substringBefore(" (") ?: pack.displayName

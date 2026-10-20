@@ -64,6 +64,7 @@
     <string name="another_downloading_note">Another voice is downloading.</string>
     <string name="not_downloadable_button">Not available to download yet</string>
     <string name="not_downloadable_note">Copy the voice file to the phone by hand for now (see tools/pocket-export/README.md).</string>
+    <string name="not_downloadable_note_phonon">Copy the Phonon files to the phone by hand for now (see tools/phonon/README.md).</string>
     <string name="storage_title">Storage on this phone</string>
     <string name="storage_total_format">Total: %1$d MB</string>
     <string name="storage_in_use">in use</string>

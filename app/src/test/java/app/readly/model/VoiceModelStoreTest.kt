@@ -435,6 +435,35 @@ class VoiceModelStoreTest {
     }
 
     @Test
+    fun isInstalled_phonon_needsEveryVoiceFileAndMarker() {
+        val phonon = VoiceCatalog.byId("phonon-31m-en")!!
+        val base = temp.newFolder("voices")
+        fun writeAll() {
+            touch(base, "phonon-31m-en/config.json")
+            touch(base, "phonon-31m-en/model.q8.gguf")
+            touch(base, "phonon-31m-en/tokenizer.json")
+            for (name in VoiceCatalog.PHONON_VOICE_FILES) {
+                touch(base, "phonon-31m-en/voices/$name.safetensors")
+            }
+            touch(base, "phonon-31m-en/.complete")
+        }
+
+        writeAll()
+        assertTrue(VoiceModelStore.isPackInstalled(base, phonon))
+        for (name in VoiceCatalog.PHONON_VOICE_FILES) {
+            val file = File(base, "phonon-31m-en/voices/$name.safetensors")
+            assertTrue(file.delete())
+            assertFalse(
+                "a missing $name voice file must not count as installed",
+                VoiceModelStore.isPackInstalled(base, phonon),
+            )
+            touch(base, "phonon-31m-en/voices/$name.safetensors")
+        }
+        assertFalse(File(base, "phonon-31m-en/espeak-ng-data").exists())
+        assertTrue(VoiceModelStore.isPackInstalled(base, phonon))
+    }
+
+    @Test
     fun archiveSizeMb_matchesDisplayedDownloadTotal() {
         assertEquals(320, kokoro.sizeMb)
     }

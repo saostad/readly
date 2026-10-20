@@ -49,6 +49,7 @@ class VoiceCatalogTest {
             VoiceFamily.SUPERTONIC to 10,
             VoiceFamily.KITTEN to 8,
             VoiceFamily.POCKET to 1,
+            VoiceFamily.PHONON to 6,
         )
         for (pack in VoiceCatalog.ALL) {
             assertEquals(pack.id, expected[pack.family], pack.speakers.size)
@@ -105,7 +106,7 @@ class VoiceCatalogTest {
         for (family in VoiceFamily.values()) {
             assertTrue("$family has no packs", VoiceCatalog.packsFor(family).isNotEmpty())
         }
-        assertEquals(5, VoiceCatalog.FAMILIES.size)
+        assertEquals(6, VoiceCatalog.FAMILIES.size)
     }
 
     @Test
@@ -349,6 +350,31 @@ class VoiceCatalogTest {
             pocket.url,
         )
         assertEquals(app.readly.R.raw.sample_pocket_farsi_v2, pocket.sampleRes)
+    }
+
+    @Test
+    fun phononPack_isHandInstalledEnglish() {
+        val phonon = VoiceCatalog.byId("phonon-31m-en")!!
+        assertEquals(VoiceFamily.PHONON, phonon.family)
+        assertEquals("Phonon English", phonon.displayName)
+        assertEquals("31m", phonon.variant)
+        assertFalse(phonon.downloadable)
+        assertEquals(66_329_986L, phonon.sizeBytes)
+        assertEquals(
+            "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae",
+            phonon.sha256,
+        )
+        assertEquals("phonon-31m-en", phonon.topDir)
+        assertEquals("model.q8.gguf", phonon.modelFile)
+        assertEquals(VoiceCatalog.PHONON_VOICE_FILES.size, phonon.speakers.size)
+        assertEquals(setOf("en"), phonon.languages())
+        assertEquals(0, SmartVoice.rank(phonon))
+        assertEquals("Phonon 31m", VoiceCatalog.shortName(phonon))
+        assertEquals(app.readly.R.raw.sample_phonon_31m_en, phonon.sampleRes)
+        assertEquals(
+            VoiceCatalog.familyInfo(VoiceFamily.PHONON).title,
+            "Phonon",
+        )
     }
 
     @Test
