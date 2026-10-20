@@ -18,7 +18,7 @@ import com.sun.jna.Structure
  */
 internal class PhononTts(modelDir: String, lang: String) : AutoCloseable {
     private var handle: Pointer? =
-        lib.ptts_new(modelDir, 0, lang) ?: throw IllegalStateException(lib.ptts_last_error(null))
+        lib().ptts_new(modelDir, 0, lang) ?: throw IllegalStateException(lib().ptts_last_error(null))
 
     private var onAudio: (FloatArray) -> Boolean = { true }
 
@@ -38,11 +38,11 @@ internal class PhononTts(modelDir: String, lang: String) : AutoCloseable {
 
     /** The voices this checkpoint ships, sorted. */
     val voices: List<String>
-        get() = names(lib.ptts_voices(open()))
+        get() = names(lib().ptts_voices(open()))
 
     /** The languages the model was trained for, as its config lists them. */
     val languages: List<String>
-        get() = names(lib.ptts_languages(open()))
+        get() = names(lib().ptts_languages(open()))
 
     private fun names(block: Pointer): List<String> {
         val names = mutableListOf<String>()
@@ -56,10 +56,10 @@ internal class PhononTts(modelDir: String, lang: String) : AutoCloseable {
     }
 
     /** Speak in [name], one of [voices], from now on. */
-    fun setVoice(name: String) = check(lib.ptts_set_voice(open(), name))
+    fun setVoice(name: String) = check(lib().ptts_set_voice(open(), name))
 
     /** Normalize text as [lang] (en, fr, de, es, pt or none) from now on, with no reload. */
-    fun setLanguage(lang: String) = check(lib.ptts_set_language(open(), lang))
+    fun setLanguage(lang: String) = check(lib().ptts_set_language(open(), lang))
 
     /**
      * Speak [text], handing [onAudio] each piece of audio as soon as it is made: 24 kHz mono
@@ -71,7 +71,7 @@ internal class PhononTts(modelDir: String, lang: String) : AutoCloseable {
         this.onAudio = onAudio
         thrown = null
         val out = Result()
-        val ok = lib.ptts_speak(open(), text, onFrame, null, out)
+        val ok = lib().ptts_speak(open(), text, onFrame, null, out)
         thrown?.let {
             thrown = null
             throw it
@@ -81,14 +81,14 @@ internal class PhononTts(modelDir: String, lang: String) : AutoCloseable {
     }
 
     override fun close() {
-        handle?.let { lib.ptts_free(it) }
+        handle?.let { lib().ptts_free(it) }
         handle = null
     }
 
     private fun open() = handle ?: throw IllegalStateException("PhononTTS is closed")
 
     private fun check(ok: Byte) {
-        if (ok.toInt() == 0) throw IllegalStateException(lib.ptts_last_error(handle))
+        if (ok.toInt() == 0) throw IllegalStateException(lib().ptts_last_error(handle))
     }
 
     /** One utterance's timings: `PttsResult` in ptts.h, whose `size_t` is a `Long` on 64 bits. */
@@ -119,6 +119,36 @@ internal class PhononTts(modelDir: String, lang: String) : AutoCloseable {
     }
 
     private companion object {
-        val lib: Lib = Native.load("ptts_ffi", Lib::class.java)
+        /** Non-null once [Native.load] succeeds; the library stays loaded for the process. */
+        @Volatile
+        private var loaded: Lib? = null
+
+        /** The first load failure, rethrown on every later attempt instead of retrying. */
+        @Volatile
+        private var loadFailure: UnsatisfiedLinkError? = null
+
+        @Synchronized
+        fun lib(): Lib {
+            loadFailure?.let { throw it }
+            loaded?.let { return it }
+            try {
+                return Native.load("ptts_ffi", Lib::class.java).also { loaded = it }
+            } catch (e: LinkageError) {
+                val failure = phononLibraryLoadError(e)
+                loadFailure = failure
+                throw failure
+            }
+        }
     }
 }
+
+/**
+ * The error for a failed `Native.load` of Phonon's library, keeping the original failure as
+ * the cause. It names `libptts_ffi.so` because JNA's own message (and the
+ * `NoClassDefFoundError` that a failed static initializer throws later) does not.
+ */
+internal fun phononLibraryLoadError(cause: Throwable): UnsatisfiedLinkError =
+    UnsatisfiedLinkError(
+        "Couldn't load Phonon's native library libptts_ffi.so: " +
+            "${cause.javaClass.simpleName}: ${cause.message}",
+    ).apply { initCause(cause) }
