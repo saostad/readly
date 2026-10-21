@@ -54,7 +54,7 @@ download); afterwards everything runs on the phone and reading works offline.
 
 Other voices can be downloaded from **Voices**, including Phonon, an
 experimental English voice that is about 3.5× faster than real time on a Pixel
-11 Pro (52 MB download). To build its native library, see
+11 Pro (53 MB download). To build its native library, see
 `tools/phonon/README.md`.
 
 Before anything is spoken, Readly cleans it up: Markdown and HTML formatting,

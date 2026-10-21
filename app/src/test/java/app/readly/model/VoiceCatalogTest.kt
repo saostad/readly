@@ -77,7 +77,7 @@ class VoiceCatalogTest {
             VoiceFamily.SUPERTONIC to 10,
             VoiceFamily.KITTEN to 8,
             VoiceFamily.POCKET to 1,
-            VoiceFamily.PHONON to 6,
+            VoiceFamily.PHONON to 8,
         )
         for (pack in VoiceCatalog.ALL) {
             assertEquals(pack.id, expected[pack.family], pack.speakers.size)
@@ -392,9 +392,9 @@ class VoiceCatalogTest {
             "https://huggingface.co/saostad/readly-voices/resolve/main/phonon-31m-en/phonon-31m-en.tar.bz2",
             phonon.url,
         )
-        assertEquals(52_374_958L, phonon.sizeBytes)
+        assertEquals(52_850_882L, phonon.sizeBytes)
         assertEquals(
-            "7b4ced4778b7311e7ea9e2e3a40819ff0f24655a8f6a65b066b449663911c79f",
+            "a7afb1bb47bf99b233875795bacb43b9911c88f8c9e7e5f3f3692769df46dae0",
             phonon.sha256,
         )
         assertEquals("phonon-31m-en", phonon.topDir)

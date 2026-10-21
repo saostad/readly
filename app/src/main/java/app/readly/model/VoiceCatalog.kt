@@ -128,7 +128,8 @@ object VoiceCatalog {
      * this list, and each name is both the file `voices/<name>.safetensors` and
      * the name passed to `ptts_set_voice`.
      */
-    val PHONON_VOICE_FILES = listOf("zoey", "everly", "easton", "micah", "freya", "alfie")
+    val PHONON_VOICE_FILES =
+        listOf("zoey", "everly", "easton", "micah", "freya", "alfie", "hadley", "preston")
 
     private fun numberedVoices(n: Int): List<String> = (1..n).map { "Voice $it" }
 
@@ -269,9 +270,9 @@ object VoiceCatalog {
             family = VoiceFamily.PHONON,
             archive = "phonon-31m-en.tar.bz2",
             archiveUrl = "https://huggingface.co/saostad/readly-voices/resolve/main/phonon-31m-en/phonon-31m-en.tar.bz2",
+            sizeBytes = 52_850_882L,
             // SHA-256 of the archive.
-            sizeBytes = 52_374_958L,
-            sha256 = "7b4ced4778b7311e7ea9e2e3a40819ff0f24655a8f6a65b066b449663911c79f",
+            sha256 = "a7afb1bb47bf99b233875795bacb43b9911c88f8c9e7e5f3f3692769df46dae0",
             topDir = "phonon-31m-en",
             modelFile = "model.q8.gguf",
             speakers = listOf(
@@ -281,8 +282,10 @@ object VoiceCatalog {
                 "Micah (American, male)",
                 "Freya (British, female)",
                 "Alfie (British, male)",
+                "Hadley (American, female)",
+                "Preston (American, male)",
             ),
-            rtfNote = "About 4× faster than real time on a Pixel 11 Pro",
+            rtfNote = "About 3.5× faster than real time on a Pixel 11 Pro",
             sampleRes = R.raw.sample_phonon_31m_en,
             lang = null,
         ),
@@ -437,7 +440,7 @@ object VoiceCatalog {
             VoiceFamilyInfo(VoiceFamily.PIPER, "Piper", piperTagline()),
             VoiceFamilyInfo(VoiceFamily.KITTEN, "Kitten", "Compact · 8 voices"),
             VoiceFamilyInfo(VoiceFamily.POCKET, "Pocket", "Natural Persian · 2 voices"),
-            VoiceFamilyInfo(VoiceFamily.PHONON, "Phonon", "Natural English, experimental · 6 voices"),
+            VoiceFamilyInfo(VoiceFamily.PHONON, "Phonon", "Natural English, experimental · 8 voices"),
         )
     }
 

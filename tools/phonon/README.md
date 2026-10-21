@@ -4,7 +4,7 @@ Phonon is a small English text-to-speech model from
 [Gradium](https://github.com/gradium-ai/xn-ptts). It runs on the phone's CPU and is
 about 4× faster than real time on a Pixel 11 Pro. Readly uses it as an
 **experimental** voice. The app downloads it for you: in **Voices**, pick
-**Phonon** and download the 52 MB pack. It is not part of the first-launch
+**Phonon** and download the 53 MB pack. It is not part of the first-launch
 download. This page covers rebuilding the native library and installing a model
 by hand.
 
@@ -49,7 +49,7 @@ at commit `52433c46975bfa13144c56204c9f4ee1c5b148aa`:
 - `tokenizer.json`
 
 Put them in a folder called `phonon-31m-en`, and add a `voices` folder with the
-six voices. Each voice comes from
+eight voices. Each voice comes from
 `https://huggingface.co/gradium/phonon-voices/resolve/main/voices/<id>.safetensors`,
 saved as `voices/<name>.safetensors`:
 
@@ -61,6 +61,8 @@ saved as `voices/<name>.safetensors`:
 | micah | `40QrMVgAxFiUnP9f` |
 | freya | `GgfEkEJtxZR7gnpy` |
 | alfie | `X6NceqF285Gr04gb` |
+| hadley | `bXwrkHhURL1VFJdG` |
+| preston | `qIxlZ7Ei8KvWlyQH` |
 
 So the folder looks like this:
 
@@ -75,6 +77,8 @@ phonon-31m-en/
   voices/micah.safetensors
   voices/freya.safetensors
   voices/alfie.safetensors
+  voices/hadley.safetensors
+  voices/preston.safetensors
 ```
 
 Push it into the app's no-backup folder:
@@ -94,8 +98,8 @@ Voices → Phonon.
 
 Readly downloads
 `https://huggingface.co/saostad/readly-voices/resolve/main/phonon-31m-en/phonon-31m-en.tar.bz2`
-(52,374,958 bytes, SHA-256
-`7b4ced4778b7311e7ea9e2e3a40819ff0f24655a8f6a65b066b449663911c79f`). It is a
+(52,850,882 bytes, SHA-256
+`a7afb1bb47bf99b233875795bacb43b9911c88f8c9e7e5f3f3692769df46dae0`). It is a
 normal tar.bz2 with a single top dir, `phonon-31m-en/`, holding the files
 listed above plus:
 

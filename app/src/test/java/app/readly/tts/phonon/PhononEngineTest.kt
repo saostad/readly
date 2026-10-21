@@ -23,13 +23,15 @@ class PhononEngineTest {
 
     @Test
     fun voiceNameFor_mapsSpeakerIdToVoiceFile() {
-        assertEquals(6, VoiceCatalog.PHONON_VOICE_FILES.size)
+        assertEquals(8, VoiceCatalog.PHONON_VOICE_FILES.size)
         assertEquals("zoey", PhononEngine.voiceNameFor(0))
         assertEquals("everly", PhononEngine.voiceNameFor(1))
         assertEquals("easton", PhononEngine.voiceNameFor(2))
         assertEquals("micah", PhononEngine.voiceNameFor(3))
         assertEquals("freya", PhononEngine.voiceNameFor(4))
         assertEquals("alfie", PhononEngine.voiceNameFor(5))
+        assertEquals("hadley", PhononEngine.voiceNameFor(6))
+        assertEquals("preston", PhononEngine.voiceNameFor(7))
     }
 
     @Test
@@ -38,12 +40,12 @@ class PhononEngineTest {
             PhononEngine.voiceNameFor(-1)
         }
         assertTrue(low.message!!.contains("-1"))
-        assertTrue(low.message!!.contains("0..5"))
+        assertTrue(low.message!!.contains("0..7"))
 
         val high = assertThrows(IllegalArgumentException::class.java) {
-            PhononEngine.voiceNameFor(6)
+            PhononEngine.voiceNameFor(8)
         }
-        assertTrue(high.message!!.contains("6"))
-        assertTrue(high.message!!.contains("0..5"))
+        assertTrue(high.message!!.contains("8"))
+        assertTrue(high.message!!.contains("0..7"))
     }
 }
