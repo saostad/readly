@@ -21,10 +21,16 @@ enum class SourceFormat {
  */
 object TextSanitizer {
 
-    fun sanitize(input: String, format: SourceFormat): String {
+    /**
+     * [readHiddenText] off (the default) keeps only what a reader sees on the page:
+     * image descriptions (alt text) and screen-reader-only text are dropped. On, images
+     * with a description are read as that description and screen-reader text stays.
+     */
+    fun sanitize(input: String, format: SourceFormat, readHiddenText: Boolean = false): String {
         val paras = when (format) {
-            SourceFormat.HTML -> htmlParagraphs(input)
-            SourceFormat.PLAIN, SourceFormat.MARKDOWN -> markdownParagraphs(input)
+            SourceFormat.HTML -> htmlParagraphs(input, readHiddenText)
+            SourceFormat.PLAIN, SourceFormat.MARKDOWN ->
+                markdownParagraphs(if (readHiddenText) input else dropMarkdownImages(input))
         }
         return paras.mapNotNull { cleanup(it) }.joinToString("\n\n")
     }
@@ -406,13 +412,26 @@ object TextSanitizer {
     internal const val NON_PROSE_SELECTORS =
         "sup.reference, .mw-ref, ol.references, .references, .reflist, " +
             ".mw-references-wrap, .mw-editsection, .navbox, .hatnote, .noprint"
+    /**
+     * Text that is in the page for screen readers only and never shown (the common
+     * "visually hidden" classes). Shared with `ArticleFetcher`, which strips it before
+     * Readability drops the classes. Only removed when hidden text is off.
+     */
+    internal const val SCREEN_READER_ONLY_SELECTORS =
+        "[class*=sr-only], [class*=visually-hidden], [class*=visuallyhidden], " +
+            "[class*=screen-reader], [class*=screenreader], .element-invisible, .assistive-text"
+
+    /** Markdown images (`![description](src)`), dropped whole when hidden text is off. */
+    private fun dropMarkdownImages(text: String): String = image.replace(text, "")
+
     private val htmlBlocks = setOf("p", "div", "blockquote", "section", "article")
     private val htmlHeadings = setOf("h1", "h2", "h3", "h4", "h5", "h6")
 
-    private fun htmlParagraphs(input: String): List<Para> {
+    private fun htmlParagraphs(input: String, readHiddenText: Boolean): List<Para> {
         val doc = Jsoup.parse(input)
         doc.select(HTML_REMOVE).remove()
         doc.select(NON_PROSE_SELECTORS).remove()
+        if (!readHiddenText) doc.select(SCREEN_READER_ONLY_SELECTORS).remove()
         doc.select("sup").forEach { sup ->
             if (bracketRef.containsMatchIn(sup.text())) sup.remove()
         }
@@ -430,7 +449,7 @@ object TextSanitizer {
         doc.select("figure > img").remove()
         doc.select("img").forEach { img ->
             val alt = img.attr("alt")
-            if (alt.isNotBlank()) img.replaceWith(TextNode(" $alt ")) else img.remove()
+            if (readHiddenText && alt.isNotBlank()) img.replaceWith(TextNode(" $alt ")) else img.remove()
         }
         val paras = mutableListOf<Para>()
         val inlineText = StringBuilder()

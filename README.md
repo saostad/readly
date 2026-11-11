@@ -60,7 +60,9 @@ experimental English voice that is about 3.5× faster than real time on a Pixel
 Before anything is spoken, Readly cleans it up: Markdown and HTML formatting,
 links and bare URLs, footnotes, tables (read as comma-separated cells), code
 blocks (replaced with "Code block skipped.") and emoji are removed, so only
-readable prose reaches the voice. Shared links open as extracted articles; if
+readable prose reaches the voice. Readly reads only the text you'd see on the
+page: picture descriptions (alt text) and text meant only for screen readers
+are skipped unless you turn on **Read image descriptions** in **Voice & speed**. Shared links open as extracted articles; if
 no main article is found, Readly says so and reads the whole page instead.
 
 English text is then read the way a person says it, on every English voice:
@@ -174,10 +176,10 @@ playback screen; off by default) starts the next article when one ends,
 until the end of the list. The square next to the title shows the website's
 name.
 
-Articles picked in the car are read with the in-service quick reader (the
-shared site fixes apply), not the GeckoView article engine, because the engine
-needs the phone screen. Each such reading says so. Paywalled sites the add-on
-would open may only give a teaser in the car.
+Articles picked in the car are read with the same article engine as the phone
+(GeckoView with the paywall add-on), running without a screen. Pages that need
+a sign-in or a human check can't be completed in the car; if the engine can't
+open a page, the quick reader tries it and the reading says so.
 
 Readly isn't installed from the Play Store, so Android Auto hides it until you
 enable unknown sources. Open Android Auto's settings and tap **Version** ten

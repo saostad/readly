@@ -72,6 +72,7 @@ class SettingsSheet(
         )
         fillSwitch(dialog, R.id.sheetNormalizeSwitch, ReaderService.KEY_NORMALIZE_TEXT)
         fillSwitch(dialog, R.id.sheetRespellSwitch, ReaderService.KEY_RESPELL_NAMES, default = false)
+        fillSwitch(dialog, R.id.sheetHiddenTextSwitch, ReaderService.KEY_READ_HIDDEN_TEXT, default = false)
         fillDayFirstSwitch(dialog)
         fillPhoneRow(dialog)
         fillAutoSitesRow(dialog)

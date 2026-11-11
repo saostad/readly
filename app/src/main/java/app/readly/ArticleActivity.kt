@@ -16,16 +16,14 @@ import app.readly.article.ArticleCaptureSession
 import app.readly.article.ArticleConstants
 import app.readly.article.ArticleEngine
 import app.readly.article.ArticleParseGate
-import app.readly.input.ArticleFetcher
+import app.readly.article.RenderedArticle
 import app.readly.input.sites.BrowserRead
 import app.readly.input.sites.SiteBrowserLoadTracker
 import app.readly.input.sites.SiteBrowserPolicy
 import app.readly.input.sites.SiteBrowserReadTracker
-import app.readly.input.sites.SiteUsage
 import app.readly.input.sites.sameReadUrl
 import app.readly.playback.ReaderService
 import app.readly.text.SourceFormat
-import app.readly.text.TextSanitizer
 import java.net.URI
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -629,49 +627,17 @@ class ArticleActivity : Activity() {
                 postParseStale(read)
                 return
             }
-            val app = application as? ReadlyApp
-            val snapshot = app?.siteRules?.snapshotForReading()
-            val usage = SiteUsage()
-            val doc = try {
-                ArticleFetcher(ArticleFetcher::httpUrlOpener)
-                    .extractRenderedHtml(html, snapshotUrl ?: "", snapshot, usage)
-            } catch (e: Exception) {
+            when (
+                val outcome = RenderedArticle.parse(
+                    application as? ReadlyApp, html, snapshotUrl, gateFlags, truncated, updateWarning,
+                    ReaderService.isHiddenTextOn(this),
+                )
+            ) {
                 // Recognizable walls land here with an explanation; the page
                 // stays interactive for genuine sign-in, never spoken.
-                postParseError(read, e.message ?: "${e.javaClass.name}: (no details)")
-                return
+                is RenderedArticle.Outcome.Failed -> postParseError(read, outcome.message)
+                is RenderedArticle.Outcome.Ready -> postHandoff(read, outcome.text, outcome.title, outcome.notice)
             }
-            val clean = TextSanitizer.sanitize(doc.text, SourceFormat.HTML)
-            if (clean.isBlank()) {
-                postParseError(read, "Read page failed: no readable article text was found on this page.")
-                return
-            }
-            SiteBrowserPolicy.handoffTooLargeError(clean.length)?.let { tooLarge ->
-                postParseError(read, tooLarge)
-                return
-            }
-            val startupError = if (snapshot == null) {
-                app?.siteRules?.uiState()?.startupError
-            } else {
-                null
-            }
-            val gateNote = if (gateFlags > 0) {
-                "The page shows possible subscription prompts."
-            } else {
-                null
-            }
-            val truncNote = if (truncated) {
-                "The rendered page was truncated to 5 MB."
-            } else {
-                null
-            }
-            val notice = listOfNotNull(
-                SiteBrowserPolicy.readingNotice(
-                    doc.notice, usage.cleanupApplied, usage.noticeHost(), startupError,
-                ),
-                gateNote, truncNote, updateWarning,
-            ).joinToString(" ").takeIf { it.isNotBlank() }
-            postHandoff(read, clean, doc.title, notice)
         } catch (e: Exception) {
             postParseError(read, "Read page failed: ${e.javaClass.name}: ${e.message}")
         }

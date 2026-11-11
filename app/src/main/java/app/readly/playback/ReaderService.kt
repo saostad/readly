@@ -32,6 +32,8 @@ import app.readly.MainActivity
 import app.readly.R
 import app.readly.ReadlyApp
 import app.readly.VoicesActivity
+import app.readly.article.HeadlessArticleReader
+import app.readly.article.RenderedArticle
 import app.readly.feeds.CarQueue
 import app.readly.feeds.FeedSites
 import app.readly.feeds.VoiceSearch
@@ -118,14 +120,14 @@ class ReaderService : MediaBrowserService() {
         private val CALLER_TOKEN: String = UUID.randomUUID().toString()
         private val CALLER_ONLY_ACTIONS = setOf(ACTION_READ, ACTION_READ_URL, ACTION_PREVIEW)
 
-        /** Shown with a reading started from Android Auto (the phone-screen engine can't run there). */
         /** Android Auto custom actions: one sentence back / forward (⏮ / ⏭ change article there). */
         private const val CUSTOM_SENTENCE_BACK = "app.readly.SENTENCE_BACK"
         private const val CUSTOM_SENTENCE_FORWARD = "app.readly.SENTENCE_FORWARD"
         private const val CUSTOM_PLAY_NEXT = "app.readly.PLAY_NEXT"
 
-        const val CAR_READ_NOTICE =
-            "Read in the car with the quick reader. The paywall add-on only runs when you open a link on the phone."
+        /** Shown when the car's article engine failed and the quick reader read the link instead. */
+        fun carFallbackNotice(engineFailure: String): String =
+            "Read with the quick reader because the article engine couldn't open this page ($engineFailure)."
 
         const val PREFS_NAME = "settings"
         const val KEY_ACTIVE_PACK = "activePackId"
@@ -151,6 +153,16 @@ class ReaderService : MediaBrowserService() {
 
         /** Respell hard names and foreign words from the built-in lexicon (English, default OFF). */
         const val KEY_RESPELL_NAMES = "respellNames"
+
+        /**
+         * Read image descriptions (alt text) and screen-reader-only text (default OFF:
+         * only the text a reader sees on the page).
+         */
+        const val KEY_READ_HIDDEN_TEXT = "readHiddenText"
+
+        fun isHiddenTextOn(context: Context): Boolean =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_READ_HIDDEN_TEXT, false)
 
         /** How an ambiguous date like 09/10 is read: [DateOrder.key] (default month first). */
         const val KEY_DATE_ORDER = "dateOrder"
@@ -462,6 +474,10 @@ class ReaderService : MediaBrowserService() {
      */
     private val pendingRequests = AtomicInteger(0)
 
+    /** The screenless article engine for Android Auto readings, and whether a page is opening. Main thread only. */
+    private var carReader: HeadlessArticleReader? = null
+    private var carReadPending = false
+
     @Volatile
     private var pipeline: ChunkPipeline? = null
 
@@ -642,11 +658,7 @@ class ReaderService : MediaBrowserService() {
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowser.MediaItem>>) =
         carBrowser.loadChildren(parentId, result)
 
-    /**
-     * Android Auto picked an article: read it with the in-service fetcher. The
-     * GeckoView article engine needs the phone screen, so this is the quick reader,
-     * and the reading says so ([CAR_READ_NOTICE]).
-     */
+    /** Android Auto picked an article: read it with the screenless article engine ([startCarRead]). */
     private fun playFromCar(mediaId: String?) {
         val parsed = CarBrowser.parseArticle(mediaId)
         if (parsed == null) {
@@ -726,16 +738,72 @@ class ReaderService : MediaBrowserService() {
         updateNotification()
     }
 
+    /**
+     * Reads an Android Auto article with the same GeckoView engine and paywall add-on
+     * as the phone, without a screen ([HeadlessArticleReader]). If the engine can't
+     * open the page, the in-service quick reader tries it, and the reading says so.
+     * Main thread only.
+     */
     private fun startCarRead(url: String, title: String?) {
-        Log.w(
-            "Readly",
-            "fallback=true attempted=article-engine reason=\"Android Auto has no phone screen\" " +
-                "taken=quick-reader host=${FeedSites.hostOf(url)}",
-        )
         ensureForeground()
         mainHandler.removeCallbacks(idleShutdown)
+        cancelCarRead()
         pendingRequests.incrementAndGet()
-        handleReadUrl(url, title, CAR_READ_NOTICE)
+        carReadPending = true
+        val host = FeedSites.hostOf(url)
+        // Silence the current article now; the page can take a while to open.
+        synchronized(trackLock) { audioTrack?.pause() }
+        executeRead("CAR_OPEN") {
+            stopPipeline()
+            currentHost = host
+            ReaderState.update {
+                it.copy(
+                    status = ReaderStatus.FETCHING,
+                    title = title.orEmpty(),
+                    currentText = "Opening $host…",
+                    index = 0,
+                    total = 0,
+                    errorMessage = null,
+                    notice = null,
+                    prevText = "",
+                    nextText = "",
+                    host = host,
+                    packId = "",
+                    playedChunks = 0,
+                    msPerChar = 0.0,
+                    remainingChars = 0,
+                    retryUrl = null,
+                )
+            }
+            updateNotification()
+        }
+        val reader = carReader ?: HeadlessArticleReader(this).also { carReader = it }
+        reader.read(url) { outcome ->
+            if (!carReadPending) return@read
+            // The pending request passes to the read below, which releases it.
+            carReadPending = false
+            when (outcome) {
+                is RenderedArticle.Outcome.Ready ->
+                    handleRead(outcome.text, outcome.title, SourceFormat.PLAIN.name, outcome.notice)
+                is RenderedArticle.Outcome.Failed -> {
+                    Log.w(
+                        "Readly",
+                        "fallback=true attempted=article-engine reason=\"${outcome.message}\" " +
+                            "taken=quick-reader host=$host",
+                    )
+                    handleReadUrl(url, title, carFallbackNotice(outcome.message), engineFailure = outcome.message)
+                }
+            }
+        }
+    }
+
+    /** Abandons an Android Auto page that is still opening. Main thread only. */
+    private fun cancelCarRead() {
+        carReader?.cancel()
+        if (carReadPending) {
+            carReadPending = false
+            pendingRequests.decrementAndGet()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -751,6 +819,7 @@ class ReaderService : MediaBrowserService() {
         when (intent?.action) {
             ACTION_READ -> {
                 carQueue = null
+                cancelCarRead()
                 pendingRequests.incrementAndGet()
                 handleRead(
                     intent.getStringExtra(EXTRA_TEXT) ?: "",
@@ -761,6 +830,7 @@ class ReaderService : MediaBrowserService() {
             }
             ACTION_READ_URL -> {
                 carQueue = null
+                cancelCarRead()
                 pendingRequests.incrementAndGet()
                 handleReadUrl(
                     intent.getStringExtra(EXTRA_URL) ?: "",
@@ -794,6 +864,9 @@ class ReaderService : MediaBrowserService() {
         mainHandler.removeCallbacks(idleShutdown)
         mainHandler.removeCallbacks(watchdogCheck)
         cancelPreview()
+        cancelCarRead()
+        carReader?.close()
+        carReader = null
         readerExecutor.shutdownNow()
         preloadExecutor.shutdownNow()
         previewExecutor.shutdownNow()
@@ -870,7 +943,11 @@ class ReaderService : MediaBrowserService() {
         }
     }
 
-    private fun handleReadUrl(url: String, titleHint: String?, extraNotice: String?) {
+    /**
+     * Reads [url] with the in-service quick reader. [engineFailure] is set when this is
+     * the fallback after the article engine failed, so a double failure names both.
+     */
+    private fun handleReadUrl(url: String, titleHint: String?, extraNotice: String?, engineFailure: String? = null) {
         executeRead("READ_URL") {
             val finished = AtomicBoolean(false)
             fun finish() {
@@ -921,7 +998,12 @@ class ReaderService : MediaBrowserService() {
                 } else {
                     ArticleFetcher::httpUrlOpener
                 }
-                val doc = ArticleFetcher(opener, siteRules = snapshot, siteUsage = usage).fetch(url)
+                val doc = ArticleFetcher(
+                    opener,
+                    siteRules = snapshot,
+                    siteUsage = usage,
+                    readHiddenText = isHiddenTextOn(this),
+                ).fetch(url)
                 val siteNotice = when {
                     snapshot != null && usage.applied() -> {
                         sites.onRead()
@@ -956,7 +1038,16 @@ class ReaderService : MediaBrowserService() {
                 finish()
                 // A failed eligible link keeps its exact source URL for the
                 // user-invoked browser fallback; anything else clears it.
-                postError(e, SiteBrowserPolicy.retryUrlForFailure(url))
+                val error = if (engineFailure == null) {
+                    e
+                } else {
+                    IOException(
+                        "The article engine couldn't open this page ($engineFailure), " +
+                            "and the quick reader couldn't either (${e.message ?: e.javaClass.simpleName}).",
+                        e,
+                    )
+                }
+                postError(error, SiteBrowserPolicy.retryUrlForFailure(url))
             } finally {
                 finish()
             }
@@ -982,7 +1073,7 @@ class ReaderService : MediaBrowserService() {
         stopPipeline()
         pendingAsk = null
         ReaderState.update { it.copy(notice = null, smartLine = null) }
-        val clean = TextSanitizer.sanitize(text, format)
+        val clean = TextSanitizer.sanitize(text, format, isHiddenTextOn(this))
         val detected = LanguageDetector.detect(this, clean)
         val lang = detected.lang
         val smartOn = isSmartOn(this)
@@ -1722,6 +1813,7 @@ class ReaderService : MediaBrowserService() {
 
     private fun handleStop() {
         carQueue = null
+        cancelCarRead()
         // Immediate silence on the main thread; the join happens below.
         synchronized(trackLock) { audioTrack?.pause() }
         executeRead("STOP") {
@@ -2129,7 +2221,13 @@ class ReaderService : MediaBrowserService() {
      * every other error clears it so no stale link button appears elsewhere.
      */
     private fun postError(e: Throwable, retryUrl: String? = null) {
-        val message = "Couldn't read aloud: ${e.javaClass.name}: ${e.message}"
+        // Readable failures (fetch errors are IOExceptions with a written message) are
+        // shown as written; anything else names its type so it can be reported.
+        val message = if (e is IOException && !e.message.isNullOrBlank()) {
+            "Couldn't read aloud: ${e.message}"
+        } else {
+            "Couldn't read aloud: ${e.javaClass.name}: ${e.message}"
+        }
         Log.e("Readly", message, e)
         setNoisyRegistered(false)
         ReaderState.update { it.copy(status = ReaderStatus.ERROR, errorMessage = message, retryUrl = retryUrl) }

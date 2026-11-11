@@ -53,6 +53,8 @@ class ArticleFetcher(
     private val onWarn: (String) -> Unit = { android.util.Log.w("Readly", it) },
     private val siteRules: SiteReadingSnapshot? = null,
     private val siteUsage: SiteUsage? = null,
+    /** Keep screen-reader-only text (see [TextSanitizer.sanitize]); off reads only what's shown. */
+    private val readHiddenText: Boolean = false,
 ) {
     /** A fetched page, ready for [app.readly.text.TextSanitizer]. */
     data class Document(
@@ -471,6 +473,7 @@ class ArticleFetcher(
      */
     private fun stripNonProse(doc: org.jsoup.nodes.Document) {
         doc.select(TextSanitizer.NON_PROSE_SELECTORS).remove()
+        if (!readHiddenText) doc.select(TextSanitizer.SCREEN_READER_ONLY_SELECTORS).remove()
         doc.body()?.select("h1, h2, h3, h4, h5, h6")
             ?.filter(::isTailSectionHeading)
             ?.forEach(::removeSection)

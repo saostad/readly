@@ -136,6 +136,8 @@
     <string name="normalize_text_label">Read numbers and symbols</string>
     <string name="normalize_text_help">Says dates, money, units and codes the way a person would (English)</string>
     <string name="respell_names_label">Respell hard names</string>
+    <string name="read_hidden_text_label">Read image descriptions</string>
+    <string name="read_hidden_text_help">Also reads picture descriptions (alt text) and text meant only for screen readers. Off reads just the text you see on the page.</string>
     <string name="respell_names_help">Uses a built-in list for names and foreign words (English). Can hurt names a voice already says well.</string>
     <string name="date_day_first_label">Dates day first</string>
     <string name="date_day_first_help">Reads 09/10 as 9 October. A date like 14/03 in the same text decides on its own.</string>

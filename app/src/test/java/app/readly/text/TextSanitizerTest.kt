@@ -53,7 +53,7 @@ class TextSanitizerTest {
         val expected = """
             Hello World.
 
-            This is emphatic and strong and underlined and gone text with inline code and a link plus an image logo, a ref link and.
+            This is emphatic and strong and underlined and gone text with inline code and a link plus an image, a ref link and.
 
             Features.
 
@@ -347,5 +347,19 @@ class TextSanitizerTest {
         )
         assertEquals("", TextSanitizer.forSystemTts("🎉🔥"))
         assertEquals("plain text", TextSanitizer.forSystemTts("  plain text  "))
+    }
+
+    @Test
+    fun hiddenText_offByDefault_onlyWhatIsShownIsRead() {
+        val html = "<p>Before <img src=\"x.png\" alt=\"Chart of sales\"> after.</p>" +
+            "<p><span class=\"visually-hidden\">Opens in a new window</span> Shown text.</p>"
+        assertEquals("Before after.\n\nShown text.", TextSanitizer.sanitize(html, SourceFormat.HTML))
+        assertEquals(
+            "Before Chart of sales after.\n\nOpens in a new window Shown text.",
+            TextSanitizer.sanitize(html, SourceFormat.HTML, readHiddenText = true),
+        )
+        val md = "Look ![A red bike](bike.png) here."
+        assertEquals("Look here.", TextSanitizer.sanitize(md, SourceFormat.MARKDOWN))
+        assertEquals("Look A red bike here.", TextSanitizer.sanitize(md, SourceFormat.MARKDOWN, readHiddenText = true))
     }
 }

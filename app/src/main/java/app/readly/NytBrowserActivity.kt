@@ -239,14 +239,15 @@ class NytBrowserActivity : Activity() {
                     val app = application as? ReadlyApp
                     val snapshot = app?.siteRules?.snapshotForReading()
                     val usage = SiteUsage()
+                    val readHiddenText = ReaderService.isHiddenTextOn(this)
                     val doc = try {
-                        ArticleFetcher(ArticleFetcher::httpUrlOpener)
+                        ArticleFetcher(ArticleFetcher::httpUrlOpener, readHiddenText = readHiddenText)
                             .extractRenderedHtml(snap.html, snap.url, snapshot, usage)
                     } catch (e: Exception) {
                         postReadError(read, e.message ?: "${e.javaClass.name}: (no details)")
                         return
                     }
-                    val clean = TextSanitizer.sanitize(doc.text, SourceFormat.HTML)
+                    val clean = TextSanitizer.sanitize(doc.text, SourceFormat.HTML, readHiddenText)
                     if (clean.isBlank()) {
                         postReadError(read, "Read page failed: no readable article text was found on this page.")
                         return
