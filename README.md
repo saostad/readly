@@ -190,7 +190,9 @@ far through the article you are, estimated from the voice's pace. On the
 phone's Now playing screen the same bar shows time played and the article's
 length; drag it to jump to another sentence.
 
-The playback screen also has a speed button (1.0×, 1.2×, 1.5×, 1.8×) and the
+The playback screen also has a speed button that shows the current speed and
+steps through 1.0×, 1.2×, 1.5× and 1.8× (the line under the sentence confirms
+the new speed for a few seconds), and the
 car's Up next list (the rest of the list the article came from). On the
 websites screen you can turn these on or off:
 

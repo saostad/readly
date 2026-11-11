@@ -146,6 +146,22 @@ class ReaderService : MediaBrowserService() {
         private fun speedLabel(speed: Float): String = String.format(Locale.US, "%.1f×", speed)
 
         /**
+         * The car shows only a custom button's icon, never its label, so each car speed
+         * has an icon showing the number; a speed set on the phone between them gets
+         * the plain gauge (the confirmation line still names it).
+         */
+        private fun speedIcon(speed: Float): Int = when {
+            kotlin.math.abs(speed - 1.0f) < 0.01f -> R.drawable.ic_speed_1_0
+            kotlin.math.abs(speed - 1.2f) < 0.01f -> R.drawable.ic_speed_1_2
+            kotlin.math.abs(speed - 1.5f) < 0.01f -> R.drawable.ic_speed_1_5
+            kotlin.math.abs(speed - 1.8f) < 0.01f -> R.drawable.ic_speed_1_8
+            else -> R.drawable.ic_speed
+        }
+
+        /** How long the car's small line says "Speed: 1.5×" after the button is tapped. */
+        private const val SPEED_CONFIRM_MS = 4_000L
+
+        /**
          * Pause during navigation prompts and other short announcements instead of
          * reading quietly under them (default ON).
          */
@@ -535,6 +551,10 @@ class ReaderService : MediaBrowserService() {
     private var prefetchInFlight: String? = null
     private var prefetchWaiter: ((RenderedArticle.Outcome) -> Unit)? = null
 
+    /** Until when (elapsedRealtime) the car's small line confirms the new speed; main thread only. */
+    private var speedConfirmUntil = 0L
+    private val clearSpeedConfirm = Runnable { syncSession() }
+
     /** Auto-play runs once per Android Auto connection; main thread only. */
     private var autoPlayedThisConnection = false
 
@@ -836,7 +856,10 @@ class ReaderService : MediaBrowserService() {
         val current = prefs.getFloat(KEY_SPEED, 1.0f)
         val next = CAR_SPEEDS.firstOrNull { it > current + 0.01f } ?: CAR_SPEEDS.first()
         prefs.edit().putFloat(KEY_SPEED, next).apply()
-        Toast.makeText(this, "Speed ${speedLabel(next)}", Toast.LENGTH_SHORT).show()
+        // Shown on the car screen (a toast only appears on the phone), then cleared.
+        speedConfirmUntil = SystemClock.elapsedRealtime() + SPEED_CONFIRM_MS
+        mainHandler.removeCallbacks(clearSpeedConfirm)
+        mainHandler.postDelayed(clearSpeedConfirm, SPEED_CONFIRM_MS)
         syncSession()
     }
 
@@ -2911,7 +2934,7 @@ class ReaderService : MediaBrowserService() {
                             val speed = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getFloat(KEY_SPEED, 1.0f)
                             addCustomAction(
                                 PlaybackState.CustomAction.Builder(
-                                    CUSTOM_SPEED, "Speed ${speedLabel(speed)}", R.drawable.ic_speed,
+                                    CUSTOM_SPEED, "Speed ${speedLabel(speed)}", speedIcon(speed),
                                 ).build(),
                             )
                             val playNext = (application as ReadlyApp).feeds.isPlayNextOn()
@@ -2941,6 +2964,12 @@ class ReaderService : MediaBrowserService() {
             // for the first sentence, so it is seen without hiding the title all along.
             val notice = snap.notice?.takeIf { it.isNotBlank() && snap.playedChunks <= 1 }?.take(200)
             val siteLabel = (currentCarStart?.siteLabel ?: queue?.current?.siteLabel)?.ifBlank { null }
+            val speedLine = if (SystemClock.elapsedRealtime() < speedConfirmUntil) {
+                val speed = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getFloat(KEY_SPEED, 1.0f)
+                "Speed: ${speedLabel(speed)} (from the next sentence)"
+            } else {
+                null
+            }
             mediaSession.setMetadata(
                 MediaMetadata.Builder()
                     // The car's big line: the sentence being read, or the title.
@@ -2948,7 +2977,7 @@ class ReaderService : MediaBrowserService() {
                     // The car's small line under it.
                     .putString(
                         MediaMetadata.METADATA_KEY_ARTIST,
-                        notice ?: if (sentence != null) title else siteLabel ?: "Readly",
+                        speedLine ?: notice ?: if (sentence != null) title else siteLabel ?: "Readly",
                     )
                     // The car's art square: the website's name.
                     .putBitmap(
