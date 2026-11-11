@@ -58,6 +58,28 @@
 
         <!-- Exported for Android Auto, which browses it as a media app. Commands that
              carry text or links are only accepted from Readly itself (see ReaderService). -->
+        <!-- Share → Read later: saves a link for the car's Saved tab. -->
+        <activity
+            android:name=".ReadLaterActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/read_later_label"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!-- Website tiles for Android Auto's grid: read-only generated PNGs. -->
+        <provider
+            android:name=".playback.ArtworkProvider"
+            android:authorities="app.readly.artwork"
+            android:exported="true" />
+
         <service
             android:name=".playback.ReaderService"
             android:exported="true"

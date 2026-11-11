@@ -99,13 +99,21 @@
             android:textColor="@color/text"
             android:textSize="16.5sp" />
 
-        <ProgressBar
+        <SeekBar
             android:id="@+id/sentenceBar"
-            style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
-            android:layout_height="4dp"
-            android:layout_marginTop="18dp"
-            android:progressDrawable="@drawable/seekbar_progress" />
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:contentDescription="@string/reading_progress_desc"
+            android:maxHeight="4dp"
+            android:minHeight="4dp"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:progressDrawable="@drawable/seekbar_progress"
+            android:splitTrack="false"
+            android:thumb="@drawable/seekbar_thumb" />
 
         <LinearLayout
             android:layout_width="match_parent"

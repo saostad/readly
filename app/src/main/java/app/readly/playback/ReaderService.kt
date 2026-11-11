@@ -16,6 +16,7 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.media.MediaDescription
 import android.media.MediaMetadata
 import android.media.browse.MediaBrowser
 import android.net.ConnectivityManager
@@ -34,7 +35,9 @@ import app.readly.ReadlyApp
 import app.readly.VoicesActivity
 import app.readly.article.HeadlessArticleReader
 import app.readly.article.RenderedArticle
+import app.readly.feeds.CarEntry
 import app.readly.feeds.CarQueue
+import app.readly.feeds.Headline
 import app.readly.feeds.FeedSites
 import app.readly.feeds.VoiceSearch
 import app.readly.input.ArticleFetcher
@@ -61,6 +64,8 @@ import java.io.IOException
 import java.net.URI
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.roundToInt
+import kotlin.random.Random
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
@@ -95,6 +100,10 @@ class ReaderService : MediaBrowserService() {
         const val ACTION_PAUSE = "app.readly.PAUSE"
         const val ACTION_PLAY = "app.readly.PLAY"
         const val ACTION_NEXT = "app.readly.NEXT"
+
+        /** Jump to sentence [EXTRA_INDEX] of the current reading (the Now playing bar). */
+        const val ACTION_SEEK = "app.readly.SEEK"
+        const val EXTRA_INDEX = "index"
         const val ACTION_PREVIOUS = "app.readly.PREVIOUS"
         const val ACTION_STOP = "app.readly.STOP"
         const val ACTION_READ_URL = "app.readly.READ_URL"
@@ -124,10 +133,37 @@ class ReaderService : MediaBrowserService() {
         private const val CUSTOM_SENTENCE_BACK = "app.readly.SENTENCE_BACK"
         private const val CUSTOM_SENTENCE_FORWARD = "app.readly.SENTENCE_FORWARD"
         private const val CUSTOM_PLAY_NEXT = "app.readly.PLAY_NEXT"
+        private const val CUSTOM_SPEED = "app.readly.SPEED"
+
+        /** The car's speed button steps through these (the phone's slider sets any speed). */
+        private val CAR_SPEEDS = listOf(1.0f, 1.2f, 1.5f, 1.8f)
+
+        private const val ANDROID_AUTO_PACKAGE = "com.google.android.projection.gearhead"
+
+        /** The voice's measured pace per pack, for the intro's "about N minutes". */
+        private fun paceKey(packId: String) = "msPerChar.$packId"
+
+        private fun speedLabel(speed: Float): String = String.format(Locale.US, "%.1f×", speed)
+
+        /**
+         * Pause during navigation prompts and other short announcements instead of
+         * reading quietly under them (default ON).
+         */
+        const val KEY_PAUSE_FOR_PROMPTS = "pauseForPrompts"
 
         /** Shown when the car's article engine failed and the quick reader read the link instead. */
         fun carFallbackNotice(engineFailure: String): String =
             "Read with the quick reader because the article engine couldn't open this page ($engineFailure)."
+
+        /** Shown when the system refuses audio focus (in the car that usually means silence). */
+        const val FOCUS_DENIED_NOTICE =
+            "Another app has the speakers, so you may not hear Readly. Pause and play again to retry."
+
+        /**
+         * Android Auto's big line shows the sentence being read, with the article title
+         * under it (default ON); off shows the title there instead.
+         */
+        const val KEY_CAR_SENTENCE = "autoShowSentence"
 
         const val PREFS_NAME = "settings"
         const val KEY_ACTIVE_PACK = "activePackId"
@@ -159,6 +195,21 @@ class ReaderService : MediaBrowserService() {
          * only the text a reader sees on the page).
          */
         const val KEY_READ_HIDDEN_TEXT = "readHiddenText"
+
+        fun isPauseForPromptsOn(context: Context): Boolean =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_PAUSE_FOR_PROMPTS, true)
+
+        fun isCarSentenceOn(context: Context): Boolean =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_CAR_SENTENCE, true)
+
+        /** Asks the service to jump to sentence [index] of the current reading. */
+        fun seek(context: Context, index: Int) {
+            context.startService(
+                Intent(context, ReaderService::class.java).setAction(ACTION_SEEK).putExtra(EXTRA_INDEX, index),
+            )
+        }
 
         fun isHiddenTextOn(context: Context): Boolean =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -478,6 +529,31 @@ class ReaderService : MediaBrowserService() {
     private var carReader: HeadlessArticleReader? = null
     private var carReadPending = false
 
+    /** The next car article, opened ahead ([maybePrefetch]); main thread only. */
+    private var prefetched: RenderedArticle.Outcome.Ready? = null
+    private var prefetchedUrl: String? = null
+    private var prefetchInFlight: String? = null
+    private var prefetchWaiter: ((RenderedArticle.Outcome) -> Unit)? = null
+
+    /** Auto-play runs once per Android Auto connection; main thread only. */
+    private var autoPlayedThisConnection = false
+
+    /** How a car reading starts: handed from [startCarRead] to the next [startReading]. */
+    private data class CarStart(
+        val url: String,
+        val title: String,
+        val siteLabel: String,
+        val resumeOffsetChars: Int,
+        val intro: Boolean,
+        val introChunks: Int = 0,
+    )
+
+    private val pendingCarStart = java.util.concurrent.atomic.AtomicReference<CarStart?>(null)
+
+    /** The car reading now playing (for history and heard marks), null for phone readings. */
+    @Volatile
+    private var currentCarStart: CarStart? = null
+
     @Volatile
     private var pipeline: ChunkPipeline? = null
 
@@ -547,6 +623,12 @@ class ReaderService : MediaBrowserService() {
     private var focusRequest: AudioFocusRequest? = null
 
     /**
+     * Whether we hold audio focus now. Android Auto only sends the phone's audio to the
+     * car while an app holds media focus, so playing without it is silent there.
+     */
+    private var focusHeld = false
+
+    /**
      * Main thread only: an audio-focus transient loss paused us, so the next gain
      * resumes. Cleared by any manual pause/resume (the user took over).
      */
@@ -562,17 +644,30 @@ class ReaderService : MediaBrowserService() {
 
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
         when (change) {
-            AudioManager.AUDIOFOCUS_LOSS -> pauseReading()
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                // Permanent loss: drop the request so the next play asks again.
+                abandonFocus()
+                pauseReading()
+            }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                // Not ours until GAIN: a manual play in the meantime asks again.
+                synchronized(focusLock) { focusHeld = false }
                 if (ReaderState.snapshot.status == ReaderStatus.READING) {
                     pausedForFocusLoss = true
                     pauseReading(clearFocusResume = false)
                 }
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                // Let the system duck us; keep reading quietly underneath.
+                // Only delivered when we asked to pause for prompts (setWillPauseWhenDucked);
+                // otherwise the system lowers our volume under the prompt by itself.
+                synchronized(focusLock) { focusHeld = false }
+                if (isPauseForPromptsOn(this) && ReaderState.snapshot.status == ReaderStatus.READING) {
+                    pausedForFocusLoss = true
+                    pauseReading(clearFocusResume = false)
+                }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
+                synchronized(focusLock) { focusHeld = true }
                 if (pausedForFocusLoss) {
                     pausedForFocusLoss = false
                     resumeReading()
@@ -629,6 +724,8 @@ class ReaderService : MediaBrowserService() {
                     override fun onPlay() = resumeReading()
                     override fun onPause() = pauseReading()
                     override fun onSkipToNext() = skipBy(1)
+                    override fun onSkipToQueueItem(id: Long) = skipToQueueItem(id)
+                    override fun onSeekTo(pos: Long) = seekToPosition(pos)
                     override fun onSkipToPrevious() = skipBy(-1)
                     override fun onStop() = handleStop()
                     override fun onCustomAction(action: String, extras: Bundle?) {
@@ -636,6 +733,7 @@ class ReaderService : MediaBrowserService() {
                             CUSTOM_SENTENCE_BACK -> moveBy(-1)
                             CUSTOM_SENTENCE_FORWARD -> moveBy(1)
                             CUSTOM_PLAY_NEXT -> togglePlayNext()
+                            CUSTOM_SPEED -> cycleSpeed()
                             else -> Log.w("Readly", "Ignoring unknown media custom action $action")
                         }
                     }
@@ -652,29 +750,74 @@ class ReaderService : MediaBrowserService() {
         carBrowser = CarBrowser((application as ReadlyApp).feeds, mainHandler) { notifyChildrenChanged(it) }
     }
 
-    override fun onGetRoot(clientPackageName: String, clientUid: Int, rootHints: Bundle?): BrowserRoot =
-        carBrowser.root(clientPackageName, clientUid)
+    override fun onGetRoot(clientPackageName: String, clientUid: Int, rootHints: Bundle?): BrowserRoot {
+        maybeAutoPlay(clientPackageName, clientUid)
+        return carBrowser.root(clientPackageName, clientUid, rootHints)
+    }
 
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowser.MediaItem>>) =
         carBrowser.loadChildren(parentId, result)
 
-    /** Android Auto picked an article: read it with the screenless article engine ([startCarRead]). */
+    override fun onUnbind(intent: Intent?): Boolean {
+        // The car disconnected: the next connection may auto-play again.
+        autoPlayedThisConnection = false
+        return super.onUnbind(intent)
+    }
+
+    /**
+     * Auto-play (off by default): the first time Android Auto connects, with nothing
+     * reading, start the next unheard article from the first website that has one.
+     */
+    private fun maybeAutoPlay(clientPackage: String, clientUid: Int) {
+        val feeds = (application as ReadlyApp).feeds
+        if (autoPlayedThisConnection || !feeds.isAutoPlayOn()) return
+        if (clientPackage != ANDROID_AUTO_PACKAGE || !carBrowser.isTrusted(clientPackage, clientUid)) return
+        val status = ReaderState.snapshot.status
+        if (status != ReaderStatus.IDLE && status != ReaderStatus.FINISHED) return
+        autoPlayedThisConnection = true
+        carBrowser.nextUnheard { entry ->
+            val now = ReaderState.snapshot.status
+            if (now != ReaderStatus.IDLE && now != ReaderStatus.FINISHED) return@nextUnheard
+            if (entry == null) {
+                Log.i("Readly", "Auto-play: every article in your websites is heard (or none loaded)")
+                return@nextUnheard
+            }
+            Log.i("Readly", "Auto-play: starting ${FeedSites.hostOf(entry.headline.url)}")
+            carQueue = carBrowser.entriesFor(entry.listId)
+                ?.let { CarQueue.at(carBrowser.listTitle(entry.listId), it, entry.headline.url) }
+            startCarRead(entry)
+        }
+    }
+
+    /** Android Auto picked an article or a Shuffle row: read it with [startCarRead]. */
     private fun playFromCar(mediaId: String?) {
+        CarBrowser.parseShuffle(mediaId)?.let { listId ->
+            val entries = carBrowser.entriesFor(listId)
+            val queue = entries?.let { CarQueue.shuffled(carBrowser.listTitle(listId), it, Random.Default) }
+            if (queue == null) {
+                Log.e("Readly", "Android Auto Shuffle found no articles for list $listId")
+                showCarError("Couldn't shuffle: open the list again so its articles load.")
+                return
+            }
+            carQueue = queue
+            startCarRead(queue.current)
+            return
+        }
         val parsed = CarBrowser.parseArticle(mediaId)
         if (parsed == null) {
             Log.e("Readly", "Android Auto asked to play unknown media id $mediaId")
             showCarError("Couldn't read aloud: that item isn't an article.")
             return
         }
-        val (siteId, url) = parsed
-        val feeds = (application as ReadlyApp).feeds
-        carQueue = feeds.site(siteId)?.let { site ->
-            feeds.cachedHeadlines(siteId)?.let { CarQueue.at(site, it, url) }
+        val (listId, url) = parsed
+        val entries = carBrowser.entriesFor(listId)
+        carQueue = entries?.let { CarQueue.at(carBrowser.listTitle(listId), it, url) }
+        val entry = carQueue?.current ?: run {
+            Log.w("Readly", "Android Auto article $url has no loaded list; ⏮ / ⏭ will move by sentence")
+            val feeds = (application as ReadlyApp).feeds
+            CarEntry(listId, Headline(feeds.titleFor(url) ?: FeedSites.hostOf(url), url), carBrowser.listTitle(listId))
         }
-        if (carQueue == null) {
-            Log.w("Readly", "Android Auto article $url has no cached site list; ⏮ / ⏭ will move by sentence")
-        }
-        startCarRead(url, feeds.titleFor(url))
+        startCarRead(entry)
     }
 
     /** The car's "Play next" button: flips the same setting as the phone's checkbox. */
@@ -683,6 +826,17 @@ class ReaderService : MediaBrowserService() {
         val on = !feeds.isPlayNextOn()
         feeds.setPlayNext(on)
         Toast.makeText(this, if (on) "Play next is on" else "Play next is off", Toast.LENGTH_SHORT).show()
+        if (on) mainHandler.post { maybePrefetch() }
+        syncSession()
+    }
+
+    /** The car's speed button: the next of [CAR_SPEEDS], from the next sentence. */
+    private fun cycleSpeed() {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val current = prefs.getFloat(KEY_SPEED, 1.0f)
+        val next = CAR_SPEEDS.firstOrNull { it > current + 0.01f } ?: CAR_SPEEDS.first()
+        prefs.edit().putFloat(KEY_SPEED, next).apply()
+        Toast.makeText(this, "Speed ${speedLabel(next)}", Toast.LENGTH_SHORT).show()
         syncSession()
     }
 
@@ -694,13 +848,20 @@ class ReaderService : MediaBrowserService() {
         val queue = carQueue ?: return moveBy(delta)
         val next = queue.moveBy(delta)
         if (next == null) {
-            val message = if (delta > 0) "That was the last article in ${queue.site.label()}."
-            else "That was the first article in ${queue.site.label()}."
+            val message = if (delta > 0) "That was the last article in ${queue.title}."
+            else "That was the first article in ${queue.title}."
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
             return
         }
         carQueue = next
-        startCarRead(next.current.url, next.current.title)
+        startCarRead(next.current)
+    }
+
+    /** A tap in the car's Up next list. */
+    private fun skipToQueueItem(id: Long) {
+        val next = carQueue?.jumpTo(id.toInt()) ?: return
+        carQueue = next
+        startCarRead(next.current)
     }
 
     /**
@@ -715,9 +876,10 @@ class ReaderService : MediaBrowserService() {
         carBrowser.search(query) { pick ->
             when (pick) {
                 is VoiceSearch.Pick.Article -> {
-                    carQueue = (application as ReadlyApp).feeds.cachedHeadlines(pick.site.id)
-                        ?.let { CarQueue.at(pick.site, it, pick.headline.url) }
-                    startCarRead(pick.headline.url, pick.headline.title)
+                    val siteId = pick.site.id
+                    carQueue = carBrowser.entriesFor(siteId)
+                        ?.let { CarQueue.at(pick.site.label(), it, pick.headline.url) }
+                    startCarRead(carQueue?.current ?: CarEntry(siteId, pick.headline, pick.site.label()))
                 }
                 is VoiceSearch.Pick.Failure -> {
                     Log.e("Readly", "Android Auto voice request found nothing: ${pick.message}")
@@ -742,12 +904,31 @@ class ReaderService : MediaBrowserService() {
      * Reads an Android Auto article with the same GeckoView engine and paywall add-on
      * as the phone, without a screen ([HeadlessArticleReader]). If the engine can't
      * open the page, the in-service quick reader tries it, and the reading says so.
+     * A half-heard article resumes where it stopped; a new one starts with a short
+     * intro (site, title, length) when that's on. A preloaded copy is used at once.
      * Main thread only.
      */
-    private fun startCarRead(url: String, title: String?) {
+    private fun startCarRead(entry: CarEntry) {
+        val url = entry.headline.url
+        val title = entry.headline.title
+        val feeds = (application as ReadlyApp).feeds
         ensureForeground()
         mainHandler.removeCallbacks(idleShutdown)
-        cancelCarRead()
+        val ready = prefetched?.takeIf { prefetchedUrl == url }
+        val joining = ready == null && prefetchInFlight == url
+        if (!joining) cancelCarRead()
+        prefetched = null
+        prefetchedUrl = null
+        val resume = feeds.historyFor(url)?.takeIf { it.resumable }
+        pendingCarStart.set(
+            CarStart(
+                url = url,
+                title = title,
+                siteLabel = entry.siteLabel,
+                resumeOffsetChars = resume?.offsetChars ?: 0,
+                intro = resume == null && feeds.isIntroOn(),
+            ),
+        )
         pendingRequests.incrementAndGet()
         carReadPending = true
         val host = FeedSites.hostOf(url)
@@ -759,7 +940,7 @@ class ReaderService : MediaBrowserService() {
             ReaderState.update {
                 it.copy(
                     status = ReaderStatus.FETCHING,
-                    title = title.orEmpty(),
+                    title = title,
                     currentText = "Opening $host…",
                     index = 0,
                     total = 0,
@@ -772,34 +953,92 @@ class ReaderService : MediaBrowserService() {
                     playedChunks = 0,
                     msPerChar = 0.0,
                     remainingChars = 0,
+                    totalChars = 0,
                     retryUrl = null,
                 )
             }
             updateNotification()
         }
-        val reader = carReader ?: HeadlessArticleReader(this).also { carReader = it }
-        reader.read(url) { outcome ->
-            if (!carReadPending) return@read
-            // The pending request passes to the read below, which releases it.
-            carReadPending = false
-            when (outcome) {
-                is RenderedArticle.Outcome.Ready ->
-                    handleRead(outcome.text, outcome.title, SourceFormat.PLAIN.name, outcome.notice)
-                is RenderedArticle.Outcome.Failed -> {
-                    Log.w(
-                        "Readly",
-                        "fallback=true attempted=article-engine reason=\"${outcome.message}\" " +
-                            "taken=quick-reader host=$host",
-                    )
-                    handleReadUrl(url, title, carFallbackNotice(outcome.message), engineFailure = outcome.message)
-                }
+        when {
+            ready != null -> {
+                Log.i("Readly", "Car article $host was preloaded; starting at once")
+                deliverCarRead(entry, ready)
+            }
+            joining -> {
+                Log.i("Readly", "Car article $host is preloading; waiting for it")
+                prefetchWaiter = { outcome -> deliverCarRead(entry, outcome) }
+            }
+            else -> {
+                val reader = carReader ?: HeadlessArticleReader(this).also { carReader = it }
+                reader.read(url) { outcome -> deliverCarRead(entry, outcome) }
             }
         }
     }
 
-    /** Abandons an Android Auto page that is still opening. Main thread only. */
+    /** Hands an opened car article to the reader. Main thread only. */
+    private fun deliverCarRead(entry: CarEntry, outcome: RenderedArticle.Outcome) {
+        if (!carReadPending) return
+        // The pending request passes to the read below, which releases it.
+        carReadPending = false
+        val url = entry.headline.url
+        when (outcome) {
+            is RenderedArticle.Outcome.Ready -> {
+                if (entry.listId == CarBrowser.SAVED) (application as ReadlyApp).feeds.retitleSaved(url, outcome.title)
+                handleRead(outcome.text, outcome.title, SourceFormat.PLAIN.name, outcome.notice)
+            }
+            is RenderedArticle.Outcome.Failed -> {
+                Log.w(
+                    "Readly",
+                    "fallback=true attempted=article-engine reason=\"${outcome.message}\" " +
+                        "taken=quick-reader host=${FeedSites.hostOf(url)}",
+                )
+                handleReadUrl(url, entry.headline.title, carFallbackNotice(outcome.message), engineFailure = outcome.message)
+            }
+        }
+        mainHandler.post { maybePrefetch() }
+    }
+
+    /**
+     * Opens the next article in the car's list in the background (when that's on), so
+     * ⏭ or Play next starts it at once and it still plays without signal. Main thread only.
+     */
+    private fun maybePrefetch() {
+        val feeds = (application as ReadlyApp).feeds
+        if (!feeds.isPrefetchOn() || carReadPending) return
+        val next = carQueue?.moveBy(1)?.current ?: return
+        val url = next.headline.url
+        if (prefetchedUrl == url || prefetchInFlight == url) return
+        val reader = carReader ?: HeadlessArticleReader(this).also { carReader = it }
+        prefetched = null
+        prefetchedUrl = null
+        prefetchInFlight = url
+        reader.read(url) { outcome ->
+            prefetchInFlight = null
+            val waiter = prefetchWaiter
+            prefetchWaiter = null
+            if (waiter != null) {
+                waiter(outcome)
+                return@read
+            }
+            when (outcome) {
+                is RenderedArticle.Outcome.Ready -> {
+                    prefetched = outcome
+                    prefetchedUrl = url
+                    Log.i("Readly", "Preloaded the next car article (${FeedSites.hostOf(url)})")
+                }
+                // It is opened again (and the failure shown) if you get to it.
+                is RenderedArticle.Outcome.Failed ->
+                    Log.w("Readly", "Preloading the next car article failed: ${outcome.message}")
+            }
+        }
+    }
+
+    /** Abandons an Android Auto page that is opening or preloading. Main thread only. */
     private fun cancelCarRead() {
+        pendingCarStart.set(null)
         carReader?.cancel()
+        prefetchInFlight = null
+        prefetchWaiter = null
         if (carReadPending) {
             carReadPending = false
             pendingRequests.decrementAndGet()
@@ -846,6 +1085,7 @@ class ReaderService : MediaBrowserService() {
             ACTION_PAUSE -> pauseReading()
             ACTION_PLAY -> resumeReading()
             ACTION_NEXT -> moveBy(1)
+            ACTION_SEEK -> jumpTo { _ -> intent.getIntExtra(EXTRA_INDEX, ReaderState.snapshot.index) }
             ACTION_PREVIOUS -> moveBy(-1)
             ACTION_STOP -> handleStop()
             ACTION_READ_ANYWAY -> handleReadAnyway()
@@ -979,6 +1219,7 @@ class ReaderService : MediaBrowserService() {
                         playedChunks = 0,
                         msPerChar = 0.0,
                         remainingChars = 0,
+                        totalChars = 0,
                         retryUrl = null,
                     )
                 }
@@ -1072,6 +1313,10 @@ class ReaderService : MediaBrowserService() {
     ) {
         stopPipeline()
         pendingAsk = null
+        // A car reading (from startCarRead) brings its resume point and intro; any
+        // other reading is a phone reading with no car history.
+        val carStart = pendingCarStart.getAndSet(null)
+        currentCarStart = null
         ReaderState.update { it.copy(notice = null, smartLine = null) }
         val clean = TextSanitizer.sanitize(text, format, isHiddenTextOn(this))
         val detected = LanguageDetector.detect(this, clean)
@@ -1090,7 +1335,7 @@ class ReaderService : MediaBrowserService() {
                 showMissingMain(title, lang, mainPack, onRequestDone)
                 return
             }
-            startWithPack(title, clean, lang, mainPack, notice, onRequestDone)
+            startWithPack(title, clean, lang, mainPack, notice, onRequestDone, carStart)
             return
         }
         val explicit = installedLangPack(lang)
@@ -1112,7 +1357,7 @@ class ReaderService : MediaBrowserService() {
         when (choice) {
             is SmartVoice.Choice.Use -> {
                 setSmartLine(lang, choice.pack)
-                startWithPack(title, clean, lang, choice.pack, notice, onRequestDone)
+                startWithPack(title, clean, lang, choice.pack, notice, onRequestDone, carStart)
             }
             SmartVoice.Choice.MainVoice -> {
                 val langNotice = if (!smartOn && (lang == "fa" || lang == "ar") && explicit == null) {
@@ -1127,6 +1372,7 @@ class ReaderService : MediaBrowserService() {
                     title, clean, lang, mainPack,
                     listOfNotNull(notice, langNotice).joinToString(" ").takeIf { it.isNotBlank() },
                     onRequestDone,
+                    carStart,
                 )
             }
             is SmartVoice.Choice.AutoDownload ->
@@ -1144,18 +1390,74 @@ class ReaderService : MediaBrowserService() {
         docPack: VoicePack,
         notice: String?,
         onRequestDone: () -> Unit,
+        carStart: CarStart? = null,
     ) {
-        val chunks = SentenceChunker.chunk(clean, lang)
-        if (chunks.isEmpty()) {
+        val body = SentenceChunker.chunk(clean, lang)
+        if (body.isEmpty()) {
             showEmpty(title, clean.length, onRequestDone)
             return
         }
-        startPipeline(chunks, title, 0, docPack, lang, onRequestDone)
+        // A half-heard car article picks up at the sentence it stopped on; an article
+        // that changed since (now shorter than that point) starts over.
+        var startIndex = 0
+        var resumeNotice: String? = null
+        if (carStart != null && carStart.resumeOffsetChars > 0) {
+            val lengths = body.map { it.text.length }
+            if (carStart.resumeOffsetChars < lengths.sum()) {
+                startIndex = ReadingProgress.indexAt(lengths, carStart.resumeOffsetChars.toLong(), 1.0)
+                resumeNotice = "Picking up where you left off (sentence ${startIndex + 1} of ${body.size})."
+            } else {
+                Log.w(
+                    "Readly",
+                    "fallback=true attempted=resume reason=\"article is shorter than the saved point\" " +
+                        "taken=start-over host=${FeedSites.hostOf(carStart.url)}",
+                )
+                resumeNotice = "This article changed since you last listened, so it starts from the beginning."
+            }
+        }
+        // The spoken intro is English, so other languages skip it.
+        val intro = if (carStart?.intro == true && lang == "en") {
+            SentenceChunker.chunk(carIntro(carStart, title, clean.length, docPack), lang)
+        } else {
+            emptyList()
+        }
+        currentCarStart = carStart?.copy(introChunks = intro.size)
+        startPipeline(intro + body, title, startIndex, docPack, lang, onRequestDone)
+        val notice = listOfNotNull(notice, resumeNotice).joinToString(" ").ifBlank { null }
         if (!notice.isNullOrBlank()) {
             ReaderState.update { it.copy(notice = notice) }
             mainHandler.post {
                 Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
             }
+        }
+    }
+
+    /**
+     * "From Forbes. Can you trust AI? About 6 minutes." The length uses [docPack]'s pace
+     * measured on earlier readings; with none yet, the length is left out.
+     */
+    private fun carIntro(car: CarStart, title: String, chars: Int, docPack: VoicePack): String {
+        val pace = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getFloat(paceKey(docPack.id), 0f)
+        val minutes = if (pace > 0f) ((chars * pace) / 60_000f).roundToInt().coerceAtLeast(1) else null
+        val heading = title.ifBlank { car.title }.trim().trimEnd('.', '!', '?')
+        return listOfNotNull(
+            car.siteLabel.takeIf { it.isNotBlank() }?.let { "From $it." },
+            heading.takeIf { it.isNotBlank() }?.let { "$it." },
+            minutes?.let { if (it == 1) "About 1 minute." else "About $it minutes." },
+        ).joinToString(" ")
+    }
+
+    /** Saves how far a car article got (body characters, never the intro). */
+    private fun recordCarProgress(car: CarStart, chunks: List<Chunk>, index: Int) {
+        val bodyStart = car.introChunks.coerceAtMost(chunks.size)
+        val offset = if (index <= bodyStart) 0 else chunks.subList(bodyStart, index).sumOf { it.text.length }
+        val bodyChars = chunks.drop(bodyStart).sumOf { it.text.length }
+        try {
+            (application as ReadlyApp).feeds.recordProgress(
+                car.url, ReaderState.snapshot.title.ifBlank { car.title }, car.siteLabel, offset, bodyChars,
+            )
+        } catch (e: Exception) {
+            Log.e("Readly", "Saving car listening progress failed for ${FeedSites.hostOf(car.url)}", e)
         }
     }
 
@@ -1206,6 +1508,7 @@ class ReaderService : MediaBrowserService() {
                 playedChunks = 0,
                 msPerChar = 0.0,
                 remainingChars = 0,
+                totalChars = 0,
             )
         }
         mainHandler.post {
@@ -1266,6 +1569,7 @@ class ReaderService : MediaBrowserService() {
                 playedChunks = 0,
                 msPerChar = 0.0,
                 remainingChars = 0,
+                totalChars = 0,
             )
         }
         updateNotification()
@@ -1385,6 +1689,7 @@ class ReaderService : MediaBrowserService() {
                 playedChunks = 0,
                 msPerChar = 0.0,
                 remainingChars = 0,
+                totalChars = 0,
             )
         }
         mainHandler.post {
@@ -1784,8 +2089,18 @@ class ReaderService : MediaBrowserService() {
         updateNotification()
     }
 
-    private fun moveBy(delta: Int) {
-        executeRead(if (delta > 0) "NEXT" else "PREVIOUS") {
+    private fun moveBy(delta: Int) =
+        jumpTo(if (delta > 0) "NEXT" else "PREVIOUS") { ReaderState.snapshot.index + delta }
+
+    /** A media-session seek (car, notification): the sentence playing at [positionMs]. */
+    private fun seekToPosition(positionMs: Long) {
+        val msPerChar = ReaderState.snapshot.msPerChar
+        jumpTo { chunks -> ReadingProgress.indexAt(chunks.map { it.text.length }, positionMs, msPerChar) }
+    }
+
+    /** Restarts the current reading at the sentence [target] picks (clamped to the reading). */
+    private fun jumpTo(name: String = "SEEK", target: (List<Chunk>) -> Int) {
+        executeRead(name) {
             try {
                 val chunks: List<Chunk>
                 val title: String
@@ -1800,9 +2115,9 @@ class ReaderService : MediaBrowserService() {
                 if (chunks.isEmpty()) return@executeRead
                 // Same document, so the same voice and language (no re-detection).
                 val pack = VoiceCatalog.byId(packId) ?: activePack(this)
-                val target = (ReaderState.snapshot.index + delta).coerceIn(0, chunks.size - 1)
+                val index = target(chunks).coerceIn(0, chunks.size - 1)
                 stopPipeline()
-                startPipeline(chunks, title, target, pack, lang)
+                startPipeline(chunks, title, index, pack, lang)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
             } catch (e: Exception) {
@@ -1814,6 +2129,9 @@ class ReaderService : MediaBrowserService() {
     private fun handleStop() {
         carQueue = null
         cancelCarRead()
+        prefetched = null
+        prefetchedUrl = null
+        currentCarStart = null
         // Immediate silence on the main thread; the join happens below.
         synchronized(trackLock) { audioTrack?.pause() }
         executeRead("STOP") {
@@ -1844,6 +2162,7 @@ class ReaderService : MediaBrowserService() {
                         playedChunks = 0,
                         msPerChar = 0.0,
                         remainingChars = 0,
+                        totalChars = 0,
                     )
                 }
                 updateNotification()
@@ -1950,7 +2269,14 @@ class ReaderService : MediaBrowserService() {
                         playedChunks = it.playedChunks + 1,
                         msPerChar = avgMsPerChar(),
                         remainingChars = chunks.drop(index).sumOf { chunk -> chunk.text.length },
+                        totalChars = chunks.sumOf { chunk -> chunk.text.length },
                     )
+                }
+                currentCarStart?.let { car -> recordCarProgress(car, chunks, index) }
+                val snap = ReaderState.snapshot
+                if (snap.playedChunks >= 2 && snap.msPerChar > 0 && snap.packId.isNotBlank()) {
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                        .putFloat(paceKey(snap.packId), snap.msPerChar.toFloat()).apply()
                 }
                 updateNotification()
             },
@@ -1962,11 +2288,19 @@ class ReaderService : MediaBrowserService() {
                 setNoisyRegistered(false)
                 ReaderState.update { it.copy(status = ReaderStatus.FINISHED) }
                 updateNotification()
+                currentCarStart?.let { car ->
+                    (application as ReadlyApp).feeds.markFinished(car.url)
+                    // Heard marks and Recents change in the car's lists.
+                    mainHandler.post {
+                        notifyChildrenChanged(CarBrowser.RECENTS)
+                        carQueue?.current?.listId?.let { notifyChildrenChanged(CarBrowser.parentOf(it)) }
+                    }
+                }
                 // Play next: an Android Auto reading moves on to the next article in its
-                // site's list instead of going idle.
+                // list instead of going idle.
                 val queue = carQueue
                 if (queue != null && queue.hasNext && (application as ReadlyApp).feeds.isPlayNextOn()) {
-                    Log.i("Readly", "Play next: starting article ${queue.index + 2} of ${queue.headlines.size}")
+                    Log.i("Readly", "Play next: starting article ${queue.index + 2} of ${queue.entries.size}")
                     mainHandler.post { skipBy(1) }
                 } else {
                     goIdle()
@@ -2013,6 +2347,7 @@ class ReaderService : MediaBrowserService() {
                 playedChunks = 0,
                 msPerChar = avgMsPerChar(),
                 remainingChars = chunks.drop(startIndex).sumOf { chunk -> chunk.text.length },
+                totalChars = chunks.sumOf { chunk -> chunk.text.length },
             )
         }
         requestFocus()
@@ -2299,10 +2634,17 @@ class ReaderService : MediaBrowserService() {
     // Audio focus + headphones
     // ------------------------------------------------------------------
 
-    /** Requests permanent focus. A denial is logged and playback proceeds anyway. */
+    /**
+     * Requests permanent focus on every start and resume unless it is already held, so
+     * a loss (the car's radio, navigation, a call, another app) or an earlier denial
+     * never leaves us playing without it, which Android Auto plays as silence. A denial
+     * is logged and shown with the reading; playback proceeds anyway (the phone
+     * speaker or headphones still work without focus).
+     */
     private fun requestFocus() {
-        synchronized(focusLock) {
-            if (focusRequest != null) return
+        val granted = synchronized(focusLock) {
+            if (focusHeld) return
+            focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
             val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(
                     AudioAttributes.Builder()
@@ -2310,17 +2652,36 @@ class ReaderService : MediaBrowserService() {
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build(),
                 )
+                // Speech under a navigation prompt is two voices at once: pause instead.
+                .setWillPauseWhenDucked(isPauseForPromptsOn(this))
                 .setOnAudioFocusChangeListener(focusListener, mainHandler)
                 .build()
             focusRequest = request
-            if (audioManager.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                Log.w("Readly", "Audio focus denied; reading anyway, another app may play over us.")
+            focusHeld = audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            focusHeld
+        }
+        if (!granted) {
+            Log.w(
+                "Readly",
+                "fallback=true attempted=audio-focus reason=denied taken=play-without-focus " +
+                    "(Android Auto may route nothing to the car)",
+            )
+            ReaderState.update {
+                val existing = it.notice
+                val notice = when {
+                    existing.isNullOrBlank() -> FOCUS_DENIED_NOTICE
+                    FOCUS_DENIED_NOTICE in existing -> existing
+                    else -> "$existing $FOCUS_DENIED_NOTICE"
+                }
+                it.copy(notice = notice)
             }
+            updateNotification()
         }
     }
 
     private fun abandonFocus() {
         synchronized(focusLock) {
+            focusHeld = false
             focusRequest?.let {
                 focusRequest = null
                 audioManager.abandonAudioFocusRequest(it)
@@ -2475,11 +2836,43 @@ class ReaderService : MediaBrowserService() {
         return first?.take(60)?.ifBlank { "Readly" } ?: "Readly"
     }
 
+    /** The list last sent as the car's Up next, so it is only re-sent when it changes. */
+    private var sentQueue: List<CarEntry>? = null
+
+    /** The car's Up next: the articles of the list this reading came from. */
+    private fun syncQueue(queue: CarQueue?) {
+        val entries = queue?.entries
+        if (entries === sentQueue) return
+        sentQueue = entries
+        if (queue == null || entries == null) {
+            mediaSession.setQueue(null)
+            return
+        }
+        mediaSession.setQueueTitle(queue.title)
+        mediaSession.setQueue(
+            entries.mapIndexed { i, entry ->
+                MediaSession.QueueItem(
+                    MediaDescription.Builder()
+                        .setMediaId(CarBrowser.articleId(entry.listId, entry.headline.url))
+                        .setTitle(entry.headline.title)
+                        .setSubtitle(entry.siteLabel)
+                        .build(),
+                    i.toLong(),
+                )
+            },
+        )
+    }
+
     /** Keeps PlaybackState and MediaMetadata in sync with [ReaderState]. */
     private fun syncSession() {
         if (destroyed) return
         val snap = ReaderState.snapshot
         val queue = carQueue
+        val progress = if (snap.status == ReaderStatus.READING || snap.status == ReaderStatus.PAUSED) {
+            ReadingProgress.estimate(snap)
+        } else {
+            null
+        }
         val state = when (snap.status) {
             ReaderStatus.READING -> PlaybackState.STATE_PLAYING
             ReaderStatus.PAUSED -> PlaybackState.STATE_PAUSED
@@ -2491,7 +2884,8 @@ class ReaderService : MediaBrowserService() {
         try {
             mediaSession.setPlaybackState(
                 PlaybackState.Builder()
-                    .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
+                    // The car and notification move the bar on from the sentence's start.
+                    .setState(state, progress?.positionMs ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
                     .setActions(
                         PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
                             PlaybackState.ACTION_PLAY_PAUSE or
@@ -2499,6 +2893,7 @@ class ReaderService : MediaBrowserService() {
                             (if (queue?.hasNext != false) PlaybackState.ACTION_SKIP_TO_NEXT else 0L) or
                             (if (queue?.hasPrevious != false) PlaybackState.ACTION_SKIP_TO_PREVIOUS else 0L) or
                             PlaybackState.ACTION_STOP or
+                            (if (progress != null) PlaybackState.ACTION_SEEK_TO else 0L) or
                             PlaybackState.ACTION_PLAY_FROM_MEDIA_ID or PlaybackState.ACTION_PLAY_FROM_SEARCH,
                     )
                     .apply {
@@ -2513,6 +2908,12 @@ class ReaderService : MediaBrowserService() {
                                     CUSTOM_SENTENCE_FORWARD, "Next sentence", R.drawable.ic_sentence_forward,
                                 ).build(),
                             )
+                            val speed = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getFloat(KEY_SPEED, 1.0f)
+                            addCustomAction(
+                                PlaybackState.CustomAction.Builder(
+                                    CUSTOM_SPEED, "Speed ${speedLabel(speed)}", R.drawable.ic_speed,
+                                ).build(),
+                            )
                             val playNext = (application as ReadlyApp).feeds.isPlayNextOn()
                             addCustomAction(
                                 PlaybackState.CustomAction.Builder(
@@ -2523,27 +2924,39 @@ class ReaderService : MediaBrowserService() {
                             )
                         }
                     }
+                    .apply { if (queue != null) setActiveQueueItemId(queue.index.toLong()) }
                     .apply {
                         // Android Auto shows this message on its playback screen.
                         if (state == PlaybackState.STATE_ERROR) setErrorMessage(snap.errorMessage ?: "Couldn't read aloud.")
                     }
                     .build(),
             )
+            syncQueue(queue)
+            val title = notificationTitle(snap)
+            val sentence = snap.currentText.takeIf {
+                (snap.status == ReaderStatus.READING || snap.status == ReaderStatus.PAUSED) &&
+                    it.isNotBlank() && isCarSentenceOn(this)
+            }
+            // The reading's notice (e.g. the quick-reader note) shows on the small line
+            // for the first sentence, so it is seen without hiding the title all along.
+            val notice = snap.notice?.takeIf { it.isNotBlank() && snap.playedChunks <= 1 }?.take(200)
+            val siteLabel = (currentCarStart?.siteLabel ?: queue?.current?.siteLabel)?.ifBlank { null }
             mediaSession.setMetadata(
                 MediaMetadata.Builder()
-                    .putString(MediaMetadata.METADATA_KEY_TITLE, notificationTitle(snap))
-                    .putString(MediaMetadata.METADATA_KEY_ARTIST, queue?.site?.label() ?: "Readly")
+                    // The car's big line: the sentence being read, or the title.
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, sentence ?: title)
+                    // The car's small line under it.
+                    .putString(
+                        MediaMetadata.METADATA_KEY_ARTIST,
+                        notice ?: if (sentence != null) title else siteLabel ?: "Readly",
+                    )
                     // The car's art square: the website's name.
                     .putBitmap(
                         MediaMetadata.METADATA_KEY_ALBUM_ART,
-                        siteArtwork.forName(queue?.site?.label() ?: snap.host.ifBlank { null }),
+                        siteArtwork.forName(siteLabel ?: snap.host.ifBlank { null }),
                     )
-                    // The car's second line: the reading's notice (e.g. the quick-reader
-                    // note), else the site.
-                    .putString(
-                        MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE,
-                        snap.notice?.take(200) ?: snap.host.ifBlank { "Readly" },
-                    )
+                    .putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, notice ?: snap.host.ifBlank { "Readly" })
+                    .apply { if (progress != null) putLong(MediaMetadata.METADATA_KEY_DURATION, progress.durationMs) }
                     .build(),
             )
         } catch (e: Exception) {

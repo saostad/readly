@@ -46,6 +46,8 @@ data class ReaderSnapshot(
     val msPerChar: Double = 0.0,
     /** Chars from the current chunk to the end of the document. */
     val remainingChars: Int = 0,
+    /** Chars in the whole document (0 when nothing is reading), for the progress bar. */
+    val totalChars: Int = 0,
     /**
      * Exact source URL offered to the browser fallback on a failed NYT
      * link read, null otherwise. Set only by a failed URL read whose link

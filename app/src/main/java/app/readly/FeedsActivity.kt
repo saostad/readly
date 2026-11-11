@@ -20,6 +20,7 @@ import app.readly.feeds.FeedSite
 import app.readly.feeds.FindMode
 import app.readly.feeds.HeadlineSource
 import app.readly.feeds.LoadedHeadlines
+import app.readly.playback.ReaderService
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -68,6 +69,77 @@ class FeedsActivity : Activity() {
         renderSites()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Links shared to Read later while this screen was in the background.
+        renderSaved()
+    }
+
+    private fun bindCheck(id: Int, key: String, default: Boolean) {
+        val prefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
+        findViewById<CheckBox>(id).apply {
+            isChecked = prefs.getBoolean(key, default)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean(key, checked).apply() }
+        }
+    }
+
+    private fun renderSaved() {
+        val box = findViewById<LinearLayout>(R.id.savedContainer)
+        box.removeAllViews()
+        feeds.historyWarning?.let { box.addView(small(it, error = true)) }
+        val saved = try {
+            feeds.saved()
+        } catch (e: java.io.IOException) {
+            box.addView(small(e.message ?: "Your Read later list couldn't be read.", error = true))
+            box.addView(
+                Button(this, null, 0, R.style.Btn_TextError).apply {
+                    text = getString(R.string.auto_sites_remove)
+                    setOnClickListener {
+                        feeds.resetSaved()
+                        renderSaved()
+                    }
+                },
+            )
+            return
+        }
+        if (saved.isEmpty()) {
+            box.addView(small(getString(R.string.auto_sites_saved_empty)))
+            return
+        }
+        val heard = feeds.history().associateBy { it.url }
+        for (article in saved) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            val status = heard[article.url]?.let {
+                if (it.finished) " · heard" else if (it.offsetChars > 0) " · ${(it.fraction * 100).toInt()}% heard" else ""
+            }.orEmpty()
+            row.addView(
+                TextView(this, null, 0, R.style.Body).apply {
+                    text = article.title + status
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    setPadding(0, dp(8), dp(8), dp(8))
+                },
+            )
+            row.addView(
+                Button(this, null, 0, R.style.Btn_TextError).apply {
+                    text = getString(R.string.auto_sites_remove)
+                    setOnClickListener {
+                        try {
+                            feeds.removeSaved(article.url)
+                        } catch (e: java.io.IOException) {
+                            Log.e("Readly", "Removing a Read later link failed", e)
+                            Toast.makeText(this@FeedsActivity, e.message ?: "Couldn't remove it.", Toast.LENGTH_LONG).show()
+                        }
+                        renderSaved()
+                    }
+                },
+            )
+            box.addView(row)
+        }
+    }
+
     override fun onDestroy() {
         executor.shutdownNow()
         super.onDestroy()
@@ -98,6 +170,12 @@ class FeedsActivity : Activity() {
             isChecked = feeds.isPlayNextOn()
             setOnCheckedChangeListener { _, checked -> feeds.setPlayNext(checked) }
         }
+        // Saved at once, like Play next.
+        bindCheck(R.id.carSentence, ReaderService.KEY_CAR_SENTENCE, default = true)
+        bindCheck(R.id.carPrefetch, FeedRepository.KEY_PREFETCH, default = true)
+        bindCheck(R.id.carIntro, FeedRepository.KEY_INTRO, default = true)
+        bindCheck(R.id.carPausePrompts, ReaderService.KEY_PAUSE_FOR_PROMPTS, default = true)
+        bindCheck(R.id.carAutoPlay, FeedRepository.KEY_AUTO_PLAY, default = false)
         val limits = feeds.limits()
         maxEdit.setText(limits.maxArticles.toString())
         refreshEdit.setText(limits.refreshMinutes.toString())

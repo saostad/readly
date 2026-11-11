@@ -10,14 +10,14 @@ import android.text.style.ForegroundColorSpan
 import android.view.View
 import android.widget.Button
 import android.widget.ImageButton
-import android.widget.ProgressBar
+import android.widget.SeekBar
 import android.widget.TextView
 import app.readly.model.VoiceCatalog
 import app.readly.playback.ReaderService
 import app.readly.playback.ReaderSnapshot
 import app.readly.playback.ReaderState
 import app.readly.playback.ReaderStatus
-import app.readly.playback.TimeLeft
+import app.readly.playback.ReadingProgress
 import app.readly.ui.SettingsSheet
 
 /**
@@ -31,7 +31,10 @@ class NowPlayingActivity : Activity() {
     private lateinit var artSrc: TextView
     private lateinit var artTitle: TextView
     private lateinit var sentenceView: TextView
-    private lateinit var sentenceBar: ProgressBar
+    private lateinit var sentenceBar: SeekBar
+
+    /** True while the finger is on the bar, so sentence updates don't fight the drag. */
+    private var dragging = false
     private lateinit var sentenceLabel: TextView
     private lateinit var timeLeft: TextView
     private lateinit var playPauseButton: ImageButton
@@ -54,6 +57,24 @@ class NowPlayingActivity : Activity() {
         sentenceBar = findViewById(R.id.sentenceBar)
         sentenceLabel = findViewById(R.id.sentenceLabel)
         timeLeft = findViewById(R.id.timeLeft)
+        sentenceBar.setOnSeekBarChangeListener(
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                    if (fromUser) showProgressLabels(ReaderState.snapshot, progress - 1)
+                }
+
+                override fun onStartTrackingTouch(bar: SeekBar) {
+                    dragging = true
+                }
+
+                override fun onStopTrackingTouch(bar: SeekBar) {
+                    dragging = false
+                    val snap = ReaderState.snapshot
+                    val target = (bar.progress - 1).coerceIn(0, (snap.total - 1).coerceAtLeast(0))
+                    if (snap.total > 0 && target != snap.index) ReaderService.seek(this@NowPlayingActivity, target)
+                }
+            },
+        )
         playPauseButton = findViewById(R.id.npPlayPause)
         speedChip = findViewById(R.id.npSpeedChip)
         speakerChip = findViewById(R.id.npSpeakerChip)
@@ -219,27 +240,50 @@ class NowPlayingActivity : Activity() {
     }
 
     private fun renderProgress(snap: ReaderSnapshot) {
-        if (snap.total > 0) {
-            sentenceBar.visibility = View.VISIBLE
-            sentenceBar.max = snap.total
-            sentenceBar.progress = (snap.index + 1).coerceIn(0, snap.total)
-            sentenceLabel.visibility = View.VISIBLE
-            sentenceLabel.text = getString(R.string.sentence_format, snap.index + 1, snap.total)
-        } else {
+        if (snap.total <= 0) {
             sentenceBar.visibility = View.GONE
             sentenceLabel.visibility = View.GONE
+            timeLeft.visibility = View.GONE
+            return
         }
-        val minutes = if (snap.status == ReaderStatus.READING || snap.status == ReaderStatus.PAUSED) {
-            TimeLeft.minutesLeft(snap.playedChunks, snap.remainingChars, snap.msPerChar)
+        sentenceBar.visibility = View.VISIBLE
+        sentenceBar.max = snap.total
+        sentenceBar.isEnabled = snap.status == ReaderStatus.READING || snap.status == ReaderStatus.PAUSED
+        if (!dragging) {
+            sentenceBar.progress = (snap.index + 1).coerceIn(0, snap.total)
+            showProgressLabels(snap, snap.index)
+        }
+    }
+
+    /**
+     * Left: time played (an estimate from the voice's measured pace) and the sentence;
+     * right: the reading's estimated length. Before a sentence has been measured, only
+     * the sentence count shows.
+     */
+    private fun showProgressLabels(snap: ReaderSnapshot, index: Int) {
+        val shown = index.coerceIn(0, (snap.total - 1).coerceAtLeast(0))
+        sentenceLabel.visibility = View.VISIBLE
+        val estimate = if (snap.status == ReaderStatus.READING || snap.status == ReaderStatus.PAUSED) {
+            ReadingProgress.estimate(snap)
         } else {
             null
         }
-        if (minutes != null) {
-            timeLeft.visibility = View.VISIBLE
-            timeLeft.text = getString(R.string.time_left_format, minutes)
-        } else {
+        if (estimate == null) {
+            sentenceLabel.text = getString(R.string.sentence_format, shown + 1, snap.total)
             timeLeft.visibility = View.GONE
+            return
         }
+        // While dragging, the time follows the finger (sentences scaled evenly).
+        val positionMs = if (shown == snap.index) {
+            estimate.positionMs
+        } else {
+            estimate.durationMs * shown / snap.total
+        }
+        sentenceLabel.text = getString(
+            R.string.elapsed_format, ReadingProgress.clock(positionMs), shown + 1, snap.total,
+        )
+        timeLeft.visibility = View.VISIBLE
+        timeLeft.text = ReadingProgress.clock(estimate.durationMs)
     }
 
     private fun renderChips(snap: ReaderSnapshot) {

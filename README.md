@@ -146,8 +146,18 @@ fallback class; no share, paste, or retry route opens it.
 
 Readly shows up in Android Auto as a media app. In **Voice & speed →
 Android Auto websites** add news sites or feed addresses (and an optional
-name). In the car, open Readly, pick a website to see its article titles, then
-tap a title to hear it. "Hey Google, play *the verge* on Readly" reads that
+name). In the car, open Readly. There are four tabs:
+
+- **Websites**: your sites as tiles ("3 new" counts unheard articles); pick one
+  to see its article titles, then tap a title to hear it.
+- **Latest**: the newest articles from all your sites, taking turns.
+- **Saved**: links you shared on the phone with **Share → Read later**.
+- **Recents**: what you listened to, half-finished articles first.
+
+Every list starts with **Shuffle**, which plays its articles in a random
+order. Rows show whether you heard an article ("Heard", "40% heard"). A
+half-heard article picks up at the sentence where it stopped, and Android Auto
+can offer it as "continue listening" when the car starts. "Hey Google, play *the verge* on Readly" reads that
 site's newest article; other words pick the closest title; "play Readly"
 resumes a paused reading.
 
@@ -174,7 +184,29 @@ the site's list, and ⏪ / ⏩ move one sentence back or forward. **Play next**
 (a checkbox on the websites screen, and an on/off button on the car's
 playback screen; off by default) starts the next article when one ends,
 until the end of the list. The square next to the title shows the website's
-name.
+name. The big line shows the sentence being read, with the article title under
+it (a checkbox on the websites screen turns this off), and the bar shows how
+far through the article you are, estimated from the voice's pace. On the
+phone's Now playing screen the same bar shows time played and the article's
+length; drag it to jump to another sentence.
+
+The playback screen also has a speed button (1.0×, 1.2×, 1.5×, 1.8×) and the
+car's Up next list (the rest of the list the article came from). On the
+websites screen you can turn these on or off:
+
+- **Load the next article early** (on): the next article opens while one
+  plays, so it starts at once and still plays without signal. Uses some data.
+- **Say the website, title and length** (on): a short English intro before
+  each new article. The length uses the voice's pace from earlier readings.
+- **Pause during navigation prompts** (on): Readly pauses for Maps directions
+  instead of reading quietly under them, and continues afterwards.
+- **Start the next unheard article when Android Auto opens Readly** (off).
+
+The websites screen also lists your saved links, with Remove buttons.
+
+If you see the pause button but hear nothing in the car, another app may have
+the car's speakers: Readly now asks for them again on every play and says so
+on screen when the phone refuses.
 
 Articles picked in the car are read with the same article engine as the phone
 (GeckoView with the paywall add-on), running without a screen. Pages that need

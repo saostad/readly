@@ -64,13 +64,18 @@ class SiteArtwork {
             color = TEXT
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         }
-        // Largest size that fits in MAX_LINES; long names shrink, then end with "…".
-        var size = MAX_TEXT_PX
+        // Largest size at which every word fits on its own line (never split mid-word,
+        // "Technolo / gy") and the name fits in MAX_LINES; past the minimum it ends "…".
+        var size = ArtworkFit.textSize(name, MAX_TEXT_PX, MIN_TEXT_PX, TEXT_STEP_PX, width.toFloat()) { text, px ->
+            paint.textSize = px
+            paint.measureText(text)
+        }
         var layout: StaticLayout
         while (true) {
             paint.textSize = size
             layout = StaticLayout.Builder.obtain(name, 0, name.length, paint, width)
                 .setAlignment(Layout.Alignment.ALIGN_CENTER)
+                .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
                 .setMaxLines(MAX_LINES)
                 .setEllipsize(TextUtils.TruncateAt.END)
                 .build()
@@ -91,5 +96,26 @@ class SiteArtwork {
         }
         canvas.drawText("Readly", SIZE_PX / 2f, SIZE_PX - PADDING_PX.toFloat(), caption)
         return bitmap
+    }
+}
+
+/** Pure text sizing for [SiteArtwork], JVM-testable without Android graphics. */
+object ArtworkFit {
+    /**
+     * The largest size from [max] down to [min] (in [step]s) at which the name's
+     * longest word fits in [width], as measured by [measure] (text, size → px).
+     */
+    fun textSize(
+        name: String,
+        max: Float,
+        min: Float,
+        step: Float,
+        width: Float,
+        measure: (String, Float) -> Float,
+    ): Float {
+        val words = name.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        var size = max
+        while (size > min && words.any { measure(it, size) > width }) size -= step
+        return size.coerceAtLeast(min)
     }
 }

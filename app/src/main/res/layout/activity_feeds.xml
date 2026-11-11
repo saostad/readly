@@ -109,6 +109,26 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
+                android:text="@string/auto_sites_saved_title" />
+
+            <TextView
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/auto_sites_saved_help" />
+
+            <LinearLayout
+                android:id="@+id/savedContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="vertical" />
+
+            <TextView
+                style="@style/SectionLabel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
                 android:text="@string/auto_sites_limits_title" />
 
             <CheckBox
@@ -119,6 +139,56 @@
                 android:buttonTint="@color/accent"
                 android:minHeight="48dp"
                 android:text="@string/auto_sites_play_next"
+                android:textColor="@color/text"
+                android:textSize="@dimen/text_body" />
+
+            <CheckBox
+                android:id="@+id/carSentence"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/accent"
+                android:minHeight="48dp"
+                android:text="@string/auto_sites_show_sentence"
+                android:textColor="@color/text"
+                android:textSize="@dimen/text_body" />
+
+            <CheckBox
+                android:id="@+id/carPrefetch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/accent"
+                android:minHeight="48dp"
+                android:text="@string/auto_sites_prefetch"
+                android:textColor="@color/text"
+                android:textSize="@dimen/text_body" />
+
+            <CheckBox
+                android:id="@+id/carIntro"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/accent"
+                android:minHeight="48dp"
+                android:text="@string/auto_sites_intro"
+                android:textColor="@color/text"
+                android:textSize="@dimen/text_body" />
+
+            <CheckBox
+                android:id="@+id/carPausePrompts"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/accent"
+                android:minHeight="48dp"
+                android:text="@string/auto_sites_pause_prompts"
+                android:textColor="@color/text"
+                android:textSize="@dimen/text_body" />
+
+            <CheckBox
+                android:id="@+id/carAutoPlay"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:buttonTint="@color/accent"
+                android:minHeight="48dp"
+                android:text="@string/auto_sites_auto_play"
                 android:textColor="@color/text"
                 android:textSize="@dimen/text_body" />
 
