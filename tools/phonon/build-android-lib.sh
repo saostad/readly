@@ -41,7 +41,8 @@ fi
 # Same flags as xn-ptts android/build.sh: stripped symbols, 16 KB pages, dotprod/fp16.
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C strip=symbols -C link-arg=-Wl,-z,max-page-size=16384 -C target-cpu=generic -C target-feature=+dotprod,+fp16"
 
-cargo ndk -t "$ABI" -P "$ANDROID_API" -o "$src_dir/jniLibs" build --release -p ptts-ffi
+# cargo looks for Cargo.toml in the current directory, so build inside the checkout.
+(cd "$src_dir" && cargo ndk -t "$ABI" -P "$ANDROID_API" -o "$src_dir/jniLibs" build --release -p ptts-ffi)
 
 mkdir -p "$out_dir"
 cp "$src_dir/jniLibs/$ABI/libptts_ffi.so" "$out_dir/libptts_ffi.so"

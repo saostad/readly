@@ -438,3 +438,25 @@ tasks.register("stripOnnxRuntimeNative") {
 }
 
 tasks.named("preBuild") { dependsOn("fetchSherpaOnnx", "fetchOnnxRuntime", "stripOnnxRuntimeNative") }
+
+// Phonon's native library is git-ignored and built per checkout. Without it an APK
+// still builds, but downloading Phonon then fails on the phone with
+// "libptts_ffi.so not found". Refuse to package such an APK. Unit tests don't
+// package, so they still run without it.
+val phononNativeLib = layout.projectDirectory.file("src/main/jniLibs/arm64-v8a/libptts_ffi.so")
+tasks.register("checkPhononNativeLib") {
+    description = "Fails packaging when Phonon's libptts_ffi.so has not been built."
+    val lib = phononNativeLib.asFile
+    doLast {
+        if (!lib.isFile || lib.length() == 0L) {
+            throw GradleException(
+                "Missing Phonon native library ${lib.path}. Build it with " +
+                    "tools/phonon/build-android-lib.sh (see tools/phonon/README.md); " +
+                    "an APK without it can't play the Phonon voice.",
+            )
+        }
+    }
+}
+tasks.matching { it.name == "packageDebug" || it.name == "packageRelease" }.configureEach {
+    dependsOn("checkPhononNativeLib")
+}

@@ -34,7 +34,9 @@ tools/phonon/build-android-lib.sh
 
 To build from an existing checkout instead, set `XN_PTTS_DIR` to its path. The
 build takes about 10 minutes. The `.so` is git-ignored: every checkout builds
-its own.
+its own. Building an APK (`assembleDebug`, `assembleRelease`) fails until it is
+there, because without it the Phonon voice downloads but can't play. Unit tests
+run without it.
 
 ## Install by hand (optional, for testing a new model)
 
