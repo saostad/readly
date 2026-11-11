@@ -140,6 +140,51 @@ New York Times rules stay in place until newer compatible rules replace them.
 The legacy manual WebView browser remains in the app only as an unused
 fallback class; no share, paste, or retry route opens it.
 
+## Android Auto
+
+Readly shows up in Android Auto as a media app. In **Voice & speed →
+Android Auto websites** add news sites or feed addresses (and an optional
+name). In the car, open Readly, pick a website to see its article titles, then
+tap a title to hear it. "Hey Google, play *the verge* on Readly" reads that
+site's newest article; other words pick the closest title; "play Readly"
+resumes a paused reading.
+
+How the titles are found, per site:
+
+1. If the address is an RSS/Atom feed, its items.
+2. Otherwise the feed the page advertises (`<link rel="alternate" …>`), then
+   `feed`, `rss`, `rss.xml`, `feed.xml` or `atom.xml` under the address.
+3. Otherwise the page's own links. Navigation, header, footer and sidebars are
+   dropped, and each same-site link is scored on whether it looks like an
+   article (headline-length text, a heading around it, a slug, date or ID in
+   the path). These lists are marked "Guessed from page links", because a few
+   non-articles can slip in.
+
+A section page whose advertised feed covers the whole site can be switched to
+**Page links only**. **Preview** shows exactly what the car will list (tap a
+title to read it on the phone). **Articles per website** (default 25) and
+**Refresh lists after** (default 15 minutes) are set on the same screen. When a
+refresh fails, the car shows the older list with an "older list" row that
+retries when tapped.
+
+On the car's playback screen, ⏮ / ⏭ move to the previous or next article in
+the site's list, and ⏪ / ⏩ move one sentence back or forward. **Play next**
+(a checkbox on the websites screen, and an on/off button on the car's
+playback screen; off by default) starts the next article when one ends,
+until the end of the list. The square next to the title shows the website's
+name.
+
+Articles picked in the car are read with the in-service quick reader (the
+shared site fixes apply), not the GeckoView article engine, because the engine
+needs the phone screen. Each such reading says so. Paywalled sites the add-on
+would open may only give a teaser in the car.
+
+Readly isn't installed from the Play Store, so Android Auto hides it until you
+enable unknown sources. Open Android Auto's settings and tap **Version** ten
+times to unlock developer settings. Then go to ⋮ → **Developer settings** and
+turn on **Unknown sources**. To try it without a car, use the Desktop Head
+Unit from the Android SDK.
+
 ## Use Readly as the phone's voice
 
 Readly can be the phone's default text-to-speech engine, so TalkBack, Maps and

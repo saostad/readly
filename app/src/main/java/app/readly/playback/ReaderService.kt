@@ -4,7 +4,6 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -18,12 +17,14 @@ import android.media.AudioTrack
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.media.MediaMetadata
+import android.media.browse.MediaBrowser
 import android.net.ConnectivityManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
-import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.service.media.MediaBrowserService
 import android.util.Log
 import android.widget.Toast
 import app.readly.InstallTask
@@ -31,6 +32,9 @@ import app.readly.MainActivity
 import app.readly.R
 import app.readly.ReadlyApp
 import app.readly.VoicesActivity
+import app.readly.feeds.CarQueue
+import app.readly.feeds.FeedSites
+import app.readly.feeds.VoiceSearch
 import app.readly.input.ArticleFetcher
 import app.readly.input.sites.SiteBrowserPolicy
 import app.readly.input.sites.SiteFetchPolicy
@@ -54,6 +58,7 @@ import java.io.File
 import java.io.IOException
 import java.net.URI
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
@@ -79,7 +84,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * cancels an in-flight preview instead. PAUSE / PLAY / TOGGLE are instant and run on
  * the main thread.
  */
-class ReaderService : Service() {
+class ReaderService : MediaBrowserService() {
 
     companion object {
         const val ACTION_READ = "app.readly.READ"
@@ -103,6 +108,24 @@ class ReaderService : Service() {
         const val EXTRA_PREVIEW_PACK = "previewPack"
         const val EXTRA_PREVIEW_SPEAKER = "previewSpeaker"
         const val EXTRA_PREVIEW_TEXT = "previewText"
+
+        /**
+         * The service is exported so Android Auto can browse it. Commands that carry
+         * text or a link must come from Readly itself: they carry this per-process
+         * token, and [onStartCommand] ignores them without it.
+         */
+        private const val EXTRA_CALLER = "caller"
+        private val CALLER_TOKEN: String = UUID.randomUUID().toString()
+        private val CALLER_ONLY_ACTIONS = setOf(ACTION_READ, ACTION_READ_URL, ACTION_PREVIEW)
+
+        /** Shown with a reading started from Android Auto (the phone-screen engine can't run there). */
+        /** Android Auto custom actions: one sentence back / forward (⏮ / ⏭ change article there). */
+        private const val CUSTOM_SENTENCE_BACK = "app.readly.SENTENCE_BACK"
+        private const val CUSTOM_SENTENCE_FORWARD = "app.readly.SENTENCE_FORWARD"
+        private const val CUSTOM_PLAY_NEXT = "app.readly.PLAY_NEXT"
+
+        const val CAR_READ_NOTICE =
+            "Read in the car with the quick reader. The paywall add-on only runs when you open a link on the phone."
 
         const val PREFS_NAME = "settings"
         const val KEY_ACTIVE_PACK = "activePackId"
@@ -297,6 +320,7 @@ class ReaderService : Service() {
             context.startForegroundService(
                 Intent(context, ReaderService::class.java)
                     .setAction(ACTION_READ)
+                    .putExtra(EXTRA_CALLER, CALLER_TOKEN)
                     .putExtra(EXTRA_TEXT, text)
                     .putExtra(EXTRA_TITLE, title)
                     .putExtra(EXTRA_FORMAT, format.name)
@@ -316,6 +340,7 @@ class ReaderService : Service() {
             context.startForegroundService(
                 Intent(context, ReaderService::class.java)
                     .setAction(ACTION_READ_URL)
+                    .putExtra(EXTRA_CALLER, CALLER_TOKEN)
                     .putExtra(EXTRA_URL, url)
                     .putExtra(EXTRA_TITLE_HINT, titleHint),
             )
@@ -330,6 +355,7 @@ class ReaderService : Service() {
             context.startForegroundService(
                 Intent(context, ReaderService::class.java)
                     .setAction(ACTION_PREVIEW)
+                    .putExtra(EXTRA_CALLER, CALLER_TOKEN)
                     .putExtra(EXTRA_PREVIEW_PACK, packId)
                     .putExtra(EXTRA_PREVIEW_SPEAKER, speakerId)
                     .putExtra(EXTRA_PREVIEW_TEXT, text),
@@ -415,6 +441,16 @@ class ReaderService : Service() {
     private lateinit var notificationManager: NotificationManager
     private lateinit var audioManager: AudioManager
     private lateinit var mediaSession: MediaSession
+    private lateinit var carBrowser: CarBrowser
+    private val siteArtwork = SiteArtwork()
+
+    /**
+     * The website list the current reading came from in Android Auto, so the media
+     * session's ⏮ / ⏭ move between its articles; null for phone readings, where they
+     * move between sentences. Replaced, never mutated.
+     */
+    @Volatile
+    private var carQueue: CarQueue? = null
 
     private val pipelineLock = Object()
 
@@ -576,14 +612,130 @@ class ReaderService : Service() {
                 object : MediaSession.Callback() {
                     override fun onPlay() = resumeReading()
                     override fun onPause() = pauseReading()
-                    override fun onSkipToNext() = moveBy(1)
-                    override fun onSkipToPrevious() = moveBy(-1)
+                    override fun onSkipToNext() = skipBy(1)
+                    override fun onSkipToPrevious() = skipBy(-1)
                     override fun onStop() = handleStop()
+                    override fun onCustomAction(action: String, extras: Bundle?) {
+                        when (action) {
+                            CUSTOM_SENTENCE_BACK -> moveBy(-1)
+                            CUSTOM_SENTENCE_FORWARD -> moveBy(1)
+                            CUSTOM_PLAY_NEXT -> togglePlayNext()
+                            else -> Log.w("Readly", "Ignoring unknown media custom action $action")
+                        }
+                    }
+                    override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) =
+                        playFromCar(mediaId)
+                    override fun onPlayFromSearch(query: String?, extras: Bundle?) =
+                        playFromSearch(query)
                 },
                 mainHandler,
             )
             isActive = true
         }
+        sessionToken = mediaSession.sessionToken
+        carBrowser = CarBrowser((application as ReadlyApp).feeds, mainHandler) { notifyChildrenChanged(it) }
+    }
+
+    override fun onGetRoot(clientPackageName: String, clientUid: Int, rootHints: Bundle?): BrowserRoot =
+        carBrowser.root(clientPackageName, clientUid)
+
+    override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowser.MediaItem>>) =
+        carBrowser.loadChildren(parentId, result)
+
+    /**
+     * Android Auto picked an article: read it with the in-service fetcher. The
+     * GeckoView article engine needs the phone screen, so this is the quick reader,
+     * and the reading says so ([CAR_READ_NOTICE]).
+     */
+    private fun playFromCar(mediaId: String?) {
+        val parsed = CarBrowser.parseArticle(mediaId)
+        if (parsed == null) {
+            Log.e("Readly", "Android Auto asked to play unknown media id $mediaId")
+            showCarError("Couldn't read aloud: that item isn't an article.")
+            return
+        }
+        val (siteId, url) = parsed
+        val feeds = (application as ReadlyApp).feeds
+        carQueue = feeds.site(siteId)?.let { site ->
+            feeds.cachedHeadlines(siteId)?.let { CarQueue.at(site, it, url) }
+        }
+        if (carQueue == null) {
+            Log.w("Readly", "Android Auto article $url has no cached site list; ⏮ / ⏭ will move by sentence")
+        }
+        startCarRead(url, feeds.titleFor(url))
+    }
+
+    /** The car's "Play next" button: flips the same setting as the phone's checkbox. */
+    private fun togglePlayNext() {
+        val feeds = (application as ReadlyApp).feeds
+        val on = !feeds.isPlayNextOn()
+        feeds.setPlayNext(on)
+        Toast.makeText(this, if (on) "Play next is on" else "Play next is off", Toast.LENGTH_SHORT).show()
+        syncSession()
+    }
+
+    /**
+     * The session's ⏮ / ⏭: the previous or next article for an Android Auto reading,
+     * otherwise the previous or next sentence.
+     */
+    private fun skipBy(delta: Int) {
+        val queue = carQueue ?: return moveBy(delta)
+        val next = queue.moveBy(delta)
+        if (next == null) {
+            val message = if (delta > 0) "That was the last article in ${queue.site.label()}."
+            else "That was the first article in ${queue.site.label()}."
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            return
+        }
+        carQueue = next
+        startCarRead(next.current.url, next.current.title)
+    }
+
+    /**
+     * Voice request from Android Auto or the Assistant. "Play Readly" with a paused
+     * reading resumes it; otherwise [CarBrowser.search] picks the article.
+     */
+    private fun playFromSearch(query: String?) {
+        if (query.isNullOrBlank() && ReaderState.snapshot.status == ReaderStatus.PAUSED) {
+            resumeReading()
+            return
+        }
+        carBrowser.search(query) { pick ->
+            when (pick) {
+                is VoiceSearch.Pick.Article -> {
+                    carQueue = (application as ReadlyApp).feeds.cachedHeadlines(pick.site.id)
+                        ?.let { CarQueue.at(pick.site, it, pick.headline.url) }
+                    startCarRead(pick.headline.url, pick.headline.title)
+                }
+                is VoiceSearch.Pick.Failure -> {
+                    Log.e("Readly", "Android Auto voice request found nothing: ${pick.message}")
+                    val status = ReaderState.snapshot.status
+                    if (status == ReaderStatus.READING || status == ReaderStatus.PAUSED) {
+                        // Keep the current reading; say why nothing new started.
+                        Toast.makeText(this, pick.message, Toast.LENGTH_LONG).show()
+                    } else {
+                        showCarError(pick.message)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showCarError(message: String) {
+        ReaderState.update { it.copy(status = ReaderStatus.ERROR, errorMessage = message) }
+        updateNotification()
+    }
+
+    private fun startCarRead(url: String, title: String?) {
+        Log.w(
+            "Readly",
+            "fallback=true attempted=article-engine reason=\"Android Auto has no phone screen\" " +
+                "taken=quick-reader host=${FeedSites.hostOf(url)}",
+        )
+        ensureForeground()
+        mainHandler.removeCallbacks(idleShutdown)
+        pendingRequests.incrementAndGet()
+        handleReadUrl(url, title, CAR_READ_NOTICE)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -591,8 +743,14 @@ class ReaderService : Service() {
         // the main thread, so worker paths only ever call updateNotification().
         ensureForeground()
         mainHandler.removeCallbacks(idleShutdown)
+        if (intent?.action in CALLER_ONLY_ACTIONS && intent?.getStringExtra(EXTRA_CALLER) != CALLER_TOKEN) {
+            Log.w("Readly", "ReaderService ignoring ${intent?.action} from outside Readly")
+            goIdle()
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_READ -> {
+                carQueue = null
                 pendingRequests.incrementAndGet()
                 handleRead(
                     intent.getStringExtra(EXTRA_TEXT) ?: "",
@@ -602,10 +760,12 @@ class ReaderService : Service() {
                 )
             }
             ACTION_READ_URL -> {
+                carQueue = null
                 pendingRequests.incrementAndGet()
                 handleReadUrl(
                     intent.getStringExtra(EXTRA_URL) ?: "",
                     intent.getStringExtra(EXTRA_TITLE_HINT),
+                    extraNotice = null,
                 )
             }
             // On its own thread: going through readerExecutor would block the page
@@ -628,8 +788,6 @@ class ReaderService : Service() {
         }
         return START_NOT_STICKY
     }
-
-    override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         destroyed = true
@@ -655,6 +813,7 @@ class ReaderService : Service() {
         notificationManager.cancel(NOTIF_ID)
         abandonFocus()
         setNoisyRegistered(false)
+        carBrowser.close()
         mediaSession.isActive = false
         mediaSession.release()
         ReaderState.update { it.copy(status = ReaderStatus.IDLE) }
@@ -711,7 +870,7 @@ class ReaderService : Service() {
         }
     }
 
-    private fun handleReadUrl(url: String, titleHint: String?) {
+    private fun handleReadUrl(url: String, titleHint: String?, extraNotice: String?) {
         executeRead("READ_URL") {
             val finished = AtomicBoolean(false)
             fun finish() {
@@ -787,7 +946,7 @@ class ReaderService : Service() {
                 } else {
                     titleHint?.takeIf { it.isNotBlank() } ?: doc.title
                 }
-                val notice = listOfNotNull(doc.notice, siteNotice)
+                val notice = listOfNotNull(extraNotice, doc.notice, siteNotice)
                     .joinToString(" ").takeIf { it.isNotBlank() }
                 startReading(title, doc.text, doc.format, notice, ::finish)
             } catch (e: InterruptedException) {
@@ -1562,6 +1721,7 @@ class ReaderService : Service() {
     }
 
     private fun handleStop() {
+        carQueue = null
         // Immediate silence on the main thread; the join happens below.
         synchronized(trackLock) { audioTrack?.pause() }
         executeRead("STOP") {
@@ -1710,7 +1870,15 @@ class ReaderService : Service() {
                 setNoisyRegistered(false)
                 ReaderState.update { it.copy(status = ReaderStatus.FINISHED) }
                 updateNotification()
-                goIdle()
+                // Play next: an Android Auto reading moves on to the next article in its
+                // site's list instead of going idle.
+                val queue = carQueue
+                if (queue != null && queue.hasNext && (application as ReadlyApp).feeds.isPlayNextOn()) {
+                    Log.i("Readly", "Play next: starting article ${queue.index + 2} of ${queue.headlines.size}")
+                    mainHandler.post { skipBy(1) }
+                } else {
+                    goIdle()
+                }
             },
             onError = { e ->
                 synchronized(pipelineLock) {
@@ -1982,10 +2150,24 @@ class ReaderService : Service() {
         if (inForeground || destroyed) return
         inForeground = true
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        } else {
-            startForeground(NOTIF_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else {
+                startForeground(NOTIF_ID, notification)
+            }
+        } catch (e: IllegalStateException) {
+            // Android 12+ can refuse a background start (ForegroundServiceStartNotAllowedException),
+            // e.g. a car request while Readly isn't open. Reading still runs while Android
+            // Auto is connected; the user is told it may stop when it disconnects.
+            inForeground = false
+            Log.e("Readly", "Couldn't keep reading in the foreground: ${e.javaClass.name}: ${e.message}", e)
+            Toast.makeText(
+                this,
+                "Readly can't show its playback notification, so reading may stop if Android Auto disconnects.",
+                Toast.LENGTH_LONG,
+            ).show()
+            updateNotification()
         }
     }
 
@@ -2199,6 +2381,7 @@ class ReaderService : Service() {
     private fun syncSession() {
         if (destroyed) return
         val snap = ReaderState.snapshot
+        val queue = carQueue
         val state = when (snap.status) {
             ReaderStatus.READING -> PlaybackState.STATE_PLAYING
             ReaderStatus.PAUSED -> PlaybackState.STATE_PAUSED
@@ -2214,15 +2397,55 @@ class ReaderService : Service() {
                     .setActions(
                         PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
                             PlaybackState.ACTION_PLAY_PAUSE or
-                            PlaybackState.ACTION_SKIP_TO_NEXT or
-                            PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_STOP,
+                            // At either end of a site's list the car greys that button out.
+                            (if (queue?.hasNext != false) PlaybackState.ACTION_SKIP_TO_NEXT else 0L) or
+                            (if (queue?.hasPrevious != false) PlaybackState.ACTION_SKIP_TO_PREVIOUS else 0L) or
+                            PlaybackState.ACTION_STOP or
+                            PlaybackState.ACTION_PLAY_FROM_MEDIA_ID or PlaybackState.ACTION_PLAY_FROM_SEARCH,
                     )
+                    .apply {
+                        if (queue != null) {
+                            addCustomAction(
+                                PlaybackState.CustomAction.Builder(
+                                    CUSTOM_SENTENCE_BACK, "Previous sentence", R.drawable.ic_sentence_back,
+                                ).build(),
+                            )
+                            addCustomAction(
+                                PlaybackState.CustomAction.Builder(
+                                    CUSTOM_SENTENCE_FORWARD, "Next sentence", R.drawable.ic_sentence_forward,
+                                ).build(),
+                            )
+                            val playNext = (application as ReadlyApp).feeds.isPlayNextOn()
+                            addCustomAction(
+                                PlaybackState.CustomAction.Builder(
+                                    CUSTOM_PLAY_NEXT,
+                                    if (playNext) "Play next: on" else "Play next: off",
+                                    if (playNext) R.drawable.ic_play_next_on else R.drawable.ic_play_next_off,
+                                ).build(),
+                            )
+                        }
+                    }
+                    .apply {
+                        // Android Auto shows this message on its playback screen.
+                        if (state == PlaybackState.STATE_ERROR) setErrorMessage(snap.errorMessage ?: "Couldn't read aloud.")
+                    }
                     .build(),
             )
             mediaSession.setMetadata(
                 MediaMetadata.Builder()
                     .putString(MediaMetadata.METADATA_KEY_TITLE, notificationTitle(snap))
-                    .putString(MediaMetadata.METADATA_KEY_ARTIST, "Readly")
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, queue?.site?.label() ?: "Readly")
+                    // The car's art square: the website's name.
+                    .putBitmap(
+                        MediaMetadata.METADATA_KEY_ALBUM_ART,
+                        siteArtwork.forName(queue?.site?.label() ?: snap.host.ifBlank { null }),
+                    )
+                    // The car's second line: the reading's notice (e.g. the quick-reader
+                    // note), else the site.
+                    .putString(
+                        MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE,
+                        snap.notice?.take(200) ?: snap.host.ifBlank { "Readly" },
+                    )
                     .build(),
             )
         } catch (e: Exception) {

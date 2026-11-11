@@ -11,6 +11,7 @@ import android.widget.Button
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
+import app.readly.FeedsActivity
 import app.readly.PhoneVoiceSettings
 import app.readly.R
 import app.readly.ReadlyApp
@@ -73,6 +74,7 @@ class SettingsSheet(
         fillSwitch(dialog, R.id.sheetRespellSwitch, ReaderService.KEY_RESPELL_NAMES, default = false)
         fillDayFirstSwitch(dialog)
         fillPhoneRow(dialog)
+        fillAutoSitesRow(dialog)
         fillPersianLine(dialog)
         fillSiteSection(dialog)
         dialog.setOnDismissListener { onDismiss() }
@@ -176,6 +178,25 @@ class SettingsSheet(
         switch.setOnCheckedChangeListener { _, checked ->
             val order = if (checked) DateOrder.DAY_FIRST else DateOrder.MONTH_FIRST
             prefs.edit().putString(ReaderService.KEY_DATE_ORDER, order.key).apply()
+        }
+    }
+
+    private fun fillAutoSitesRow(dialog: Dialog) {
+        val status = dialog.findViewById<TextView>(R.id.sheetAutoSitesStatus)
+        try {
+            val sites = (activity.application as ReadlyApp).feeds.sites()
+            status.text = when (sites.size) {
+                0 -> activity.getString(R.string.auto_sites_count_none)
+                else -> sites.joinToString(", ") { it.label() }
+            }
+        } catch (e: java.io.IOException) {
+            status.text = e.message
+            status.setTextColor(activity.getColor(R.color.error))
+        }
+        dialog.findViewById<Button>(R.id.sheetAutoSitesButton).setOnClickListener {
+            dialog.dismiss()
+            activity.startActivity(Intent(activity, FeedsActivity::class.java))
+            activity.overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
         }
     }
 

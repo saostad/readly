@@ -3,6 +3,7 @@ package app.readly
 import android.app.Application
 import android.content.Context
 import android.util.Log
+import app.readly.feeds.FeedRepository
 import app.readly.input.ArticleFetcher
 import app.readly.input.nyt.FileNytPolicyStorage
 import app.readly.input.sites.AtomicJsonFileStore
@@ -48,6 +49,9 @@ class ReadlyApp : Application() {
     }
 
     val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+
+    /** Saved Android Auto websites and their cached article titles (phone screen + car). */
+    val feeds: FeedRepository by lazy { FeedRepository(this) }
 
     /** Serial background thread for rule init and update checks. */
     private val sitesExecutor: ExecutorService by lazy {

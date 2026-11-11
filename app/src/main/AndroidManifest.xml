@@ -14,12 +14,22 @@
         android:label="@string/app_name"
         android:theme="@style/ReadlyTheme">
 
+        <!-- Android Auto: Readly is a media app (website list → article titles → read aloud). -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Voice search ("play … on Readly"); the car itself searches through the media session. -->
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 
@@ -37,14 +47,25 @@
             android:exported="false" />
 
         <activity
+            android:name=".FeedsActivity"
+            android:exported="false"
+            android:label="@string/auto_sites_title" />
+
+        <activity
             android:name=".ArticleActivity"
             android:exported="false"
             android:label="@string/article_title" />
 
+        <!-- Exported for Android Auto, which browses it as a media app. Commands that
+             carry text or links are only accepted from Readly itself (see ReaderService). -->
         <service
             android:name=".playback.ReaderService"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
 
         <service
             android:name=".tts.ReadlyTtsService"

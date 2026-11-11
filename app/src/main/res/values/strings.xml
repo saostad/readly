@@ -203,4 +203,28 @@
     <string name="bpc_addon_unknown">Article extension not installed yet</string>
     <string name="bpc_last_checked_format">Extension last checked %1$s</string>
     <string name="bpc_never_checked">Extension never checked</string>
+
+    <!-- Android Auto websites -->
+    <string name="auto_sites_title">Android Auto websites</string>
+    <string name="auto_sites_label">Android Auto websites</string>
+    <string name="auto_sites_manage">Manage</string>
+    <string name="auto_sites_count_none">Add news sites to pick articles from the car.</string>
+    <string name="auto_sites_help">Add news sites or feed addresses. In Android Auto, open Readly, pick a site, then tap an article to hear it. Readly uses the site\'s news feed when it has one, otherwise it picks article titles from the page.</string>
+    <string name="auto_sites_unknown_sources">Readly isn\'t from the Play Store, so Android Auto only lists it after you turn on Unknown sources: open Android Auto settings, tap Version ten times to unlock developer settings, then ⋮ → Developer settings → Unknown sources.</string>
+    <string name="auto_sites_hint">Website or feed address</string>
+    <string name="auto_sites_name_hint">Name (optional)</string>
+    <string name="auto_sites_add">Add</string>
+    <string name="auto_sites_empty">No websites yet.</string>
+    <string name="auto_sites_preview">Preview</string>
+    <string name="auto_sites_hide">Hide</string>
+    <string name="auto_sites_remove">Remove</string>
+    <string name="auto_sites_mode_auto">Feed or links</string>
+    <string name="auto_sites_mode_links">Page links only</string>
+    <string name="auto_sites_loading">Finding articles…</string>
+    <string name="auto_sites_limits_title">Lists</string>
+    <string name="auto_sites_max_label">Articles per website (1–100)</string>
+    <string name="auto_sites_refresh_label">Refresh lists after, in minutes (1–1440)</string>
+    <string name="auto_sites_play_next">Play next: when an article ends, start the next one from the same website</string>
+    <string name="auto_sites_save">Save</string>
+    <string name="auto_sites_saved">Saved.</string>
 </resources>
