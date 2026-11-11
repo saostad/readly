@@ -133,6 +133,13 @@
     <string name="speed_value_format">%1$s×</string>
     <string name="auto_download_short">Auto-download on Wi-Fi</string>
     <string name="auto_download_short_help">Up to 70 MB per language</string>
+    <string name="normalize_text_label">Read numbers and symbols</string>
+    <string name="normalize_text_help">Says dates, money, units and codes the way a person would (English)</string>
+    <string name="respell_names_label">Respell hard names</string>
+    <string name="respell_names_help">Uses a built-in list for names and foreign words (English). Can hurt names a voice already says well.</string>
+    <string name="date_day_first_label">Dates day first</string>
+    <string name="date_day_first_help">Reads 09/10 as 9 October. A date like 14/03 in the same text decides on its own.</string>
+    <string name="pronunciation_degraded_notice">Some text is read as written: a pronunciation rule couldn\'t run on it.</string>
     <string name="dismiss_button">✕</string>
     <string name="dismiss_desc">Dismiss</string>
     <string name="settings_desc">Voice and speed settings</string>

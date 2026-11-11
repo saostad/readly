@@ -63,6 +63,25 @@ blocks (replaced with "Code block skipped.") and emoji are removed, so only
 readable prose reaches the voice. Shared links open as extracted articles; if
 no main article is found, Readly says so and reads the whole page instead.
 
+English text is then read the way a person says it, on every English voice:
+numbers, dates, times, money, units, codes, phone numbers, Roman numerals and
+symbols become words ("Order #4471 ships 14/03" is read "Order number four
+four seven one ships the fourteenth of March"). The screen keeps the text as
+written. In **Voice & speed** you can turn this off (**Read numbers and
+symbols**), read ambiguous dates like 09/10 day first (**Dates day first**; a
+date like 14/03 elsewhere in the text decides on its own), and turn on
+**Respell hard names**, which reads names and foreign words from a built-in
+list (Siobhan as "Shivawn"; off by default because it can hurt names a voice
+already says well). If a rule can't run on some text, Readly reads that part as
+written and says so.
+
+The rules are the smart-voices normalizer (`app/.../text/EnglishNormalizer.kt`,
+a port of Underdog Woof's `normalize.py` and `respell.py`, Underdog
+Non-Commercial License 1.0, Copyright 2026 Conway). `EnglishNormalizerTest`
+checks it against the same 531-line golden file smart-voices uses
+(`app/src/test/resources/normalize_golden.json`); the name list is
+`app/src/main/resources/app/readly/text/respell.tsv`.
+
 Playback runs in the background with notification, lock-screen and headset
 controls (previous/next sentence, pause/play, stop). The voice and speed picked
 in the app apply from the next sentence.

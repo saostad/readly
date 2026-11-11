@@ -14,6 +14,7 @@ import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
 import app.readly.model.VoicePack
 import app.readly.playback.ReaderService
+import app.readly.text.SpokenText
 import app.readly.text.TextSanitizer
 import java.io.File
 import java.util.Locale
@@ -157,8 +158,12 @@ class ReadlyTtsService : TextToSpeechService() {
         if (callback.start(rate, AudioFormat.ENCODING_PCM_16BIT, 1) != TextToSpeech.SUCCESS) return
         try {
             val maxChunk = maxOf(callback.maxBufferSize, 1024)
+            // Other apps' text gets the same English pronunciation pass as Readly's own
+            // reading. There is no Readly UI here, so a degraded pass is only logged
+            // (SpokenText logs every fallback).
+            val spoken = SpokenText.forVoice(text, lang, ReaderService.normalizeOptions(this)).text
             engines.synthesize(
-                pack.id, text, sid, speed, lang,
+                pack.id, spoken, sid, speed, lang,
                 isStopped = { stopRequested.get() },
                 onChunk = { samples -> writePcm16(callback, samples, maxChunk) },
             )

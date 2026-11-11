@@ -2,6 +2,7 @@ package app.readly
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import app.readly.input.ArticleFetcher
 import app.readly.input.nyt.FileNytPolicyStorage
 import app.readly.input.sites.AtomicJsonFileStore
@@ -11,6 +12,8 @@ import app.readly.input.sites.SiteCatalogStore
 import app.readly.input.sites.SiteUpdateCoordinator
 import app.readly.model.VoiceCatalog
 import app.readly.playback.ReaderService
+import app.readly.text.EnglishNormalizer
+import app.readly.text.NormalizerLog
 import app.readly.tts.EngineManager
 import java.io.File
 import java.util.concurrent.ExecutorService
@@ -28,6 +31,20 @@ class ReadlyApp : Application() {
         // Initializes the shared rule store and runs one throttled automatic
         // check, all on readly-sites; returns immediately.
         siteRules.ensureStarted()
+        NormalizerLog.warnSink = { message -> Log.w("Readly", "Pronunciation: $message") }
+        NormalizerLog.errorSink = { message, e -> Log.e("Readly", "Pronunciation: $message", e) }
+        // Compile the English pronunciation rules (and load the name lexicon when it is
+        // on) before the first reading needs them.
+        val options = ReaderService.normalizeOptions(this)
+        Thread({
+            try {
+                EnglishNormalizer.warmUp(options)
+            } catch (e: Exception) {
+                // Readings still work: SpokenText falls back to the original text and
+                // shows the "read as written" notice when the rules fail for real.
+                Log.e("Readly", "Pronunciation warm-up failed: ${e.javaClass.name}: ${e.message}", e)
+            }
+        }, "readly-normalize-warmup").start()
     }
 
     val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()

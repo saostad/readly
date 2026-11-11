@@ -42,9 +42,12 @@ import app.readly.model.VoiceFamily
 import app.readly.model.VoiceModelStore
 import app.readly.model.VoicePack
 import app.readly.text.Chunk
+import app.readly.text.DateOrder
 import app.readly.text.LanguageDetector
+import app.readly.text.NormalizeOptions
 import app.readly.text.SentenceChunker
 import app.readly.text.SourceFormat
+import app.readly.text.SpokenText
 import app.readly.text.TextSanitizer
 import app.readly.tts.EngineManager
 import java.io.File
@@ -119,6 +122,25 @@ class ReaderService : Service() {
 
         /** Daily automatic NYT reading-fix checks while Readly is in use (default ON). */
         const val KEY_NYT_AUTO_UPDATE = "nytAutoUpdate"
+
+        /** Read numbers, dates, money, codes, units and symbols as words (English, default ON). */
+        const val KEY_NORMALIZE_TEXT = "normalizeText"
+
+        /** Respell hard names and foreign words from the built-in lexicon (English, default OFF). */
+        const val KEY_RESPELL_NAMES = "respellNames"
+
+        /** How an ambiguous date like 09/10 is read: [DateOrder.key] (default month first). */
+        const val KEY_DATE_ORDER = "dateOrder"
+
+        /** The English pronunciation settings, read fresh so changes apply from the next sentence. */
+        fun normalizeOptions(context: Context): NormalizeOptions {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            return NormalizeOptions(
+                normalizeText = prefs.getBoolean(KEY_NORMALIZE_TEXT, true),
+                respellNames = prefs.getBoolean(KEY_RESPELL_NAMES, false),
+                dateOrder = DateOrder.fromKey(prefs.getString(KEY_DATE_ORDER, null)),
+            )
+        }
 
         /** Per-pack RTF EMA key (`rtf.<packId>`, float). */
         fun rtfKey(packId: String): String = EngineManager.rtfKey(packId)
@@ -417,6 +439,9 @@ class ReaderService : Service() {
     private var docAudioMs = 0.0
     @Volatile
     private var docChars = 0
+    /** True once this document showed the "read as written" pronunciation notice. */
+    @Volatile
+    private var docSpokenNoticeShown = false
 
     /** Text held while Smart voice waits for the user's Ask choice. Read-anyway consumes it. */
     private data class PendingAsk(
@@ -1273,7 +1298,8 @@ class ReaderService : Service() {
             .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
         val lang = if (bucketForPack(pack) == "fa") "fa" else "en"
         val rate = engines.preload(pack.id)
-        val audio = engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped = isCancelled)
+        val spoken = SpokenText.forVoice(text, lang, normalizeOptions(this)).text
+        val audio = engines.synthesize(pack.id, spoken, speakerId, speed, lang, isStopped = isCancelled)
         if (audio.isEmpty() || isCancelled()) return
         val track = ensureTrack(rate)
         // A READ owns the track from here; don't touch it (a flush would drop the new
@@ -1622,6 +1648,7 @@ class ReaderService : Service() {
         if (onRequestDone != null) {
             docAudioMs = 0.0
             docChars = 0
+            docSpokenNoticeShown = false
         }
         val rate = try {
             ensureEngineOrThrow(docPack.id)
@@ -1774,11 +1801,20 @@ class ReaderService : Service() {
         val speakerId = speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
         val speed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getFloat(KEY_SPEED, 1.0f).coerceIn(0.25f, 4.0f)
+        // The voice reads normalized text ("2 kg" as "two kilograms"); the screen keeps
+        // the chunk as written.
+        val spokenResult = SpokenText.forVoice(text, lang, normalizeOptions(this))
+        if (spokenResult.degraded && !docSpokenNoticeShown) {
+            docSpokenNoticeShown = true
+            val note = getString(R.string.pronunciation_degraded_notice)
+            ReaderState.update { it.copy(notice = listOfNotNull(it.notice, note).joinToString(" ")) }
+        }
+        val spoken = spokenResult.text
         val begin = SystemClock.elapsedRealtime()
         val audio = when (pack.family) {
             VoiceFamily.POCKET, VoiceFamily.PHONON ->
-                engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped, onChunk = emit)
-            else -> engines.synthesize(pack.id, text, speakerId, speed, lang, isStopped).also { emit(it) }
+                engines.synthesize(pack.id, spoken, speakerId, speed, lang, isStopped, onChunk = emit)
+            else -> engines.synthesize(pack.id, spoken, speakerId, speed, lang, isStopped).also { emit(it) }
         }
         val synthMs = SystemClock.elapsedRealtime() - begin
         val rate = engines.sampleRateIfLoaded(pack.id) ?: 0

@@ -23,6 +23,7 @@ import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
 import app.readly.model.VoicePack
 import app.readly.playback.ReaderService
+import app.readly.text.DateOrder
 import java.io.File
 import java.lang.ref.WeakReference
 import java.text.DateFormat
@@ -68,6 +69,9 @@ class SettingsSheet(
             R.id.sheetAutoSwitch,
             ReaderService.KEY_AUTO_DOWNLOAD,
         )
+        fillSwitch(dialog, R.id.sheetNormalizeSwitch, ReaderService.KEY_NORMALIZE_TEXT)
+        fillSwitch(dialog, R.id.sheetRespellSwitch, ReaderService.KEY_RESPELL_NAMES, default = false)
+        fillDayFirstSwitch(dialog)
         fillPhoneRow(dialog)
         fillPersianLine(dialog)
         fillSiteSection(dialog)
@@ -157,11 +161,21 @@ class SettingsSheet(
         })
     }
 
-    private fun fillSwitch(dialog: Dialog, switchId: Int, key: String) {
+    private fun fillSwitch(dialog: Dialog, switchId: Int, key: String, default: Boolean = true) {
         val switch = dialog.findViewById<Switch>(switchId)
-        switch.isChecked = prefs.getBoolean(key, true)
+        switch.isChecked = prefs.getBoolean(key, default)
         switch.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean(key, checked).apply()
+        }
+    }
+
+    /** Stores the date order as its [DateOrder.key], like smart-voices' `date_order`. */
+    private fun fillDayFirstSwitch(dialog: Dialog) {
+        val switch = dialog.findViewById<Switch>(R.id.sheetDayFirstSwitch)
+        switch.isChecked = ReaderService.normalizeOptions(activity).dateOrder == DateOrder.DAY_FIRST
+        switch.setOnCheckedChangeListener { _, checked ->
+            val order = if (checked) DateOrder.DAY_FIRST else DateOrder.MONTH_FIRST
+            prefs.edit().putString(ReaderService.KEY_DATE_ORDER, order.key).apply()
         }
     }
 
