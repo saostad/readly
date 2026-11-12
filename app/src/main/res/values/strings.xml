@@ -148,6 +148,8 @@
     <string name="phone_voice_label">Phone voice</string>
 
     <string name="now_reading_title">Now reading</string>
+    <string name="ask_download">Download voice</string>
+    <string name="ask_read_anyway">Read with current voice</string>
     <string name="minibar_format">Now reading · %1$s</string>
     <string name="minibar_toggle_desc">Play or pause</string>
     <string name="read_later_label">Read later</string>

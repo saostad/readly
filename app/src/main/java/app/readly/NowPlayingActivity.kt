@@ -41,6 +41,9 @@ class NowPlayingActivity : Activity() {
     private lateinit var speedChip: Button
     private lateinit var speakerChip: Button
     private lateinit var browserRow: View
+    private lateinit var askRow: View
+    private lateinit var askDownload: Button
+    private lateinit var transportRow: View
 
     /** True once a non-IDLE state was seen; an IDLE after that closes the screen. */
     private var hasStarted = false
@@ -79,6 +82,13 @@ class NowPlayingActivity : Activity() {
         speedChip = findViewById(R.id.npSpeedChip)
         speakerChip = findViewById(R.id.npSpeakerChip)
         browserRow = findViewById(R.id.npBrowserRow)
+        askRow = findViewById(R.id.npAskRow)
+        askDownload = findViewById(R.id.npAskDownload)
+        transportRow = findViewById(R.id.npTransportRow)
+        askDownload.setOnClickListener { sendAction(ReaderService.ACTION_DOWNLOAD_VOICE) }
+        findViewById<Button>(R.id.npAskReadAnyway).setOnClickListener {
+            sendAction(ReaderService.ACTION_READ_ANYWAY)
+        }
 
         findViewById<ImageButton>(R.id.closeButton).setOnClickListener { closeWithTransition() }
         findViewById<ImageButton>(R.id.npPrev).setOnClickListener {
@@ -145,6 +155,7 @@ class NowPlayingActivity : Activity() {
         }
         renderArt(snap)
         renderBrowserRow(snap)
+        renderAskRow(snap)
         renderSentence(snap)
         renderProgress(snap)
         playPauseButton.setImageResource(
@@ -185,6 +196,19 @@ class NowPlayingActivity : Activity() {
             } else {
                 View.GONE
             }
+    }
+
+    /**
+     * The Ask state (a voice for this language needs downloading) offers Download
+     * and Read with the current voice in place of the transport controls, which
+     * have nothing to play yet.
+     */
+    private fun renderAskRow(snap: ReaderSnapshot) {
+        val asking = snap.status == ReaderStatus.ASK
+        askRow.visibility = if (asking) View.VISIBLE else View.GONE
+        // "No Persian voice is available yet." has nothing to download.
+        askDownload.visibility = if (asking && snap.askPackId != null) View.VISIBLE else View.GONE
+        transportRow.visibility = if (asking) View.GONE else View.VISIBLE
     }
 
     /** Previous sentence dimmed, the current one highlighted, the next dimmed. */

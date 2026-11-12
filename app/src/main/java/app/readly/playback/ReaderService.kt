@@ -108,6 +108,9 @@ class ReaderService : MediaBrowserService() {
         const val ACTION_STOP = "app.readly.STOP"
         const val ACTION_READ_URL = "app.readly.READ_URL"
         const val ACTION_READ_ANYWAY = "app.readly.READ_ANYWAY"
+
+        /** The Ask prompt's "Download": downloads the recommended voice, then reads the held text. */
+        const val ACTION_DOWNLOAD_VOICE = "app.readly.DOWNLOAD_VOICE"
         const val ACTION_PREVIEW = "app.readly.PREVIEW"
 
         const val EXTRA_TEXT = "text"
@@ -1112,6 +1115,7 @@ class ReaderService : MediaBrowserService() {
             ACTION_PREVIOUS -> moveBy(-1)
             ACTION_STOP -> handleStop()
             ACTION_READ_ANYWAY -> handleReadAnyway()
+            ACTION_DOWNLOAD_VOICE -> handleDownloadVoice()
             ACTION_PREVIEW -> handlePreview(
                 intent.getStringExtra(EXTRA_PREVIEW_PACK) ?: "",
                 intent.getIntExtra(EXTRA_PREVIEW_SPEAKER, 0),
@@ -1324,7 +1328,9 @@ class ReaderService : MediaBrowserService() {
      * shown on the main screen and Toasted once reading starts. [onRequestDone] is
      * invoked exactly once when the request starts a pipeline, asks, or ends empty
      * (before any idle transition). [forceMain] reads with the main voice without
-     * asking (the Ask notification's "Read anyway").
+     * asking (the Ask notification's "Read anyway"). [approvedDownloadId] is a
+     * voice the user agreed to download from the Ask prompt: when it covers the
+     * detected language it is downloaded (any size, any network) and read with.
      */
     private fun startReading(
         title: String,
@@ -1333,6 +1339,7 @@ class ReaderService : MediaBrowserService() {
         notice: String?,
         onRequestDone: () -> Unit,
         forceMain: Boolean = false,
+        approvedDownloadId: String? = null,
     ) {
         stopPipeline()
         pendingAsk = null
@@ -1360,6 +1367,24 @@ class ReaderService : MediaBrowserService() {
             }
             startWithPack(title, clean, lang, mainPack, notice, onRequestDone, carStart)
             return
+        }
+        val approved = approvedDownloadId?.let { VoiceCatalog.byId(it) }
+        if (approvedDownloadId != null) {
+            if (approved != null && approved.downloadable && lang in approved.languages()) {
+                Log.i("Readly", "Smart voice: lang=$lang → approved download ${approved.id}")
+                if (VoiceModelStore(approved, voicesDir(), VoiceModelStore::httpUrlOpener).isInstalled()) {
+                    setSmartLine(lang, approved)
+                    startWithPack(title, clean, lang, approved, notice, onRequestDone, carStart)
+                } else {
+                    autoDownloadAndRead(title, text, clean, lang, format, notice, approved, onRequestDone)
+                }
+                return
+            }
+            Log.w(
+                "Readly",
+                "fallback=true attempted=approved-download pack=$approvedDownloadId lang=$lang " +
+                    "reason=\"pack missing or doesn't cover the language\" taken=smart-voice-pick",
+            )
         }
         val explicit = installedLangPack(lang)
         val recommended = SmartVoice.recommendedPack(lang)
@@ -1596,7 +1621,7 @@ class ReaderService : MediaBrowserService() {
             )
         }
         updateNotification()
-        val error = runSharedInstall(pack)
+        val error = runSharedInstall(pack, display)
         if (error != null) {
             val message = "Voice download failed: ${error.javaClass.name}: ${error.message}"
             Log.e("Readly", "$message (${pack.id})", error)
@@ -1619,7 +1644,7 @@ class ReaderService : MediaBrowserService() {
      * success, the failure otherwise. Callers checked [isInstallRunning] first, so a
      * live task here means a race (also returned as a failure to ask instead).
      */
-    private fun runSharedInstall(pack: VoicePack): Exception? {
+    private fun runSharedInstall(pack: VoicePack, display: String): Exception? {
         val app = application as ReadlyApp
         if (app.installTask?.isDone == false) {
             return IOException("another voice is already downloading")
@@ -1628,11 +1653,24 @@ class ReaderService : MediaBrowserService() {
         val done = CountDownLatch(1)
         // Written on the main thread, read after the latch: the latch guarantees visibility.
         var failure: Exception? = null
+        var lastPercent = -1
         val task = InstallTask(store) { finished ->
             if (app.installTask === finished) app.installTask = null
         }
         task.listener = object : InstallTask.Listener {
-            override fun onProgress(stage: app.readly.model.InstallStage, bytesDone: Long, bytesTotal: Long) = Unit
+            override fun onProgress(stage: app.readly.model.InstallStage, bytesDone: Long, bytesTotal: Long) {
+                if (bytesTotal <= 0) return
+                val percent = (bytesDone * 100 / bytesTotal).toInt().coerceIn(0, 100)
+                if (percent == lastPercent) return
+                lastPercent = percent
+                ReaderState.update {
+                    if (it.status != ReaderStatus.FETCHING) {
+                        it
+                    } else {
+                        it.copy(currentText = "Downloading a $display voice (${pack.sizeMb} MB)… $percent%")
+                    }
+                }
+            }
             override fun onDone() {
                 done.countDown()
             }
@@ -1697,6 +1735,7 @@ class ReaderService : MediaBrowserService() {
         ReaderState.update {
             it.copy(
                 status = ReaderStatus.ASK,
+                askPackId = recommended?.id,
                 title = title,
                 currentText = "",
                 index = 0,
@@ -1721,6 +1760,48 @@ class ReaderService : MediaBrowserService() {
         updateNotification()
         onRequestDone()
         goIdle()
+    }
+
+    /** The Ask prompt's "Download": downloads the recommended voice, then reads the held text. */
+    private fun handleDownloadVoice() {
+        executeRead("DOWNLOAD_VOICE") {
+            try {
+                val held = pendingAsk ?: run {
+                    Log.w("Readly", "Download tapped with nothing held; ignoring")
+                    mainHandler.post { Toast.makeText(this, "Nothing is waiting for a voice any more. Start the reading again.", Toast.LENGTH_LONG).show() }
+                    return@executeRead
+                }
+                val packId = held.recommendedId ?: run {
+                    Log.w("Readly", "Download tapped but no voice is recommended; ignoring")
+                    mainHandler.post { Toast.makeText(this, "No voice is available to download for this language yet.", Toast.LENGTH_LONG).show() }
+                    return@executeRead
+                }
+                if (isInstallRunning()) {
+                    val message = "Another voice is already downloading. Try again when it finishes."
+                    Log.w("Readly", "Download of $packId refused: another install is running")
+                    mainHandler.post { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+                    return@executeRead
+                }
+                pendingAsk = null
+                pendingRequests.incrementAndGet()
+                val finished = AtomicBoolean(false)
+                fun finish() {
+                    if (finished.compareAndSet(false, true)) pendingRequests.decrementAndGet()
+                }
+                try {
+                    startReading(
+                        held.title, held.text, held.format, held.notice, ::finish,
+                        approvedDownloadId = packId,
+                    )
+                } finally {
+                    finish()
+                }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (e: Exception) {
+                postError(e)
+            }
+        }
     }
 
     /** The Ask notification's "Read anyway": reads the held text with the main voice. */
@@ -2844,6 +2925,14 @@ class ReaderService : MediaBrowserService() {
             .setContentIntent(openApp)
             .setOngoing(false)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .apply {
+                if (recommended != null) {
+                    addAction(
+                        android.R.drawable.stat_sys_download, "Download",
+                        serviceAction(ACTION_DOWNLOAD_VOICE, 12),
+                    )
+                }
+            }
             .addAction(android.R.drawable.ic_menu_add, "Choose voice", choose)
             .addAction(
                 android.R.drawable.ic_media_play, "Read anyway",

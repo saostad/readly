@@ -90,6 +90,30 @@
                 android:text="@string/nyt_open_page_help" />
         </LinearLayout>
 
+        <LinearLayout
+            android:id="@+id/npAskRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <Button
+                style="@style/Btn.Primary"
+                android:id="@+id/npAskDownload"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/ask_download" />
+
+            <Button
+                style="@style/Chip"
+                android:id="@+id/npAskReadAnyway"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/ask_read_anyway" />
+        </LinearLayout>
+
         <TextView
             android:id="@+id/sentenceView"
             android:layout_width="match_parent"
@@ -137,6 +161,7 @@
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/npTransportRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"

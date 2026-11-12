@@ -55,6 +55,8 @@ data class ReaderSnapshot(
      * starts, so no stale link button appears on unrelated errors.
      */
     val retryUrl: String? = null,
+    /** In the ASK state, the voice the Download button would fetch (null when none). */
+    val askPackId: String? = null,
 )
 
 /**
