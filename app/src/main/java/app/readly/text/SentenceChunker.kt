@@ -170,18 +170,25 @@ object SentenceChunker {
                 (abbreviationEnd.containsMatchIn(current) && (nextFirst.isLowerCase() || nextFirst.isDigit()))
             )
 
+    /** True when the clause mark at [i] ends a clause: whitespace or [end] follows it. */
+    private fun isClauseCut(input: String, i: Int, end: Int): Boolean =
+        i + 1 >= end || input[i + 1].isWhitespace()
+
     /**
      * Cuts an over-long first sentence: after the last `, ; : —` (plus `،`
-     * and `؛` for fa/ar) at offset 25..80 (the chunk keeps the punctuation),
-     * else at the last space before 60, else a hard cut at 60. The rest
-     * becomes the start of chunk 2 under the normal rules.
+     * and `؛` for fa/ar) in the search window (the chunk keeps the
+     * punctuation), else at the last space before 60, else a hard cut at
+     * 60. The rest becomes the start of chunk 2 under the normal rules.
+     * A clause mark counts as a cut point only when the next character is
+     * whitespace or the end of the sentence, so the `:` in `8:30` and the
+     * `,` in `1,250` never cut.
      *
-     * For fa/ar ([clauseMarksOnly]) a cut is made only at a clause mark up
-     * to offset [FIRST_PUNCT_MAX]; the Persian clause that opens the task's
-     * example sentence ends at offset 21, so the search starts at the
-     * sentence start rather than at [FIRST_PUNCT_MIN]. With no clause mark
-     * there this returns null and the caller leaves the sentence whole for
-     * [splitLong] instead of cutting it mid-phrase at a space.
+     * For fa/ar ([clauseMarksOnly]) a cut is made only at a clause mark
+     * from offset [FIRST_MERGE_MIN] - 1 to [FIRST_PUNCT_MAX], so the head
+     * is at least [FIRST_MERGE_MIN] chars long and never a tiny fragment.
+     * With no clause mark there this returns null and the caller leaves
+     * the sentence whole for [splitLong] instead of cutting it mid-phrase
+     * at a space. Other languages search from [FIRST_PUNCT_MIN].
      */
     private fun cutFirst(
         input: String,
@@ -191,14 +198,15 @@ object SentenceChunker {
         clauseMarksOnly: Boolean,
     ): Pair<Pair<Int, Int>, Pair<Int, Int>>? {
         if (clauseMarksOnly) {
+            val from = start + FIRST_MERGE_MIN - 1
             val to = minOf(start + FIRST_PUNCT_MAX, end - 1)
             var punct = -1
-            var i = start
+            var i = from
             while (i <= to) {
-                if (input[i] in splitPunct) punct = i
+                if (input[i] in splitPunct && isClauseCut(input, i, end)) punct = i
                 i++
             }
-            if (punct < start) return null
+            if (punct < from) return null
             return (start to trimEnd(input, start, punct + 1)) to
                 (trimStart(input, punct + 1, end) to end)
         }
@@ -207,7 +215,7 @@ object SentenceChunker {
         var punct = -1
         var i = from
         while (i <= to) {
-            if (input[i] in splitPunct) punct = i
+            if (input[i] in splitPunct && isClauseCut(input, i, end)) punct = i
             i++
         }
         if (punct >= from) {
@@ -237,7 +245,7 @@ object SentenceChunker {
             var punct = -1
             var i = current
             while (i < limit && i < end) {
-                if (input[i] in splitPunct) punct = i
+                if (input[i] in splitPunct && isClauseCut(input, i, end)) punct = i
                 i++
             }
             if (punct >= current) {

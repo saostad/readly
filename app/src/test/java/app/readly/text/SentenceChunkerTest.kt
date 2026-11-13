@@ -242,6 +242,46 @@ class SentenceChunkerTest {
     }
 
     @Test
+    fun chunk_fa_firstSentenceMarkAtOffset3_isNotCutThere() {
+        // Only clause mark ends at offset 3: too short to play alone.
+        val input = "نه، " + "ا".repeat(100) + "."
+        val chunks = SentenceChunker.chunk(input, "fa")
+        assertEquals(1, chunks.size)
+        assertEquals(input, chunks[0].text)
+    }
+
+    @Test
+    fun chunk_en_firstSentenceWithTime_isNotCutInsideTime() {
+        val first = "a".repeat(30) + " 8:30 " + "b".repeat(60) + "."
+        val chunks = SentenceChunker.chunk(first, "en")
+        assertEquals(2, chunks.size)
+        assertEquals("a".repeat(30) + " 8:30", chunks[0].text)
+        assertTrue(!chunks[0].text.endsWith(":"))
+        for (chunk in chunks) {
+            assertEquals(chunk.text, first.substring(chunk.start, chunk.end).trim())
+        }
+    }
+
+    @Test
+    fun chunk_fa_firstSentenceWithTime_isNotCutInsideTime() {
+        val input = "ا".repeat(30) + " ۸:۳۰ " + "ب".repeat(60) + "."
+        val chunks = SentenceChunker.chunk(input, "fa")
+        assertEquals(1, chunks.size)
+        assertEquals(input, chunks[0].text)
+    }
+
+    @Test
+    fun chunk_longSentence_isNotSplitInsideGroupedNumber() {
+        val long = "A" + "a".repeat(289) + " 1,250 " + "b".repeat(50) + "."
+        val chunks = SentenceChunker.chunk("Intro here. $long")
+        assertEquals(3, chunks.size)
+        assertEquals("Intro here.", chunks[0].text)
+        assertTrue(chunks[1].text.endsWith("1,250"))
+        assertEquals("b".repeat(50) + ".", chunks[2].text)
+        assertEquals(long, chunks[1].text + " " + chunks[2].text)
+    }
+
+    @Test
     fun chunk_en_firstSentenceWithoutClauseMark_stillCutsAsToday() {
         // Same shape as the Persian no-mark sentence: English still cuts.
         val first = "a".repeat(141) + "."
