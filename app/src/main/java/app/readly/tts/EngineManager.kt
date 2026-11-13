@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.util.Log
 import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
+import app.readly.playback.ReaderService
 import app.readly.tts.pocket.G2p
 import java.io.File
 import java.util.concurrent.Callable
@@ -172,11 +173,24 @@ class EngineManager(appContext: Context) {
      * Must run on `readly-tts`.
      */
     private fun engineFor(packId: String): SpeechEngine {
-        engines[packId]?.let { return it.engine }
+        // Read the Pocket tuning fresh: when it differs from the one the
+        // loaded engine was built with, that engine is rebuilt, so a
+        // settings change applies to the next reading with no restart.
+        val tuning = ReaderService.pocketTuning(app)
+        engines[packId]?.let { slot ->
+            if (slot.engine.pocketTuning == tuning) return slot.engine
+            engines.remove(packId)
+            try {
+                slot.engine.close()
+            } catch (e: Exception) {
+                Log.w("Readly", "Closing the $packId voice for new Pocket tuning failed", e)
+            }
+            publishSnapshot()
+        }
         val pack = VoiceCatalog.byId(packId) ?: throw IllegalStateException("Unknown voice pack $packId")
         val store = VoiceModelStore(pack, File(app.noBackupFilesDir, "voices"), VoiceModelStore::httpUrlOpener)
         // Pocket v2 pronounces through the G2P in app assets; v1 never calls this.
-        val engine = SpeechEngine(store) { G2p.fromAssets(app.assets) }
+        val engine = SpeechEngine(store, { G2p.fromAssets(app.assets) }, tuning)
         engines[packId] = EngineSlot(engine, engine.sampleRate)
         while (engines.size > MAX_ENGINES) {
             val eldest = engines.entries.iterator().next()

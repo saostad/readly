@@ -7,6 +7,7 @@ import app.readly.model.VoiceModelStore
 import app.readly.tts.phonon.PhononEngine
 import app.readly.tts.pocket.G2p
 import app.readly.tts.pocket.PocketEngine
+import app.readly.tts.pocket.PocketTuning
 import com.k2fsa.sherpa.onnx.GenerationConfig
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
@@ -30,7 +31,12 @@ import java.util.Locale
  * @throws IllegalStateException if the voice pack [is not installed][VoiceModelStore.isInstalled].
  * @throws IOException if the native voice fails to load, naming the dir and the real error.
  */
-class SpeechEngine(store: VoiceModelStore, g2pProvider: (() -> G2p)? = null) : Closeable {
+class SpeechEngine(
+    store: VoiceModelStore,
+    g2pProvider: (() -> G2p)? = null,
+    /** The tuning the Pocket engine is built with (ignored by other voices). */
+    val pocketTuning: PocketTuning = PocketTuning(),
+) : Closeable {
 
     private val pack = store.pack
     private val dir = store.modelDir.absolutePath
@@ -44,7 +50,7 @@ class SpeechEngine(store: VoiceModelStore, g2pProvider: (() -> G2p)? = null) : C
         when (pack.family) {
             VoiceFamily.POCKET -> {
                 pocket = try {
-                    PocketEngine(File(store.modelDir, pack.modelFile), g2pProvider)
+                    PocketEngine(File(store.modelDir, pack.modelFile), g2pProvider, pocketTuning)
                 } catch (e: Exception) {
                     throw IOException(loadError(dir, e), e)
                 } catch (e: LinkageError) {

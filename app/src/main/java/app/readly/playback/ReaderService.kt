@@ -60,6 +60,8 @@ import app.readly.text.SpokenNotice
 import app.readly.text.SpokenText
 import app.readly.text.TextSanitizer
 import app.readly.tts.EngineManager
+import app.readly.tts.pocket.PocketTuning
+import app.readly.tts.pocket.PocketTuningPrefs
 import java.io.File
 import java.io.IOException
 import java.net.URI
@@ -206,6 +208,46 @@ class ReaderService : MediaBrowserService() {
 
         /** Read numbers, dates, money, codes, units and symbols as words (English, default ON). */
         const val KEY_NORMALIZE_TEXT = "normalizeText"
+
+        /** Pocket (Persian voice) tuning, one key per [app.readly.tts.pocket.PocketTuning] field. */
+        const val KEY_POCKET_MAX_TOKENS = "pocketMaxTokens"
+        const val KEY_POCKET_MIN_TOKENS = "pocketMinTokens"
+        const val KEY_POCKET_G2P_WINDOW_CHARS = "pocketG2pWindowChars"
+        const val KEY_POCKET_TEMPERATURE = "pocketTemperature"
+        const val KEY_POCKET_EOS_THRESHOLD = "pocketEosThreshold"
+        const val KEY_POCKET_FRAMES_AFTER_EOS = "pocketFramesAfterEos"
+        const val KEY_POCKET_DECODE_STEPS = "pocketDecodeSteps"
+
+        /** True once the invalid-Pocket-tuning reader notice was shown. */
+        @Volatile
+        private var pocketTuningNoticeShown = false
+
+        /**
+         * The Pocket tuning to build the engine with, read fresh so a
+         * settings change applies to the next reading. A stored set that
+         * fails validation is never used: it is logged and the defaults
+         * are taken, with the reader notice shown once.
+         */
+        fun pocketTuning(context: Context): PocketTuning {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val load = PocketTuningPrefs.load(prefs.all)
+            val reason = load.invalidReason
+            if (reason != null) {
+                Log.w(
+                    "Readly",
+                    "fallback: true, attempted=pocket_tuning, " +
+                        "reason=$reason, taken=default_pocket_tuning",
+                )
+                if (!pocketTuningNoticeShown) {
+                    pocketTuningNoticeShown = true
+                    val notice = context.getString(R.string.pocket_tuning_invalid_notice)
+                    ReaderState.update {
+                        it.copy(notice = listOfNotNull(it.notice, notice).joinToString(" "))
+                    }
+                }
+            }
+            return load.tuning
+        }
 
         /** Respell hard names and foreign words from the built-in lexicon (English, default OFF). */
         const val KEY_RESPELL_NAMES = "respellNames"

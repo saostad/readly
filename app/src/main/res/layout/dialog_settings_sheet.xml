@@ -519,5 +519,33 @@
             android:layout_marginTop="6dp"
             android:textColor="@color/error"
             android:visibility="gone" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="10dp"
+            android:background="@color/line" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/pocket_advanced_title"
+            android:textColor="@color/text"
+            android:textSize="13.5sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:id="@+id/sheetPocketBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <Button
+            style="@style/Btn.Text"
+            android:id="@+id/sheetPocketReset"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/pocket_reset_defaults" />
     </LinearLayout>
 </ScrollView>

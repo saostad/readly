@@ -6,8 +6,13 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
@@ -25,6 +30,8 @@ import app.readly.model.VoiceModelStore
 import app.readly.model.VoicePack
 import app.readly.playback.ReaderService
 import app.readly.text.DateOrder
+import app.readly.tts.pocket.PocketTuning
+import app.readly.tts.pocket.PocketTuningPrefs
 import java.io.File
 import java.lang.ref.WeakReference
 import java.text.DateFormat
@@ -78,6 +85,7 @@ class SettingsSheet(
         fillAutoSitesRow(dialog)
         fillPersianLine(dialog)
         fillSiteSection(dialog)
+        fillPocketSection(dialog)
         dialog.setOnDismissListener { onDismiss() }
         dialog.show()
         Sheets.applyFullWidth(dialog)
@@ -223,6 +231,155 @@ class SettingsSheet(
                     activity.getString(R.string.phone_voice_fallback_toast),
                 )
             }
+        }
+    }
+
+    /** One editable Pocket tuning value: its prefs key, texts and conversion. */
+    private class PocketField(
+        val key: String,
+        val labelRes: Int,
+        val helpRes: Int,
+        val isFloat: Boolean,
+        val shown: (PocketTuning) -> String,
+        val updated: (PocketTuning, String) -> PocketTuning?,
+    )
+
+    private val pocketFields = listOf(
+        PocketField(
+            ReaderService.KEY_POCKET_MAX_TOKENS,
+            R.string.pocket_max_tokens_label, R.string.pocket_max_tokens_help, false,
+            { it.maxTokens.toString() },
+            { tuning, text -> text.toIntOrNull()?.let { tuning.copy(maxTokens = it) } },
+        ),
+        PocketField(
+            ReaderService.KEY_POCKET_MIN_TOKENS,
+            R.string.pocket_min_tokens_label, R.string.pocket_min_tokens_help, false,
+            { it.minTokens.toString() },
+            { tuning, text -> text.toIntOrNull()?.let { tuning.copy(minTokens = it) } },
+        ),
+        PocketField(
+            ReaderService.KEY_POCKET_G2P_WINDOW_CHARS,
+            R.string.pocket_g2p_window_label, R.string.pocket_g2p_window_help, false,
+            { it.g2pWindowChars.toString() },
+            { tuning, text -> text.toIntOrNull()?.let { tuning.copy(g2pWindowChars = it) } },
+        ),
+        PocketField(
+            ReaderService.KEY_POCKET_TEMPERATURE,
+            R.string.pocket_temperature_label, R.string.pocket_temperature_help, true,
+            { it.temperature.toString() },
+            { tuning, text -> text.toFloatOrNull()?.let { tuning.copy(temperature = it) } },
+        ),
+        PocketField(
+            ReaderService.KEY_POCKET_DECODE_STEPS,
+            R.string.pocket_decode_steps_label, R.string.pocket_decode_steps_help, false,
+            { it.decodeSteps.toString() },
+            { tuning, text -> text.toIntOrNull()?.let { tuning.copy(decodeSteps = it) } },
+        ),
+        PocketField(
+            ReaderService.KEY_POCKET_EOS_THRESHOLD,
+            R.string.pocket_eos_threshold_label, R.string.pocket_eos_threshold_help, true,
+            { it.eosThreshold.toString() },
+            { tuning, text -> text.toFloatOrNull()?.let { tuning.copy(eosThreshold = it) } },
+        ),
+        PocketField(
+            ReaderService.KEY_POCKET_FRAMES_AFTER_EOS,
+            R.string.pocket_frames_after_eos_label, R.string.pocket_frames_after_eos_help, false,
+            { it.framesAfterEos.toString() },
+            { tuning, text -> text.toIntOrNull()?.let { tuning.copy(framesAfterEos = it) } },
+        ),
+    )
+
+    /**
+     * "Persian voice (advanced)": one number field per [PocketTuning]
+     * value, saved as it is edited when the whole stored set still
+     * validates; an out-of-range edit shows the validation message under
+     * its field and is not saved. Reset restores all seven defaults.
+     */
+    private fun fillPocketSection(dialog: Dialog) {
+        val box = dialog.findViewById<LinearLayout>(R.id.sheetPocketBox)
+        box.removeAllViews()
+        var filling = false
+        val editors = mutableListOf<Pair<PocketField, EditText>>()
+        val errors = mutableListOf<Pair<PocketField, TextView>>()
+        fun currentTuning(): PocketTuning = PocketTuningPrefs.load(prefs.all).tuning
+        fun paint(tuning: PocketTuning) {
+            filling = true
+            for ((field, editor) in editors) editor.setText(field.shown(tuning))
+            for ((_, error) in errors) error.visibility = View.GONE
+            filling = false
+        }
+        for (field in pocketFields) {
+            val label = TextView(activity, null, 0, R.style.CardTitle).apply {
+                text = activity.getString(field.labelRes)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = (10 * activity.resources.displayMetrics.density).toInt() }
+            }
+            box.addView(label)
+            val error = TextView(activity, null, 0, R.style.Small).apply {
+                setTextColor(activity.getColor(R.color.error))
+                visibility = View.GONE
+            }
+            val editor = EditText(activity, null, 0, R.style.BoxEdit).apply {
+                inputType = if (field.isFloat) {
+                    InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or
+                        InputType.TYPE_NUMBER_FLAG_SIGNED
+                } else {
+                    InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED
+                }
+                addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+                    override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+                    override fun afterTextChanged(editable: Editable?) {
+                        if (filling) return
+                        val candidate = field.updated(currentTuning(), editable?.toString().orEmpty())
+                        if (candidate == null) {
+                            error.text = activity.getString(R.string.pocket_enter_number)
+                            error.visibility = View.VISIBLE
+                            return
+                        }
+                        try {
+                            candidate.validate()
+                        } catch (e: IllegalArgumentException) {
+                            error.text = e.message
+                            error.visibility = View.VISIBLE
+                            return
+                        }
+                        val value: Any = PocketTuningPrefs.values(candidate).getValue(field.key)
+                        val edit = prefs.edit()
+                        when (value) {
+                            is Int -> edit.putInt(field.key, value)
+                            is Float -> edit.putFloat(field.key, value)
+                            else -> edit.putString(field.key, value.toString())
+                        }
+                        edit.apply()
+                        error.visibility = View.GONE
+                    }
+                })
+            }
+            box.addView(editor)
+            box.addView(
+                TextView(activity, null, 0, R.style.Small).apply {
+                    text = activity.getString(field.helpRes)
+                },
+            )
+            box.addView(error)
+            editors += field to editor
+            errors += field to error
+        }
+        paint(currentTuning())
+        dialog.findViewById<Button>(R.id.sheetPocketReset).setOnClickListener {
+            val edit = prefs.edit()
+            for ((key, value) in PocketTuningPrefs.values(PocketTuning())) {
+                when (value) {
+                    is Int -> edit.putInt(key, value)
+                    is Float -> edit.putFloat(key, value)
+                    else -> edit.putString(key, value.toString())
+                }
+            }
+            edit.apply()
+            paint(PocketTuning())
         }
     }
 
