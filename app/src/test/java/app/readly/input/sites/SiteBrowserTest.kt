@@ -380,4 +380,14 @@ class SiteBrowserTest {
         }
         assertTrue("message was: $message", message.startsWith("Couldn't read this New York Times article: "))
     }
+
+    @Test
+    fun blankPage_isTheBrowsersOwnStartNotABlockedSite() {
+        assertTrue(SiteBrowserPolicy.isBlankPage("about:blank"))
+        assertTrue(SiteBrowserPolicy.isBlankPage(" ABOUT:BLANK "))
+        assertFalse(SiteBrowserPolicy.isBlankPage("about:config"))
+        assertFalse(SiteBrowserPolicy.isBlankPage("https://www.nytimes.com/"))
+        // Other non-website addresses stay blocked.
+        assertFalse(SiteBrowserPolicy.allowsBrowsing("about:config"))
+    }
 }

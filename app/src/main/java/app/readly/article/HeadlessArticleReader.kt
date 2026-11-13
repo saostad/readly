@@ -438,6 +438,12 @@ class HeadlessArticleReader(private val context: Context) {
         override fun onPageStart(session: GeckoSession, url: String) {
             if (session !== this@HeadlessArticleReader.session) return
             val j = job ?: return
+            // A new tab's empty start page, or anything before navigate() asked for the
+            // article, is the browser's own loading and not a blocked navigation.
+            if (SiteBrowserPolicy.isBlankPage(url) || !j.navigated) {
+                Log.i(TAG, "Car reader ignored the start of ${if (SiteBrowserPolicy.isBlankPage(url)) "the blank page" else "a page before the article"}")
+                return
+            }
             retireCapture()
             when (loadTracker.onNavigationStarted(url)) {
                 is SiteBrowserLoadTracker.NavStart.Blocked ->

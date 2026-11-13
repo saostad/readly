@@ -108,6 +108,12 @@ object SiteBrowserPolicy {
         return "the address cannot open here"
     }
 
+    /**
+     * True for the browser's own empty document (`about:blank`), which a new or
+     * reset tab loads before any website. It is not a navigation to block.
+     */
+    fun isBlankPage(url: String): Boolean = url.trim().equals("about:blank", ignoreCase = true)
+
     /** Null when [url] may open, else the [blockReason] why not. */
     fun blockReasonOrNull(url: String): String? = if (allowsBrowsing(url)) null else blockReason(url)
 
