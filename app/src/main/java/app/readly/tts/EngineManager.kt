@@ -10,6 +10,7 @@ import app.readly.model.VoiceCatalog
 import app.readly.model.VoiceModelStore
 import app.readly.playback.ReaderService
 import app.readly.tts.pocket.G2p
+import app.readly.tts.pocket.PocketTuningPrefs
 import java.io.File
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
@@ -173,12 +174,16 @@ class EngineManager(appContext: Context) {
      * Must run on `readly-tts`.
      */
     private fun engineFor(packId: String): SpeechEngine {
-        // Read the Pocket tuning fresh: when it differs from the one the
-        // loaded engine was built with, that engine is rebuilt, so a
+        // Read the Pocket tuning fresh: when it differs from the one a
+        // loaded Pocket engine was built with, that engine is rebuilt, so a
         // settings change applies to the next reading with no restart.
+        // Other voices ignore the tuning and are never rebuilt for it.
         val tuning = ReaderService.pocketTuning(app)
         engines[packId]?.let { slot ->
-            if (slot.engine.pocketTuning == tuning) return slot.engine
+            val family = VoiceCatalog.byId(packId)?.family
+            if (!PocketTuningPrefs.rebuildNeeded(family, slot.engine.pocketTuning, tuning)) {
+                return slot.engine
+            }
             engines.remove(packId)
             try {
                 slot.engine.close()

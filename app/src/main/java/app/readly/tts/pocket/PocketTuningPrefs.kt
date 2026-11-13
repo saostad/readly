@@ -1,5 +1,6 @@
 package app.readly.tts.pocket
 
+import app.readly.model.VoiceFamily
 import app.readly.playback.ReaderService
 
 /**
@@ -47,6 +48,13 @@ object PocketTuningPrefs {
         ReaderService.KEY_POCKET_FRAMES_AFTER_EOS to tuning.framesAfterEos,
         ReaderService.KEY_POCKET_DECODE_STEPS to tuning.decodeSteps,
     )
+
+    /**
+     * True when a loaded engine must be rebuilt for [current] tuning: only a
+     * Pocket voice uses the tuning, so every other [family] keeps its engine.
+     */
+    fun rebuildNeeded(family: VoiceFamily?, built: PocketTuning, current: PocketTuning): Boolean =
+        family == VoiceFamily.POCKET && built != current
 
     private fun intValue(values: Map<String, Any?>, key: String, default: Int): Int =
         (values[key] as? Number)?.toInt() ?: default

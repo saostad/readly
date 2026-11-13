@@ -1,7 +1,9 @@
 package app.readly.tts.pocket
 
+import app.readly.model.VoiceFamily
 import app.readly.playback.ReaderService
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -72,5 +74,17 @@ class PocketTuningPrefsTest {
         val load = PocketTuningPrefs.load(PocketTuningPrefs.values(tuning))
         assertNull(load.invalidReason)
         assertEquals(tuning, load.tuning)
+    }
+
+    @Test
+    fun onlyAPocketVoiceIsRebuiltForNewTuning() {
+        val built = PocketTuning()
+        val changed = PocketTuning(maxTokens = 30)
+        assertTrue(PocketTuningPrefs.rebuildNeeded(VoiceFamily.POCKET, built, changed))
+        assertFalse(PocketTuningPrefs.rebuildNeeded(VoiceFamily.POCKET, built, built.copy()))
+        // Other voices ignore the tuning, so a change never reloads them.
+        assertFalse(PocketTuningPrefs.rebuildNeeded(VoiceFamily.KOKORO, built, changed))
+        assertFalse(PocketTuningPrefs.rebuildNeeded(VoiceFamily.PIPER, built, changed))
+        assertFalse(PocketTuningPrefs.rebuildNeeded(null, built, changed))
     }
 }
