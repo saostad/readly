@@ -1,6 +1,14 @@
 <img src="assets/icon.svg" width="64" height="64" alt="">
 
-# readly
+# Readly
+
+Read articles, shared text, and files aloud on Android with on-device voices.
+Readly supports English, Persian, and other downloadable voices, integrates with
+Android Auto, and can serve as your phone's text-to-speech engine. After downloading
+a voice, speech generation runs offline on your phone.
+
+[Download the latest APK](https://github.com/saostad/readly/releases/latest) ·
+[Build from source](#build) · [MIT license](LICENSE)
 
 Created in [T3 Code](https://t3.codes).
 
@@ -274,3 +282,11 @@ time). Under 1 means the phone makes speech faster than it plays, so playback
 is seamless; over 1 means it can't keep up, so you may hear short gaps between
 sentences. An `underrun` warning marks the exact chunk where playback had to
 wait for the voice.
+
+## License
+
+Readly's original source code is licensed under the [MIT License](LICENSE).
+Third-party code, extensions, models, and voice assets retain their respective
+licenses. See the bundled [Bypass Paywalls Clean license](app/src/main/assets/bpc/LICENSE)
+and the [Phonon documentation](tools/phonon/README.md) for included notices and
+licensing information; other voice models remain subject to their providers' terms.
