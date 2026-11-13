@@ -1,6 +1,7 @@
 package app.readly
 
 import android.Manifest
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import android.app.Activity
 import android.content.ClipboardManager
 import android.content.Context
@@ -112,6 +113,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     }
     private lateinit var pastePanel: LinearLayout
     private lateinit var pasteToggle: Button
+    private lateinit var homeRefresh: SwipeRefreshLayout
+    private lateinit var refreshButton: ImageButton
     private lateinit var homeHeader: LinearLayout
     private lateinit var homeTabs: LinearLayout
     private lateinit var home: HomeBrowser
@@ -170,6 +173,12 @@ class MainActivity : Activity(), InstallTask.Listener {
         miniProgress = findViewById(R.id.miniBarProgress)
         needVoiceBanner = findViewById(R.id.needVoiceBanner)
         pastePanel = findViewById(R.id.pastePanel)
+        homeRefresh = findViewById(R.id.homeRefresh)
+        refreshButton = findViewById(R.id.refreshButton)
+        homeRefresh.setColorSchemeColors(getColor(R.color.accent))
+        homeRefresh.setProgressBackgroundColorSchemeColor(getColor(R.color.surface2))
+        homeRefresh.setOnRefreshListener { home.refresh() }
+        refreshButton.setOnClickListener { home.refresh() }
         homeHeader = findViewById(R.id.readerHeader)
         homeTabs = findViewById(R.id.tabRow)
         pasteToggle = findViewById(R.id.pasteToggle)
@@ -179,6 +188,11 @@ class MainActivity : Activity(), InstallTask.Listener {
             this,
             tabRow = homeTabs,
             onNavigate = { findViewById<ScrollView>(R.id.homeScroll).scrollTo(0, 0) },
+            onRefreshingChanged = { refreshing ->
+                homeRefresh.isRefreshing = refreshing
+                refreshButton.isEnabled = !refreshing && pastePanel.visibility != View.VISIBLE
+                if (refreshing) homeRefresh.announceForAccessibility(getString(R.string.feed_refreshing))
+            },
             header = findViewById(R.id.browseHeader),
             back = findViewById(R.id.browseBack),
             headerTitle = findViewById(R.id.browseTitle),
@@ -293,6 +307,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun setPastePanelOpen(open: Boolean) {
         pastePanel.visibility = if (open) View.VISIBLE else View.GONE
         pasteToggle.compoundDrawableTintList = getColorStateList(if (open) R.color.accent else R.color.text2)
+        homeRefresh.isEnabled = !open && readerContainer.visibility == View.VISIBLE
+        refreshButton.isEnabled = homeRefresh.isEnabled && !homeRefresh.isRefreshing
         if (open) inputEdit.requestFocus()
     }
 
@@ -794,6 +810,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun showIdle() {
         setupContainer.visibility = View.VISIBLE
         readerContainer.visibility = View.GONE
+        homeRefresh.isEnabled = false
+        refreshButton.isEnabled = false
         homeHeader.visibility = View.GONE
         homeTabs.visibility = View.GONE
         setSetupVisible(true)
@@ -805,6 +823,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun showProgress() {
         setupContainer.visibility = View.VISIBLE
         readerContainer.visibility = View.GONE
+        homeRefresh.isEnabled = false
+        refreshButton.isEnabled = false
         homeHeader.visibility = View.GONE
         homeTabs.visibility = View.GONE
         setSetupVisible(true)
@@ -820,6 +840,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun showError() {
         setupContainer.visibility = View.VISIBLE
         readerContainer.visibility = View.GONE
+        homeRefresh.isEnabled = false
+        refreshButton.isEnabled = false
         homeHeader.visibility = View.GONE
         homeTabs.visibility = View.GONE
         setSetupVisible(true)
@@ -835,6 +857,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun showReader() {
         setupContainer.visibility = View.GONE
         readerContainer.visibility = View.VISIBLE
+        homeRefresh.isEnabled = pastePanel.visibility != View.VISIBLE
+        refreshButton.isEnabled = homeRefresh.isEnabled && !homeRefresh.isRefreshing
         homeHeader.visibility = View.VISIBLE
         homeTabs.visibility = View.VISIBLE
         updateNotifRow()

@@ -119,6 +119,8 @@ class CarBrowser(
 
     private val websiteStyle: Int get() = if (compactWebsites()) CONTENT_STYLE_LIST else CONTENT_STYLE_GRID
 
+    private val refreshRequests = BrowseRefreshRequests()
+
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "readly-car") }
 
     /** What each list showed the car last, so a tap, ⏭ or Shuffle uses the same order. */
@@ -182,7 +184,7 @@ class CarBrowser(
         return MediaBrowserService.BrowserRoot(ROOT, extras)
     }
 
-    fun loadChildren(parentId: String, result: MediaBrowserService.Result<MutableList<MediaItem>>) {
+    fun loadChildren(parentId: String, result: MediaBrowserService.Result<MutableList<MediaItem>>, requestedAt: Long? = null) {
         when {
             // Top-level folders become the car's tabs (at most four).
             parentId == ROOT -> result.sendResult(
@@ -196,18 +198,32 @@ class CarBrowser(
             parentId == RECENT_ROOT -> result.sendResult(recentRootItems())
             else -> {
                 result.detach()
-                executor.execute { send(result, itemsFor(parentId)) }
+                executor.execute {
+                    var forced = false
+                    val items = try {
+                        val force = refreshRequests.consume(parentId, requestedAt)
+                        forced = force
+                        if (force) Log.i(TAG, "Refreshing feed list parent=$parentId")
+                        itemsFor(parentId, force)
+                    } catch (error: Exception) {
+                        Log.e(TAG, "Couldn't load or refresh feed list parent=$parentId", error)
+                        mutableListOf(browsable(NOTICE, "Couldn't refresh this list", "Pull down again or reopen the list to retry."))
+                    }
+                    if (forced) Log.i(TAG, "Feed refresh finished parent=$parentId items=${items.size}")
+                    send(result, items)
+                }
             }
         }
     }
 
-    private fun itemsFor(parentId: String): MutableList<MediaItem> = when {
-        parentId == WEBSITES -> siteItems()
-        parentId == LATEST -> latestItems(force = false)
+    private fun itemsFor(parentId: String, force: Boolean = false): MutableList<MediaItem> = when {
+        parentId == WEBSITES -> siteItems(force)
+        parentId == LATEST -> latestItems(force)
         parentId == SAVED -> savedItems()
         parentId == RECENTS -> recentItems()
+        parentId == RETRY + WEBSITES -> siteItems(force = true)
         parentId == RETRY + LATEST -> latestItems(force = true)
-        parentId.startsWith(SITE) -> articleItems(parentId.removePrefix(SITE), force = false)
+        parentId.startsWith(SITE) -> articleItems(parentId.removePrefix(SITE), force)
         parentId.startsWith(RETRY) -> articleItems(parentId.removePrefix(RETRY), force = true)
         else -> mutableListOf()
     }
@@ -302,7 +318,7 @@ class CarBrowser(
 
     // ------------------------------------------------------------ tabs ---
 
-    private fun siteItems(): MutableList<MediaItem> {
+    private fun siteItems(force: Boolean = false): MutableList<MediaItem> {
         val sites = try {
             feeds.sites()
         } catch (e: Exception) {
@@ -314,9 +330,24 @@ class CarBrowser(
                 browsable(NOTICE, "No websites yet", "On your phone: Readly → Voice & speed → Android Auto websites"),
             )
         }
+        val unavailable = linkedSetOf<String>()
+        if (force) for (site in sites) {
+            try {
+                val loaded = feeds.headlines(site, force = true)
+                if (loaded.stale) unavailable += site.label()
+            } catch (error: Exception) {
+                Log.e(TAG, "Couldn't refresh website site=${site.id}", error)
+                unavailable += site.label()
+            }
+        }
+        sites.filter { feeds.cachedHeadlineRefreshNotice(it.id) != null }.forEach { unavailable += it.label() }
         val heard = feeds.history().associateBy { it.url }
         val hidden = hiddenOrNotice().first
-        return sites.mapTo(mutableListOf()) { site ->
+        val items = mutableListOf<MediaItem>()
+        if (unavailable.isNotEmpty()) items += browsable(RETRY + WEBSITES,
+            "Some websites couldn't refresh · tap to retry",
+            "${unavailable.joinToString(", ")}. Previous headlines are kept where available.")
+        return sites.mapTo(items) { site ->
             // "3 new" when the titles are already loaded; never a network call per tile.
             val unheard = feeds.cachedHeadlines(site.id)
                 ?.count { heard[it.url]?.finished != true && it.url !in hidden }

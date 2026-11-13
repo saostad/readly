@@ -33,6 +33,7 @@ class HeadlineCache(
         val url: String,
         val mode: FindMode,
         val maxArticles: Int,
+        val refreshNotice: String? = null,
     ) {
         /** False when the limit was raised past what this fetch asked for (and got). */
         fun covers(max: Int): Boolean = max <= maxArticles || list.headlines.size < maxArticles
@@ -49,11 +50,15 @@ class HeadlineCache(
             ?.takeIf { it.url == site.url && it.mode == site.mode }
         val freshForMs = limits.refreshMinutes * 60_000L
         if (!force && cached != null && now - cached.fetchedAtMs < freshForMs && cached.covers(limits.maxArticles)) {
+            if (cached.refreshNotice != null) onWarn(
+                "fallback=true attempted=refresh site=${site.id} host=${FeedSites.hostOf(site.url)} " +
+                    "reason=unresolved_refresh_failure taken=cached-list-from-${cached.fetchedAtMs}",
+            )
             return LoadedHeadlines(
                 cached.list.copy(headlines = cached.list.headlines.take(limits.maxArticles)),
                 cached.fetchedAtMs,
-                stale = false,
-                notices = listOfNotNull(cached.list.notice),
+                stale = cached.refreshNotice != null,
+                notices = listOfNotNull(cached.refreshNotice, cached.list.notice),
             )
         }
         val list = try {
@@ -61,16 +66,20 @@ class HeadlineCache(
         } catch (e: IOException) {
             if (cached == null) throw e
             val time = formatTime(cached.fetchedAtMs)
+            val notice = "Couldn't refresh, so this is the list from $time."
+            synchronized(lock) {
+                if (entries[site.id] === cached) entries[site.id] = cached.copy(refreshNotice = notice)
+            }
             onWarn(
                 "fallback=true attempted=refresh site=${site.id} host=${FeedSites.hostOf(site.url)} " +
-                    "reason=\"${e.message}\" taken=cached-list-from-${cached.fetchedAtMs}",
+                    "reason=${e.javaClass.simpleName} taken=cached-list-from-${cached.fetchedAtMs}",
             )
             return LoadedHeadlines(
                 cached.list.copy(headlines = cached.list.headlines.take(limits.maxArticles)),
                 cached.fetchedAtMs,
                 stale = true,
                 notices = listOfNotNull(
-                    "Couldn't refresh (${e.message}), so this is the list from $time.",
+                    notice,
                     cached.list.notice,
                 ),
             )
@@ -86,6 +95,9 @@ class HeadlineCache(
 
     /** [siteId]'s last fetched titles however old, without touching the network. */
     fun peek(siteId: String): List<Headline>? = synchronized(lock) { entries[siteId]?.list?.headlines }
+
+    /** The website overview can disclose an unresolved failure without fetching again. */
+    fun refreshNotice(siteId: String): String? = synchronized(lock) { entries[siteId]?.refreshNotice }
 
     fun forget(siteId: String) {
         synchronized(lock) { entries.remove(siteId) }

@@ -142,7 +142,7 @@ class HeadlineCacheTest {
         val stale = cache.load(site, limits)
         assertTrue(stale.stale)
         assertEquals(first.fetchedAtMs, stale.fetchedAtMs)
-        assertEquals("Couldn't refresh (HTTP 503), so this is the list from T1000000.", stale.notices.first())
+        assertEquals("Couldn't refresh, so this is the list from T1000000.", stale.notices.first())
         assertTrue(warnings.single().contains("fallback=true"))
     }
 

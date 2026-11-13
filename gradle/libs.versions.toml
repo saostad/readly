@@ -12,6 +12,7 @@ jna = "5.17.0"
 pdfbox = "2.0.27.0"
 tesseract = "4.9.0"
 exif = "1.4.2"
+swipeRefresh = "1.2.0"
 
 [libraries]
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonsCompress" }
@@ -27,6 +28,8 @@ pdfbox = { module = "com.tom-roush:pdfbox-android", version.ref = "pdfbox" }
 tesseract = { module = "cz.adaptech.tesseract4android:tesseract4android", version.ref = "tesseract" }
 
 exif = { module = "androidx.exifinterface:exifinterface", version.ref = "exif" }
+
+swipe-refresh = { module = "androidx.swiperefreshlayout:swiperefreshlayout", version.ref = "swipeRefresh" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

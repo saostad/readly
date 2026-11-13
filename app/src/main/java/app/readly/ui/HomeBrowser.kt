@@ -9,6 +9,8 @@ import android.media.browse.MediaBrowser
 import android.media.browse.MediaBrowser.MediaItem
 import android.media.session.MediaController
 import android.net.Uri
+import android.os.Bundle
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import android.text.TextUtils
@@ -32,6 +34,7 @@ import app.readly.input.pdf.DocumentPlayback
 import app.readly.input.pdf.PdfImportStore
 import app.readly.R
 import app.readly.ReadlyApp
+import app.readly.playback.BrowseRefreshRequests
 import app.readly.playback.CarBrowser
 import app.readly.playback.ReaderService
 import java.util.concurrent.ExecutorService
@@ -51,6 +54,7 @@ class HomeBrowser(
     private val headerTitle: TextView,
     private val content: LinearLayout,
     private val onNavigate: () -> Unit = {},
+    private val onRefreshingChanged: (Boolean) -> Unit = {},
     private val onManageWebsites: () -> Unit,
 ) {
     private companion object {
@@ -97,25 +101,78 @@ class HomeBrowser(
     private var libraryDocuments = prefs.getBoolean(KEY_LIBRARY_DOCUMENTS, true)
     private var renderGeneration = 0
     private var artworkNoticeShown = false
+    private var activeRequestAt: Long? = null
+    private var refreshing = false
 
     init {
         back.setOnClickListener { onBack() }
     }
 
     private val subscription = object : MediaBrowser.SubscriptionCallback() {
-        override fun onChildrenLoaded(parentId: String, children: MutableList<MediaItem>) {
-            if (parentId == browser?.root) {
-                showTabs(children)
-            } else if (parentId == subscribed) {
-                render(parentId, children)
-            }
-        }
+        override fun onChildrenLoaded(parentId: String, children: MutableList<MediaItem>) =
+            received(parentId, children, null)
 
-        override fun onError(parentId: String) {
-            Log.e(TAG, "Home list $parentId failed to load")
-            if (parentId == subscribed || parentId == browser?.root) {
-                showMessage(activity.getString(R.string.home_list_failed), error = true)
-            }
+        override fun onChildrenLoaded(parentId: String, children: MutableList<MediaItem>, options: Bundle) =
+            received(parentId, children, options.requestTime())
+
+        override fun onError(parentId: String) = listFailed(parentId, null)
+        override fun onError(parentId: String, options: Bundle) = listFailed(parentId, options.requestTime())
+    }
+
+    private fun Bundle.requestTime(): Long? =
+        if (containsKey(BrowseRefreshRequests.EXTRA_REQUEST_AT)) getLong(BrowseRefreshRequests.EXTRA_REQUEST_AT) else null
+
+    private fun received(parentId: String, children: MutableList<MediaItem>, requestedAt: Long?) {
+        if (parentId == browser?.root) showTabs(children)
+        else if (parentId == subscribed && requestedAt == activeRequestAt) {
+            render(parentId, children)
+            if (parentId != CarBrowser.SAVED || !libraryDocuments) finishRefresh()
+        }
+    }
+
+    private fun listFailed(parentId: String, requestedAt: Long?) {
+        if (parentId == browser?.root || (parentId == subscribed && requestedAt == activeRequestAt)) {
+            Log.e(TAG, "Home list $parentId failed to load or refresh")
+            finishRefresh()
+            showMessage(activity.getString(R.string.feed_refresh_failed), error = true)
+        }
+    }
+
+    private fun finishRefresh() {
+        refreshing = false
+        onRefreshingChanged(false)
+    }
+
+    /** A user-requested reload bypasses feed TTL without changing this screen or playback. */
+    fun refresh() {
+        if (refreshing) return
+        val parent = subscribed
+        if (parent == null || browser?.isConnected != true) {
+            Log.e(TAG, "Feed refresh requested before the media browser was connected")
+            Toast.makeText(activity, R.string.home_connect_failed, Toast.LENGTH_LONG).show()
+            finishRefresh()
+            return
+        }
+        refreshing = true
+        onRefreshingChanged(true)
+        if (parent == CarBrowser.SAVED && libraryDocuments) render(parent, lastItems)
+        else {
+            browser?.unsubscribe(parent)
+            subscribe(parent, force = true)
+        }
+    }
+
+    private fun subscribe(parent: String, force: Boolean) {
+        val b = browser ?: return
+        activeRequestAt = if (force) SystemClock.elapsedRealtimeNanos() else null
+        try {
+            val at = activeRequestAt
+            if (at == null) b.subscribe(parent, subscription)
+            else b.subscribe(parent, Bundle().apply { putLong(BrowseRefreshRequests.EXTRA_REQUEST_AT, at) }, subscription)
+        } catch (error: Exception) {
+            Log.e(TAG, "Couldn't subscribe to feed list parent=$parent", error)
+            finishRefresh()
+            showMessage(activity.getString(R.string.feed_refresh_failed), error = true)
         }
     }
 
@@ -128,12 +185,15 @@ class HomeBrowser(
 
         override fun onConnectionFailed() {
             Log.e(TAG, "Home couldn't connect to the reader's media browser")
+            finishRefresh()
             showMessage(activity.getString(R.string.home_connect_failed), error = true)
         }
 
         override fun onConnectionSuspended() {
             Log.w(TAG, "Home lost the reader's media browser; reconnecting on the next start")
             controller = null
+            finishRefresh()
+            showMessage(activity.getString(R.string.home_connect_failed), error = true)
         }
     }
 
@@ -145,6 +205,8 @@ class HomeBrowser(
     }
 
     fun stop() {
+        finishRefresh()
+        activeRequestAt = null
         val b = browser ?: return
         if (b.isConnected) {
             subscribed?.let { b.unsubscribe(it) }
@@ -236,16 +298,23 @@ class HomeBrowser(
 
     /** Subscribes to list [id], replacing the shown one. */
     private fun open(id: String) {
+        finishRefresh()
         val b = browser?.takeIf { it.isConnected } ?: return
+        val parent = BrowseRefreshRequests.parent(id)
         subscribed?.let { b.unsubscribe(it) }
-        subscribed = id
+        subscribed = parent
         renderGeneration++
-        if (undo?.listId != id) undo = null
+        if (undo?.listId != parent) undo = null
         val level = stack.lastOrNull()
         header.visibility = if (level != null) View.VISIBLE else View.GONE
         headerTitle.text = level?.title.orEmpty()
         showMessage(activity.getString(R.string.home_connecting), error = false)
-        b.subscribe(id, subscription)
+        val force = parent != id
+        if (force) {
+            refreshing = true
+            onRefreshingChanged(true)
+        }
+        subscribe(parent, force)
     }
 
     // ------------------------------------------------------------ lists ---
@@ -263,19 +332,24 @@ class HomeBrowser(
             }
         }
         if (parentId == CarBrowser.WEBSITES) {
-            content.addView(text(activity.getString(R.string.websites_heading), 18f, R.color.text, bold = true, lines = 1)
-                .apply { setPadding(0, dp(4), 0, dp(8)) })
+            content.addView(LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(text(activity.getString(R.string.websites_heading), 18f, R.color.text, bold = true, lines = 1),
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+                    setText(R.string.home_add_website)
+                    minimumHeight = dp(48)
+                    setOnClickListener { onManageWebsites() }
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    .apply { marginStart = dp(8) })
+            })
         }
         val compact = WebsiteLayout.compact(activity)
         val tiles = if (compact) emptyList() else items.filter { it.isBrowsable && it.description.iconUri != null }
         (items - tiles.toSet()).forEach { content.addView(row(it)) }
         val websites = parentId == CarBrowser.WEBSITES
-        if (tiles.isNotEmpty() || (websites && !compact)) grid(tiles, withAddTile = websites)
-        else if (websites) content.addView(Button(activity, null, 0, R.style.Btn_Text).apply {
-            setText(R.string.home_add_website)
-            minimumHeight = dp(48)
-            setOnClickListener { onManageWebsites() }
-        })
+        if (tiles.isNotEmpty() || (websites && !compact)) grid(tiles)
     }
 
     private fun libraryFilters() {
@@ -289,6 +363,7 @@ class HomeBrowser(
                 isSelected = libraryDocuments == documents
                 setTextColor(activity.getColor(if (isSelected) R.color.accent else R.color.text2))
                 setOnClickListener {
+                    finishRefresh()
                     libraryDocuments = documents
                     prefs.edit().putBoolean(KEY_LIBRARY_DOCUMENTS, documents).apply()
                     onNavigate()
@@ -311,6 +386,7 @@ class HomeBrowser(
                         if (imports.isEmpty()) content.addView(text(activity.getString(R.string.library_empty), 14f, R.color.text2, lines = 4)
                             .apply { setPadding(0, dp(16), 0, dp(16)) })
                         for (item in imports) content.addView(documentRow(item))
+                        finishRefresh()
                     }
                 }
             } catch (error: Exception) {
@@ -319,6 +395,7 @@ class HomeBrowser(
                     if (generation == renderGeneration && !activity.isDestroyed && !activity.isFinishing) {
                         loading.text = activity.getString(R.string.document_operation_failed)
                         loading.setTextColor(activity.getColor(R.color.error))
+                        finishRefresh()
                     }
                 }
             }
@@ -352,9 +429,9 @@ class HomeBrowser(
         setOnClickListener { DocumentPlayback.read(activity, item.id) }
     }
 
-    private fun grid(items: List<MediaItem>, withAddTile: Boolean) {
+    private fun grid(items: List<MediaItem>) {
         val columns = if (activity.resources.configuration.screenWidthDp >= WIDE_SCREEN_DP) 3 else 2
-        val cells: List<View> = items.map { tile(it) } + listOfNotNull(if (withAddTile) addTile() else null)
+        val cells: List<View> = items.map { tile(it) }
         cells.chunked(columns).forEach { chunk ->
             val line = LinearLayout(activity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -382,23 +459,6 @@ class HomeBrowser(
         art.addView(image, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         item.description.iconUri?.let { loadArt(it, image) }
         return tileFrame(art, item.description.title, item.description.subtitle) { openFolder(item) }
-    }
-
-    private fun addTile(): View {
-        val art = SquareFrame(activity).apply { background = activity.getDrawable(R.drawable.card_background) }
-        art.addView(
-            ImageView(activity).apply {
-                setImageResource(R.drawable.ic_add)
-                imageTintList = activity.getColorStateList(R.color.accent)
-                scaleType = ImageView.ScaleType.CENTER
-            },
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
-        )
-        return tileFrame(
-            art,
-            activity.getString(R.string.home_add_website),
-            activity.getString(R.string.home_add_website_sub),
-        ) { onManageWebsites() }
     }
 
     private fun tileFrame(art: View, title: CharSequence?, subtitle: CharSequence?, onClick: () -> Unit): View =
@@ -501,14 +561,12 @@ class HomeBrowser(
                 },
             )
         }
-        val websitesNotice = notice && currentTab == CarBrowser.WEBSITES && stack.isEmpty()
-        if (!notice || websitesNotice) {
+        if (!notice) {
             outer.isClickable = true
             outer.isFocusable = true
             outer.foreground = activity.getDrawable(selectableBackground())
             outer.setOnClickListener {
                 when {
-                    websitesNotice -> onManageWebsites()
                     item.isPlayable -> play(id)
                     else -> openFolder(item)
                 }

@@ -80,6 +80,7 @@ dependencies {
     implementation(libs.pdfbox)
     implementation(libs.tesseract)
     implementation(libs.exif)
+    implementation(libs.swipe.refresh)
     // readability4j pulls jsoup 1.11.2 and kotlin-stdlib 1.3.72 transitively; we
     // keep our own jsoup 1.23.2 (forced below) and the Kotlin plugin's stdlib.
     // slf4j-api is kept: Readability4J's class init calls LoggerFactory, so

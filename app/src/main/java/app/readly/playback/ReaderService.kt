@@ -856,6 +856,15 @@ class ReaderService : MediaBrowserService() {
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowser.MediaItem>>) =
         carBrowser.loadChildren(parentId, result)
 
+    override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowser.MediaItem>>, options: Bundle) {
+        if (options.containsKey(BrowseRefreshRequests.EXTRA_REQUEST_AT)) {
+            carBrowser.loadChildren(parentId, result, options.getLong(BrowseRefreshRequests.EXTRA_REQUEST_AT))
+        } else {
+            // Preserve framework pagination for ordinary phone/car subscriptions.
+            super.onLoadChildren(parentId, result, options)
+        }
+    }
+
     override fun onUnbind(intent: Intent?): Boolean {
         // The car disconnected: the next connection may auto-play again.
         autoPlayedThisConnection = false

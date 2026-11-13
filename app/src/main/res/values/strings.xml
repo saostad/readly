@@ -351,4 +351,7 @@
     <string name="website_artwork_unavailable">Website artwork unavailable. Showing a generic icon.</string>
     <string name="switch_on">ON</string>
     <string name="switch_off">OFF</string>
+    <string name="feed_refresh_action">Refresh current list</string>
+    <string name="feed_refreshing">Refreshing…</string>
+    <string name="feed_refresh_failed">Couldn\'t refresh this list. Pull down again or tap Refresh to retry.</string>
 </resources>

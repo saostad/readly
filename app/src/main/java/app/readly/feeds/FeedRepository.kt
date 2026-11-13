@@ -303,6 +303,8 @@ class FeedRepository(context: Context) {
     @Throws(IOException::class)
     fun headlines(site: FeedSite, force: Boolean = false): LoadedHeadlines = cache.load(site, limits(), force)
 
+    fun cachedHeadlineRefreshNotice(siteId: String): String? = cache.refreshNotice(siteId)
+
     fun titleFor(url: String): String? = cache.titleFor(url)
 
     /** [siteId]'s last loaded titles (what the car just listed), without the network. */

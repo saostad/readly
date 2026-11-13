@@ -182,6 +182,12 @@ navigation stays visible while browsing **Websites**, **Latest**, **Library**, o
 imported PDFs and pictures; tap one to read its saved text without repeating OCR.
 **Library → Saved articles** contains links saved for later.
 
+Pull down from the top of a list, or tap the refresh icon in the header, to
+reload it. On **Websites**, this refreshes every website; **Latest** refreshes the
+combined feed; inside a website it refreshes that site. A manual refresh bypasses
+the normal cache interval. Failed or older feeds show a visible notice. Library
+and Recents reload their local lists. Reading continues while lists refresh.
+
 Websites use compact rows with small artwork by default. In **Voice & speed**,
 turn **Compact website lists** off to return to large tiles. This setting also
 requests list or grid presentation in Android Auto; the car host renders those
@@ -257,7 +263,7 @@ The phone uses the same article lists, heard marks and Shuffle actions, with
 fixed bottom navigation for **Websites**, **Latest**, **Library**, and **Recents**.
 **Library** contains imported PDFs and pictures as well as **Saved articles**.
 **Open file** and **Paste text** stay in the header. **Add website** is a compact
-action below the website list; large tiles remain available in settings.
+action beside the heading above the website list; large tiles remain available in settings.
 
 On the phone, each article has a **⋮** menu (or long-press the row): **Mark as
 heard / unheard**, **Save to Read later**, and a delete that fits the list:
