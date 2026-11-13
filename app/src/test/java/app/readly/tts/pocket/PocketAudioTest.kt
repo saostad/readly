@@ -372,6 +372,32 @@ class PocketAudioTest {
         assertTrue(finished.audio.contentEquals(concat(emitted)))
     }
 
+    @Test
+    fun finishSpeechEmitsFirstPieceBodyBeforeThirdPieceIsPulled() {
+        val emitted = mutableListOf<FloatArray>()
+        var emittedWhenThirdPulled = -1
+        val pieces = sequence {
+            yield(PocketAudio.RawPiece(FloatArray(4800) { 0.5f }, PocketAudio.PieceEnd.MID))
+            yield(PocketAudio.RawPiece(FloatArray(4800) { 0.5f }, PocketAudio.PieceEnd.MID))
+            emittedWhenThirdPulled = emitted.sumOf { it.size }
+            yield(PocketAudio.RawPiece(FloatArray(4800) { 0.5f }, PocketAudio.PieceEnd.SENTENCE))
+        }
+        val finished = PocketAudio.finishSpeech(
+            pieces,
+            24000,
+            speed = 1.0f,
+            isStopped = { false },
+            onChunk = { emitted += it },
+        )
+        // By the time the third piece is pulled, the first piece's body
+        // (all but at most the 600-sample Mid tail at 24 kHz) is out.
+        assertTrue(
+            "only $emittedWhenThirdPulled samples emitted when the third piece was pulled",
+            emittedWhenThirdPulled >= 4800 - 600,
+        )
+        assertTrue(finished.audio.contentEquals(concat(emitted)))
+    }
+
     /**
      * Raw model-like output: a loud 440 Hz square tone between 300 ms silences.
      * Square edges are exactly loud, so trims land on exact samples; the tone

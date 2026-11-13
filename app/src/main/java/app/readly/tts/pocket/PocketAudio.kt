@@ -388,9 +388,13 @@ object PocketAudio {
      * piece's length and the next piece's length, so the output is `n`
      * samples shorter per mid boundary. A piece's incoming plus outgoing
      * overlap never exceeds its length (the outgoing one shrinks to
-     * fit). Because [pieces] is lazy, the tail of a mid-ended piece is
-     * held back until the next piece is finished, then emitted merged;
-     * if the sequence ends or [isStopped] turns true while a tail is
+     * fit). Each piece is emitted as soon as it is finished; only the
+     * last `t` samples of a mid-ended piece are held back (`t` = the
+     * smaller of the [TRIM_KEEP_MID_MS] length after speed and the
+     * piece's length minus its incoming overlap) until the next piece
+     * is finished, when the first `t − n` held samples go out unchanged
+     * and the last `n` are overlap-added with the next piece's head.
+     * If the sequence ends or [isStopped] turns true while a tail is
      * held, the tail is emitted as it is. Each finished piece and pause
      * also goes to [onChunk] as it is ready, and [onChunk] receives
      * exactly the audio that is returned, in order. The pause after a
@@ -421,83 +425,73 @@ object PocketAudio {
         } else {
             midKeep
         }
-        // Segment for one buffered piece: its held-in overlap merged with
-        // its head, then its body up to [bodyEnd] (its tail is held out).
-        fun segment(piece: FloatArray, held: FloatArray?, bodyEnd: Int): FloatArray {
-            if (held == null) return piece.copyOfRange(0, bodyEnd)
-            val n = minOf(held.size, piece.size, bodyEnd)
-            val merged = FloatArray(bodyEnd)
-            for (k in 0 until n) {
-                val fadeIn = (k + 1).toFloat() / (n + 1).toFloat()
-                merged[k] = held[k] * (1f - fadeIn) + piece[k] * fadeIn
-            }
-            if (bodyEnd > n) piece.copyInto(merged, n, n, bodyEnd)
-            return merged
-        }
         val iter = pieces.iterator()
-        var carried = if (iter.hasNext()) iter.next() else null
+        var raw = if (iter.hasNext()) iter.next() else null
         var prevEnd: PieceEnd? = null
-        var buffered: FloatArray? = null
-        var bufferedEnd: PieceEnd? = null
-        var bufferedIncoming = 0
         var heldTail: FloatArray? = null
-        var stopped = false
-        while (carried != null) {
-            val raw = carried
+        var pendingPause: FloatArray? = null
+        while (raw != null) {
+            val current = raw
             val nextRaw = if (iter.hasNext()) iter.next() else null
-            carried = nextRaw
-            if (buffered != null && bufferedEnd == PieceEnd.MID && isStopped()) {
-                val held = buffered!!
-                emit(segment(held, heldTail, held.size))
-                buffered = null
+            if (heldTail != null && isStopped()) {
+                emit(heldTail!!)
                 heldTail = null
-                stopped = true
+                pendingPause = null
                 break
             }
             val keepStart = if (prevEnd == null) TRIM_KEEP_MS else trimKeepMs(prevEnd)
             val keepEnd = if (nextRaw == null) {
-                if (raw.end == PieceEnd.CLAUSE) TRIM_KEEP_CLAUSE_MS else TRIM_KEEP_MS
+                if (current.end == PieceEnd.CLAUSE) TRIM_KEEP_CLAUSE_MS else TRIM_KEEP_MS
             } else {
-                trimKeepMs(raw.end)
+                trimKeepMs(current.end)
             }
-            var piece = trimSilence(raw.audio, sampleRate, keepStart, keepEnd)
+            var piece = trimSilence(current.audio, sampleRate, keepStart, keepEnd)
             piece = applySpeed(piece, speed)
             val t0 = clockMs()
             piece = masterChunk(piece, sampleRate)
             masterMs += clockMs() - t0
-            val held = buffered
-            if (held == null) {
-                buffered = piece
-                bufferedEnd = raw.end
-                bufferedIncoming = 0
-                heldTail = null
-            } else {
-                var overlapOut = 0
-                if (bufferedEnd == PieceEnd.MID) {
-                    overlapOut = minOf(midAfterSpeed, held.size, piece.size)
-                    val maxOutgoing = held.size - bufferedIncoming
-                    if (overlapOut > maxOutgoing) overlapOut = maxOutgoing
-                    if (overlapOut < 0) overlapOut = 0
-                }
-                val bodyEnd = held.size - overlapOut
-                emit(segment(held, heldTail, bodyEnd))
-                if (!isStopped()) {
-                    val pause = pauses[bufferedEnd]
-                    if (pause != null) emit(pause.copyOf())
-                }
-                heldTail = if (overlapOut > 0) held.copyOfRange(bodyEnd, held.size) else null
-                bufferedIncoming = overlapOut
-                buffered = piece
-                bufferedEnd = raw.end
+            if (heldTail == null && current.end == PieceEnd.MID && nextRaw != null && isStopped()) {
+                emit(piece)
+                pendingPause = null
+                break
             }
-            prevEnd = raw.end
-        }
-        if (!stopped) {
-            val held = buffered
+            val held = heldTail
             if (held != null) {
-                emit(segment(held, heldTail, held.size))
+                val n = minOf(held.size, piece.size)
+                val tailHold = if (current.end == PieceEnd.MID && nextRaw != null) {
+                    minOf(midAfterSpeed, piece.size - n).coerceAtLeast(0)
+                } else {
+                    0
+                }
+                val bodyEnd = piece.size - tailHold
+                val chunk = FloatArray(held.size - n + bodyEnd)
+                held.copyInto(chunk, 0, 0, held.size - n)
+                for (k in 0 until n) {
+                    val fadeIn = (k + 1).toFloat() / (n + 1).toFloat()
+                    chunk[held.size - n + k] = held[held.size - n + k] * (1f - fadeIn) + piece[k] * fadeIn
+                }
+                if (bodyEnd > n) piece.copyInto(chunk, held.size, n, bodyEnd)
+                emit(chunk)
+                heldTail = if (tailHold > 0) piece.copyOfRange(bodyEnd, piece.size) else null
+            } else {
+                val pause = pendingPause
+                pendingPause = null
+                if (pause != null && !isStopped()) emit(pause.copyOf())
+                val tailHold = if (current.end == PieceEnd.MID && nextRaw != null) {
+                    minOf(midAfterSpeed, piece.size).coerceAtLeast(0)
+                } else {
+                    0
+                }
+                val bodyEnd = piece.size - tailHold
+                emit(piece.copyOfRange(0, bodyEnd))
+                heldTail = if (tailHold > 0) piece.copyOfRange(bodyEnd, piece.size) else null
             }
+            pendingPause = if (nextRaw != null) pauses[current.end] else null
+            prevEnd = current.end
+            raw = nextRaw
         }
+        val tail = heldTail
+        if (tail != null) emit(tail)
         var total = 0
         for (part in out) total += part.size
         val audio = FloatArray(total)

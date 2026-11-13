@@ -31,8 +31,7 @@ import org.json.JSONObject
 
 /**
  * Pocket generation tuning: the defaults that used to be scattered
- * constants, in one place. (Round 5 connects it to the settings screen;
- * nothing sets it yet.)
+ * constants, in one place.
  */
 data class PocketTuning(
     /** Highest token budget per chunk. */
