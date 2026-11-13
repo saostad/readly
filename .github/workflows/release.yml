@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 env:
-  ANDROID_PLATFORM: "platforms;android-37"
+  ANDROID_PLATFORM: "platforms;android-37.0"
   ANDROID_BUILD_TOOLS: "build-tools;37.0.0"
   ANDROID_NDK: "ndk;30.0.16248370"
   ANDROID_NDK_VERSION: "30.0.16248370"
@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Check out (with tags)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -39,7 +39,7 @@ jobs:
           scripts/next_version.sh "$GITHUB_SHA" | tee -a "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -50,7 +50,15 @@ jobs:
           packages: ""
 
       - name: Install SDK platform, build tools and NDK
-        run: sdkmanager --install "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS" "$ANDROID_NDK" > /dev/null
+        run: |
+          sdkmanager --install "$ANDROID_PLATFORM" "$ANDROID_BUILD_TOOLS" "$ANDROID_NDK" > /dev/null
+          # The package installs as platforms/android-37.0, but compileSdk = 37 looks
+          # for platforms/android-37 (the dev machine has both).
+          platforms="$ANDROID_HOME/platforms"
+          if [[ ! -e "$platforms/android-37" ]]; then
+            ln -s "$platforms/android-37.0" "$platforms/android-37"
+          fi
+          test -f "$platforms/android-37/android.jar"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -97,7 +105,7 @@ jobs:
 
       - name: Upload test and lint reports on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: reports
           path: |
