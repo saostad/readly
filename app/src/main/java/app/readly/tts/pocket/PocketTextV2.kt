@@ -13,12 +13,6 @@ package app.readly.tts.pocket
  * every golden row (`src/test/resources/pocket/v2-golden.jsonl`).
  */
 object PocketTextV2 {
-    /** Highest token budget per v2 chunk (reference `_synth_unit`). */
-    const val MAX_TOKENS = 18
-
-    /** Lowest token budget per v2 chunk (reference `_synth_unit`). */
-    const val MIN_TOKENS = 8
-
     /** Homo-GE2PE marks the ezafe with a trailing "1" (reference `synthesize`). */
     const val EZAFE_MARK = '1'
 
@@ -569,6 +563,86 @@ object PocketTextV2 {
         return pieces
     }
 
+    /** Result of [planV2Chunks]: the pieces, the blank sentences, and the fallback flag. */
+    internal data class V2Plan(
+        val chunks: List<TextChunk>,
+        val blanks: List<String>,
+        val alignmentFallback: Boolean,
+    )
+
+    /**
+     * Plan all sentences of [normalized] into pieces, shared by the
+     * prefetch and inline paths so they cannot drift: per sentence,
+     * pronounce each [g2pWindows] window with [phonemise] (given the
+     * [cleanSentenceForG2p] window) plus [translatePhonemes],
+     * [dedupeRepeats] and [alignWords] per window against that window's
+     * [faWords], concatenate the phoneme words and counts,
+     * [clausesFromCounts] over [splitClauses], then [planPieces] and
+     * strip ezafe marks. A sentence's last piece ends
+     * [PocketAudio.PieceEnd.SENTENCE], except the last sentence of the
+     * text, whose end is [PocketAudio.classifyPieceEnd] of [normalized].
+     * If any window fails to align, the concatenated phonemes form one
+     * clause and [V2Plan.alignmentFallback] is set (the caller logs it;
+     * this pure function never logs). A sentence whose windows all
+     * pronounce blank is collected in [V2Plan.blanks] and skipped.
+     * [isStopped] is checked between sentences. A [phonemise] error
+     * propagates to the caller.
+     */
+    internal fun planV2Chunks(
+        normalized: String,
+        tuning: PocketTuning,
+        phonemise: (String) -> String,
+        countTokens: (String) -> Int,
+        isStopped: () -> Boolean = { false },
+    ): V2Plan {
+        val sentences = splitSentences(normalized)
+        val chunks = mutableListOf<TextChunk>()
+        val blanks = mutableListOf<String>()
+        var alignmentFallback = false
+        for ((index, sentence) in sentences.withIndex()) {
+            if (isStopped()) break
+            val sentenceEnd = if (index == sentences.size - 1) {
+                PocketAudio.classifyPieceEnd(normalized)
+            } else {
+                PocketAudio.PieceEnd.SENTENCE
+            }
+            val phWords = mutableListOf<String>()
+            val counts = mutableListOf<Int>()
+            var aligned = true
+            var sawPhonemes = false
+            for (window in g2pWindows(sentence, tuning.g2pWindowChars)) {
+                val phonemes = phonemise(cleanSentenceForG2p(window))
+                if (phonemes.isNotBlank()) sawPhonemes = true
+                val fa = faWords(window)
+                val windowPh = dedupeRepeats(fa, splitWords(translatePhonemes(phonemes)))
+                val windowCounts = alignWords(fa, windowPh)
+                if (windowCounts == null) {
+                    aligned = false
+                    phWords += windowPh
+                } else {
+                    phWords += windowPh
+                    counts += windowCounts
+                }
+            }
+            if (!sawPhonemes || phWords.all { it.isBlank() }) {
+                blanks += sentence
+                continue
+            }
+            val phonemeClauses = if (aligned) {
+                clausesFromCounts(splitClauses(sentence), phWords, counts)
+            } else {
+                alignmentFallback = true
+                listOf(phWords.joinToString(" "))
+            }
+            if (phonemeClauses.isEmpty()) continue
+            val pieces = planPieces(
+                phonemeClauses, countTokens, tuning.maxTokens, tuning.minTokens, sentenceEnd,
+            )
+            chunks += pieces.map { TextChunk(stripEzafe(it.text), it.end) }
+        }
+        return V2Plan(chunks, blanks, alignmentFallback)
+    }
+
     /** Strip question marks the G2P model was not trained on. */
     fun cleanSentenceForG2p(sentence: String): String =
         sentence.replace("؟", "").replace("?", "")
@@ -605,8 +679,8 @@ object PocketTextV2 {
     fun splitChunks(
         text: String,
         countTokens: (String) -> Int,
-        maxTokens: Int = MAX_TOKENS,
-        minTokens: Int = MIN_TOKENS,
+        maxTokens: Int,
+        minTokens: Int,
     ): List<String> {
         val clean = splitWords(text).joinToString(" ")
         if (clean.isEmpty()) return emptyList()

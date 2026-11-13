@@ -30,6 +30,48 @@ import org.json.JSONException
 import org.json.JSONObject
 
 /**
+ * Pocket generation tuning: the defaults that used to be scattered
+ * constants, in one place. (Round 5 connects it to the settings screen;
+ * nothing sets it yet.)
+ */
+data class PocketTuning(
+    /** Highest token budget per chunk. */
+    val maxTokens: Int = 18,
+    /** Lowest token budget per chunk. */
+    val minTokens: Int = 8,
+    /** Characters per window when pronouncing a sentence with G2P. */
+    val g2pWindowChars: Int = 120,
+    /** Sampling temperature for generation. */
+    val temperature: Float = 0.3f,
+    /** EOS logit threshold above which generation ends. */
+    val eosThreshold: Float = -2.0f,
+    /** Frames to keep generating after EOS. */
+    val framesAfterEos: Int = 0,
+    /** Sampler decode steps; 0 uses the model's own `sampler_decode_steps`. */
+    val decodeSteps: Int = 0,
+) {
+    /**
+     * @throws IllegalArgumentException naming the `pocket.*` key of the
+     *   first out-of-range field, with the same ranges as the reference.
+     */
+    fun validate() {
+        require(maxTokens in 8..50) { "pocket.max_tokens must be between 8 and 50" }
+        require(minTokens in 1..maxTokens) { "pocket.min_tokens must be between 1 and $maxTokens" }
+        require(temperature.isFinite() && temperature in 0.0f..1.5f) {
+            "pocket.temperature must be between 0 and 1.5"
+        }
+        require(decodeSteps in 0..4) { "pocket.decode_steps must be between 0 and 4" }
+        require(eosThreshold.isFinite() && eosThreshold in -10.0f..10.0f) {
+            "pocket.eos_threshold must be between -10 and 10"
+        }
+        require(framesAfterEos in 0..10) { "pocket.frames_after_eos must be between 0 and 10" }
+        require(g2pWindowChars in 40..1000) {
+            "pocket.g2p_window_chars must be between 40 and 1000"
+        }
+    }
+}
+
+/**
  * Pocket TTS (Farsi v1/v2) engine on ONNX Runtime: a port of the tested reference engine
  * (`.agents/handoff/ref/pocket.rs`) for the same model family.
  *
@@ -55,7 +97,11 @@ import org.json.JSONObject
  * @throws IOException if the voice file is missing or the model fails to load, naming
  *   the path and the real error.
  */
-class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeable {
+class PocketEngine(
+    modelFile: File,
+    g2pProvider: (() -> G2p)? = null,
+    private val tuning: PocketTuning = PocketTuning(),
+) : Closeable {
 
     private val env: OrtEnvironment
     private val session: OrtSession
@@ -80,6 +126,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
     val sampleRate: Int
 
     init {
+        tuning.validate()
         if (!modelFile.exists()) {
             throw IOException("Pocket voice file is missing: ${modelFile.path}")
         }
@@ -174,7 +221,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
             PocketAudio.splitText(
                 normalized,
                 { piece -> tokenizer.encode(piece).size },
-                MAX_TOKENS_PER_CHUNK,
+                tuning.maxTokens,
             ).map { TextChunk(it, PocketAudio.classifyPieceEnd(it)) }
         } else {
             val v2 = v2ChunksWithPrefetch(clean, isStopped)
@@ -271,7 +318,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         return v2Chunks(clean, isStopped)
     }
 
-    /** Uses a prefetched front end, logging its blank sentences (like the inline path). */
+    /** Uses a prefetched front end, logging its blanks and fallback (like the inline path). */
     private fun useReady(
         data: V2PrefetchData,
         clean: String,
@@ -282,6 +329,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         for (blank in data.blanks) {
             Log.i("Readly", "Pocket: no phonemes for ${blank.take(40)}")
         }
+        if (data.alignmentFallback) logAlignmentFallback()
         val chunks = data.chunks
         if (chunks == null) {
             Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
@@ -305,20 +353,18 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         } catch (e: IllegalArgumentException) {
             return V2PrefetchData(null, emptyList())
         }
-        val sentences = PocketTextV2.splitSentences(normalized)
-        if (sentences.isEmpty()) return V2PrefetchData(null, emptyList())
-        val unitsPerSentence = ArrayList<List<String>>()
-        val blanks = ArrayList<String>()
-        for (sentence in sentences) {
-            if (Thread.currentThread().isInterrupted) throw InterruptedException()
-            val phonemes = phonemiseLocked(PocketTextV2.cleanSentenceForG2p(sentence))
-            if (phonemes.isBlank()) {
-                blanks += sentence
-                continue
-            }
-            unitsPerSentence += chunkTranslatedPhonemes(PocketTextV2.translatePhonemes(phonemes))
+        if (PocketTextV2.splitSentences(normalized).isEmpty()) {
+            return V2PrefetchData(null, emptyList())
         }
-        return V2PrefetchData(v2TextChunks(unitsPerSentence), blanks)
+        val plan = PocketTextV2.planV2Chunks(
+            normalized,
+            tuning,
+            { cleaned -> phonemiseLocked(cleaned) },
+            { piece -> tokenizer.encode(PocketTextV2.stripEzafe(piece)).size },
+            { Thread.currentThread().isInterrupted },
+        )
+        if (Thread.currentThread().isInterrupted) throw InterruptedException()
+        return V2PrefetchData(plan.chunks, plan.blanks, plan.alignmentFallback)
     }
 
     /** One G2P call, serialized with the prefetch thread on [g2pLock]. */
@@ -327,23 +373,20 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
             (g2p ?: error("v2 voice without a pronunciation model")).phonemise(clean)
         }
 
-    /** Translated phonemes split into model-sized pieces (ezafe stripped). */
-    private fun chunkTranslatedPhonemes(translated: String): List<String> =
-        PocketTextV2.splitChunks(
-            translated,
-            { piece -> tokenizer.encode(PocketTextV2.stripEzafe(piece)).size },
-            MAX_TOKENS_PER_CHUNK,
-            PocketTextV2.MIN_TOKENS,
-        ).map { PocketTextV2.stripEzafe(it) }
+    /** Warns that clause alignment fell back to whole-sentence cuts (synth thread only). */
+    private fun logAlignmentFallback() {
+        Log.w(
+            "Readly",
+            "Pocket: fallback: true, attempted=clause_alignment, " +
+                "reason=word_count_mismatch, taken=whole_sentence_cuts",
+        )
+    }
 
     /**
-     * v2 chunk list: normalize, split into sentences, pronounce each one, and
-     * split the phonemes into 18/8-token chunks (ezafe marks guide the split
-     * and are stripped before the model). Null chunks mean a logged skip
-     * (nothing speakable). Sentences are pronounced as their turn comes
-     * rather than all upfront, so stopping stays responsive and the first
-     * chunk streams without waiting for every sentence's G2P; the chunk
-     * sequence — and so the pauses — is the same either way.
+     * v2 chunk list from the shared [PocketTextV2.planV2Chunks]: normalize,
+     * then plan each sentence's phonemes into tuning-budgeted pieces
+     * (ezafe marks guide the split and are stripped before the model).
+     * Null chunks mean a logged skip (nothing speakable).
      */
     private fun v2Chunks(clean: String, isStopped: () -> Boolean): V2Chunks {
         val normalized = try {
@@ -352,25 +395,28 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
             Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
             return V2Chunks(null, 0)
         }
-        val sentences = PocketTextV2.splitSentences(normalized)
-        if (sentences.isEmpty()) {
+        if (PocketTextV2.splitSentences(normalized).isEmpty()) {
             Log.i("Readly", "Pocket: nothing speakable in ${clean.take(40)}")
             return V2Chunks(null, 0)
         }
-        val unitsPerSentence = ArrayList<List<String>>()
         var g2pMs = 0L
-        for (sentence in sentences) {
-            if (isStopped()) break
-            val g2pStart = SystemClock.elapsedRealtime()
-            val phonemes = phonemiseLocked(PocketTextV2.cleanSentenceForG2p(sentence))
-            g2pMs += SystemClock.elapsedRealtime() - g2pStart
-            if (phonemes.isBlank()) {
-                Log.i("Readly", "Pocket: no phonemes for ${sentence.take(40)}")
-                continue
-            }
-            unitsPerSentence += chunkTranslatedPhonemes(PocketTextV2.translatePhonemes(phonemes))
+        val plan = PocketTextV2.planV2Chunks(
+            normalized,
+            tuning,
+            { cleaned ->
+                val g2pStart = SystemClock.elapsedRealtime()
+                val phonemes = phonemiseLocked(cleaned)
+                g2pMs += SystemClock.elapsedRealtime() - g2pStart
+                phonemes
+            },
+            { piece -> tokenizer.encode(PocketTextV2.stripEzafe(piece)).size },
+            isStopped,
+        )
+        for (blank in plan.blanks) {
+            Log.i("Readly", "Pocket: no phonemes for ${blank.take(40)}")
         }
-        return V2Chunks(v2TextChunks(unitsPerSentence), g2pMs)
+        if (plan.alignmentFallback) logAlignmentFallback()
+        return V2Chunks(plan.chunks, g2pMs)
     }
 
     /** Generate one chunk in a single attempt (no runaway recovery). */
@@ -429,10 +475,10 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
             mimiConv = out.mimiConvOut
             mimiOffset = out.mimiOffsetOut
             latent = out.nextLatent
-            if (eosFrame == null && out.eosLogit > EOS_THRESHOLD) {
+            if (eosFrame == null && out.eosLogit > tuning.eosThreshold) {
                 eosFrame = frame
             }
-            if (eosFrame != null && frame >= eosFrame + FRAMES_AFTER_EOS) {
+            if (eosFrame != null && frame >= eosFrame + tuning.framesAfterEos) {
                 break
             }
             frames += out.audio
@@ -537,7 +583,7 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
         mimiOffset: Long,
         mimiConv: FloatArray,
     ): StepOutput {
-        val noise = rng.noise(config.latentDim, TEMPERATURE)
+        val noise = rng.noise(config.latentDim, tuning.temperature)
         return runModel { inputs ->
             inputs["tokens"] = longTensor(env, longArrayOf(0), longArrayOf(1, 1))
             inputs["latent"] = floatTensor(
@@ -593,7 +639,15 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
             env, mimiConv.copyOf(), longArrayOf(config.convStateSize.toLong())
         )
         inputs["decode_steps"] = floatTensor(
-            env, floatArrayOf(config.samplerDecodeSteps), longArrayOf()
+            env,
+            floatArrayOf(
+                if (tuning.decodeSteps == 0) {
+                    config.samplerDecodeSteps
+                } else {
+                    tuning.decodeSteps.toFloat()
+                },
+            ),
+            longArrayOf(),
         )
     }
 
@@ -662,11 +716,6 @@ class PocketEngine(modelFile: File, g2pProvider: (() -> G2p)? = null) : Closeabl
     )
 
     companion object {
-        /** Farsi-verified generation settings (model card + blind-test harness). */
-        private const val TEMPERATURE = 0.3f
-        private const val EOS_THRESHOLD = -2.0f
-        private const val FRAMES_AFTER_EOS = 0
-        private const val MAX_TOKENS_PER_CHUNK = 18
         private const val MAX_SPLIT_DEPTH = 2
 
         /**
@@ -847,11 +896,16 @@ private data class BakedVoice(val name: String, val frames: Int, val conditionin
 internal data class TextChunk(val text: String, val end: PocketAudio.PieceEnd)
 
 /**
- * A prefetched v2 front end: the chunk list (null when nothing was speakable)
- * plus the sentences whose phonemes came back blank, so the synth thread can
- * log them when the result is used.
+ * A prefetched v2 front end: the chunk list (null when nothing was speakable),
+ * the sentences whose phonemes came back blank, and whether clause
+ * alignment fell back to whole-sentence cuts, so the synth thread can log
+ * them when the result is used (never logged on the prefetch thread).
  */
-internal data class V2PrefetchData(val chunks: List<TextChunk>?, val blanks: List<String>)
+internal data class V2PrefetchData(
+    val chunks: List<TextChunk>?,
+    val blanks: List<String>,
+    val alignmentFallback: Boolean = false,
+)
 
 /** Outcome of asking the prefetcher for one exact clean text. */
 internal sealed interface V2PrefetchTake {
@@ -970,22 +1024,6 @@ internal class V2Prefetcher(private val compute: (String) -> V2PrefetchData) : C
         private const val MAX_CACHED = 4
     }
 }
-
-/**
- * v2 chunk boundaries from the phoneme texts the pieces came from: a piece ending
- * at the end of its sentence's phonemes ends a sentence; ezafe/word cuts inside
- * carry no punctuation, so they are mid-sentence. Never classified by last
- * character: the phoneme alphabet's `?` is a phone, not a question mark.
- */
-internal fun v2TextChunks(unitsPerSentence: List<List<String>>): List<TextChunk> =
-    unitsPerSentence.flatMap { units ->
-        units.mapIndexed { index, text ->
-            TextChunk(
-                text,
-                if (index == units.size - 1) PocketAudio.PieceEnd.SENTENCE else PocketAudio.PieceEnd.MID,
-            )
-        }
-    }
 
 /** Grow-once token-position cache, mirroring the reference `_Cache`. */
 internal class Cache(private val stride: Int, capacity: Int) {

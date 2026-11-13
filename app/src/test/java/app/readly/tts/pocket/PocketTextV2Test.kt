@@ -201,6 +201,64 @@ class PocketTextV2Test {
     }
 
     @Test
+    fun planV2Chunks_twoClauseSentenceEndsClauseThenSentence() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val phonemise = { window: String ->
+            PocketTextV2.faWords(window).mapIndexed { i, _ -> listOf("m", "n", "o", "p")[i] }.joinToString(" ")
+        }
+        val plan = PocketTextV2.planV2Chunks(
+            "سلام دنیا، خداحافظ رفت.",
+            PocketTuning(maxTokens = 2, minTokens = 1),
+            phonemise,
+            countWords,
+        )
+        assertEquals(
+            listOf(
+                TextChunk("m n", PocketAudio.PieceEnd.CLAUSE),
+                TextChunk("o p", PocketAudio.PieceEnd.SENTENCE),
+            ),
+            plan.chunks,
+        )
+        assertTrue(plan.blanks.isEmpty())
+        assertFalse(plan.alignmentFallback)
+    }
+
+    @Test
+    fun planV2Chunks_textEndingInClauseMarkEndsClause() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val phonemise = { window: String ->
+            PocketTextV2.faWords(window).mapIndexed { i, _ -> listOf("m", "n", "o", "p")[i] }.joinToString(" ")
+        }
+        val plan = PocketTextV2.planV2Chunks(
+            "سلام دنیا، خداحافظ رفت،",
+            PocketTuning(maxTokens = 2, minTokens = 1),
+            phonemise,
+            countWords,
+        )
+        assertEquals(
+            listOf(PocketAudio.PieceEnd.CLAUSE, PocketAudio.PieceEnd.CLAUSE),
+            plan.chunks.map { it.end },
+        )
+        assertFalse(plan.alignmentFallback)
+    }
+
+    @Test
+    fun planV2Chunks_mismatchedWindowFallsBackToOneClause() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val plan = PocketTextV2.planV2Chunks(
+            "سلام دنیا، خداحافظ رفت.",
+            PocketTuning(),
+            { "onlyone" },
+            countWords,
+        )
+        assertTrue(plan.alignmentFallback)
+        assertEquals(
+            listOf(TextChunk("onlyone", PocketAudio.PieceEnd.SENTENCE)),
+            plan.chunks,
+        )
+    }
+
+    @Test
     fun chunkBoundariesNeverSplitAnEzafeChain() {
         // Word counter; every word but the last carries an ezafe mark, so no
         // boundary may land inside the chain whatever the budget says.

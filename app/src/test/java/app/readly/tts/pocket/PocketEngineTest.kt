@@ -61,22 +61,42 @@ class PocketEngineTest {
     }
 
     @Test
-    fun v2SentenceFinalChunksEndSentences() {
-        // Each sentence's phonemes end a sentence; ezafe/word cuts inside don't.
-        val chunks = v2TextChunks(
-            listOf(
-                listOf("ketAbe1 jadide1", "duste1 man"),
-                listOf("miz ?ast"),
-            ),
+    fun pocketTuningDefaultsValidate() {
+        val tuning = PocketTuning()
+        assertEquals(18, tuning.maxTokens)
+        assertEquals(8, tuning.minTokens)
+        assertEquals(120, tuning.g2pWindowChars)
+        assertEquals(0.3f, tuning.temperature, 0.0f)
+        assertEquals(-2.0f, tuning.eosThreshold, 0.0f)
+        assertEquals(0, tuning.framesAfterEos)
+        assertEquals(0, tuning.decodeSteps)
+        tuning.validate()
+    }
+
+    @Test
+    fun pocketTuningOutOfRangeFieldsFailWithTheirKey() {
+        val cases = listOf(
+            PocketTuning(maxTokens = 7) to "pocket.max_tokens",
+            PocketTuning(maxTokens = 51) to "pocket.max_tokens",
+            PocketTuning(minTokens = 0) to "pocket.min_tokens",
+            PocketTuning(maxTokens = 18, minTokens = 19) to "pocket.min_tokens",
+            PocketTuning(temperature = 1.6f) to "pocket.temperature",
+            PocketTuning(temperature = Float.NaN) to "pocket.temperature",
+            PocketTuning(decodeSteps = 5) to "pocket.decode_steps",
+            PocketTuning(eosThreshold = -10.1f) to "pocket.eos_threshold",
+            PocketTuning(eosThreshold = Float.POSITIVE_INFINITY) to "pocket.eos_threshold",
+            PocketTuning(framesAfterEos = 11) to "pocket.frames_after_eos",
+            PocketTuning(g2pWindowChars = 39) to "pocket.g2p_window_chars",
+            PocketTuning(g2pWindowChars = 1001) to "pocket.g2p_window_chars",
         )
-        assertEquals(
-            listOf(
-                TextChunk("ketAbe1 jadide1", PocketAudio.PieceEnd.MID),
-                TextChunk("duste1 man", PocketAudio.PieceEnd.SENTENCE),
-                TextChunk("miz ?ast", PocketAudio.PieceEnd.SENTENCE),
-            ),
-            chunks,
-        )
+        for ((tuning, key) in cases) {
+            try {
+                tuning.validate()
+                fail("expected IllegalArgumentException for $key")
+            } catch (e: IllegalArgumentException) {
+                assertTrue("message '${e.message}' must name $key", e.message!!.contains(key))
+            }
+        }
     }
 
     @Test
