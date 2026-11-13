@@ -36,7 +36,7 @@ import org.json.JSONObject
  */
 data class PocketTuning(
     /** Highest token budget per chunk. */
-    val maxTokens: Int = 18,
+    val maxTokens: Int = 50,
     /** Lowest token budget per chunk. */
     val minTokens: Int = 8,
     /** Characters per window when pronouncing a sentence with G2P. */
@@ -77,7 +77,7 @@ data class PocketTuning(
  *
  * The exported `.onnx` is one streaming step: text, voice conditioning, or the previous
  * latent goes in; one 80 ms audio frame plus the updated caches come out. This class
- * drives that graph with the Farsi generation recipe: 18-token chunks, runaway
+ * drives that graph with the Farsi generation recipe: tuning-controlled chunks, runaway
  * retry/split, boundary-dependent pauses (150 ms after a sentence, 60 ms after a
  * clause, none mid-sentence), silence trim, and a mastering chain to
  * about −10 LUFS, compressed.

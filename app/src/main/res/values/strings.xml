@@ -147,7 +147,7 @@
     <string name="pocket_tuning_invalid_notice">Persian voice settings were invalid and the defaults were used.</string>
     <string name="pocket_advanced_title">Persian voice (advanced)</string>
     <string name="pocket_max_tokens_label">Longest stretch (tokens)</string>
-    <string name="pocket_max_tokens_help">Higher reads longer stretches in one breath. Too high and the voice may skip or repeat words. 8–50, default 18.</string>
+    <string name="pocket_max_tokens_help">Higher reads longer stretches in one breath. Too high and the voice may skip or repeat words. 8–50, default 50.</string>
     <string name="pocket_min_tokens_label">Shortest stretch (tokens)</string>
     <string name="pocket_min_tokens_help">Shorter pieces are joined to a neighbour when possible. 1 up to the longest stretch, default 8.</string>
     <string name="pocket_g2p_window_label">Pronunciation window (characters)</string>

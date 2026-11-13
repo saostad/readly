@@ -63,7 +63,7 @@ class PocketEngineTest {
     @Test
     fun pocketTuningDefaultsValidate() {
         val tuning = PocketTuning()
-        assertEquals(18, tuning.maxTokens)
+        assertEquals(50, tuning.maxTokens)
         assertEquals(8, tuning.minTokens)
         assertEquals(120, tuning.g2pWindowChars)
         assertEquals(0.3f, tuning.temperature, 0.0f)

@@ -14,6 +14,7 @@ class PocketTuningPrefsTest {
     fun emptyPrefsGiveDefaults() {
         val load = PocketTuningPrefs.load(emptyMap())
         assertEquals(PocketTuning(), load.tuning)
+        assertEquals(50, load.tuning.maxTokens)
         assertNull(load.invalidReason)
     }
 
