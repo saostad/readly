@@ -35,6 +35,14 @@ android {
         }
     }
 
+    signingConfigs {
+        getByName("debug") {
+            // CI signs with the same debug key as the dev machine (see
+            // .github/workflows/release.yml); unset, AGP uses ~/.android/debug.keystore.
+            System.getenv("READLY_DEBUG_KEYSTORE")?.let { storeFile = file(it) }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true

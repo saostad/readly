@@ -95,8 +95,9 @@ jobs:
             echo "::error::The DEBUG_KEYSTORE_BASE64 secret is missing. Without it the APK would be signed with a throwaway key and couldn't update the installed app."
             exit 1
           fi
-          mkdir -p ~/.android
-          echo "$DEBUG_KEYSTORE_BASE64" | base64 --decode > ~/.android/debug.keystore
+          keystore="$RUNNER_TEMP/debug.keystore"
+          echo "$DEBUG_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          echo "READLY_DEBUG_KEYSTORE=$keystore" >> "$GITHUB_ENV"
 
       - name: Unit tests, lint and APK
         run: >
