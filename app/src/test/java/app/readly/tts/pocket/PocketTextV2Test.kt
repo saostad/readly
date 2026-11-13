@@ -333,6 +333,158 @@ class PocketTextV2Test {
     }
 
     @Test
+    fun g2pWindowsShortSentenceIsOneWindow() {
+        val sentence = "ک".repeat(100)
+        assertEquals(100, sentence.length)
+        assertEquals(listOf(sentence), PocketTextV2.g2pWindows(sentence, 120))
+    }
+
+    @Test
+    fun g2pWindowsLongClauseSplitsBeforeVaRanandegan() {
+        var sentence = "سازمان هواشناسی اعلام کرد که از اواخر هفته\u200C جاری بارش باران و برف در بیشتر استان\u200Cهای شمالی و غربی کشور آغاز می\u200Cشود و رانندگان باید در جاده\u200Cهای کوهستانی با احتیاط بیشتری رانندگی کنند."
+        // The sentence above uses هفتهٔ / استان‌های / می‌شود / جاده‌های with
+        // ZWNJ; rebuild it exactly as given so the char count matches.
+        sentence = sentence.replace("هفته\u200C جاری", "هفته\u0654 جاری")
+        assertEquals(182, sentence.length)
+        val windows = PocketTextV2.g2pWindows(sentence, 120)
+        assertEquals("$windows", 2, windows.size)
+        for (window in windows) {
+            assertTrue(window, window.length <= 120)
+        }
+        assertTrue(windows[1], windows[1].startsWith("و رانندگان"))
+        val joined = windows.flatMap { it.split(Regex("\\s+")).filter { w -> w.isNotEmpty() } }
+        assertEquals(sentence.split(Regex("\\s+")).filter { it.isNotEmpty() }, joined)
+    }
+
+    @Test
+    fun g2pWindowsGroupsClausesGreedily() {
+        val sentence = "الف ب، ج د، ه و، ز ح"
+        assertEquals(
+            listOf("الف ب، ج د،", "ه و، ز ح"),
+            PocketTextV2.g2pWindows(sentence, 12),
+        )
+    }
+
+    @Test
+    fun dedupeRepeatsDropsRepeatsAndHalvesDoubling() {
+        assertEquals(
+            listOf("salAm"),
+            PocketTextV2.dedupeRepeats(listOf("سلام،"), listOf("salAm", "salAm")),
+        )
+        assertEquals(
+            listOf("na"),
+            PocketTextV2.dedupeRepeats(listOf("نه!"), listOf("na", "na")),
+        )
+        assertEquals(
+            listOf("tam"),
+            PocketTextV2.dedupeRepeats(listOf("تم."), listOf("tamtam")),
+        )
+        assertEquals(
+            listOf("bAbA"),
+            PocketTextV2.dedupeRepeats(listOf("بابا"), listOf("bAbA")),
+        )
+    }
+
+    @Test
+    fun alignWordsCounts() {
+        assertEquals(
+            listOf(1, 1),
+            PocketTextV2.alignWords(listOf("سلام", "دنیا"), listOf("salAm", "donyA")),
+        )
+        assertEquals(
+            listOf(1, 2, 1, 1),
+            PocketTextV2.alignWords(
+                listOf("چرا", "این\u200Cقدر", "دیر", "آمدی"),
+                listOf("CerA", "?in", "qadr", "dir", "?Amadi"),
+            ),
+        )
+        assertEquals(
+            listOf(2, 1),
+            PocketTextV2.alignWords(
+                listOf("لپ\u200Cتاپ", "می\u200Cخرم"),
+                listOf("lap", "tAp", "mixaram"),
+            ),
+        )
+        assertEquals(
+            listOf(1, 1),
+            PocketTextV2.alignWords(
+                listOf("لپ\u200Cتاپ", "می\u200Cخرم"),
+                listOf("laptAp", "mixaram"),
+            ),
+        )
+        assertEquals(
+            null,
+            PocketTextV2.alignWords(listOf("سلام", "دنیا"), listOf("salAm", "donyA", "extra")),
+        )
+    }
+
+    @Test
+    fun phonemeClausesSplitsByAlignment() {
+        val clauses = listOf(
+            "بعد از باران،",
+            "کفش\u200Cهایم پر از گل شد.",
+        )
+        val ph = listOf("ba?d", "?az", "bArAn", "kafSAyam", "por", "?az", "gel", "Sod")
+        assertEquals(
+            listOf("ba?d ?az bArAn", "kafSAyam por ?az gel Sod"),
+            PocketTextV2.phonemeClauses(clauses, ph),
+        )
+    }
+
+    @Test
+    fun applyOverridesReplacesKnownWordsAndKeepsEzafe() {
+        val lookup: (String) -> String? = { word ->
+            when (word) {
+                "اکسل" -> "?eksel"
+                "گوگل" -> "gugel"
+                "دیتا" -> "deytA"
+                "لپ\u200Cتاپ" -> "laptAp"
+                else -> null
+            }
+        }
+        // A known word is replaced; its neighbour's ezafe is untouched.
+        val first = PocketTextV2.applyOverrides(
+            listOf("فایل", "اکسل", "را"),
+            listOf("fAyle1", "?exkel", "rA"),
+            listOf(1, 1, 1),
+            lookup,
+        )
+        assertEquals(listOf("fAyle1", "?eksel", "rA"), first.phonemeWords)
+        assertEquals(listOf(1, 1, 1), first.counts)
+        // An ezafe on the replaced word is kept, `e1` after a consonant.
+        val second = PocketTextV2.applyOverrides(
+            listOf("گوگل", "جدید"),
+            listOf("gugle1", "jadid"),
+            listOf(1, 1),
+            lookup,
+        )
+        assertEquals(listOf("gugele1", "jadid"), second.phonemeWords)
+        // A vowel-final override gets `ye1`.
+        val third = PocketTextV2.applyOverrides(
+            listOf("دیتا", "جدید"),
+            listOf("deytA1", "jadid"),
+            listOf(1, 1),
+            lookup,
+        )
+        assertEquals(listOf("deytAye1", "jadid"), third.phonemeWords)
+        // A ZWNJ word the model split becomes its single override word.
+        val fourth = PocketTextV2.applyOverrides(
+            listOf("لپ\u200Cتاپ"),
+            listOf("lap", "tAp"),
+            listOf(2),
+            lookup,
+        )
+        assertEquals(listOf("laptAp"), fourth.phonemeWords)
+        assertEquals(listOf(1), fourth.counts)
+        // Punctuation on the Persian word still matches; unknown words pass through.
+        val fifth = PocketTextV2.applyOverrides(listOf("اکسل،"), listOf("?exkel"), listOf(1), lookup)
+        assertEquals(listOf("?eksel"), fifth.phonemeWords)
+        val sixth = PocketTextV2.applyOverrides(listOf("سلام"), listOf("salAm"), listOf(1), lookup)
+        assertEquals(listOf("salAm"), sixth.phonemeWords)
+        assertEquals(listOf(1), sixth.counts)
+    }
+
+    @Test
     fun splitChunksRebalancesShortTails() {
         // 7 words at a budget of 3 packs 3+3+1; the 1-word tail is under the
         // minTokens floor of 2, so one word moves back: 3+2+2.

@@ -261,6 +261,262 @@ object PocketTextV2 {
     fun splitClauses(sentence: String): List<String> =
         softBreak.split(sentence).map { strip(it) }.filter { it.isNotEmpty() }
 
+    /** ZWNJ (U+200C), inside Persian words such as «این‌قدر». */
+    private const val ZWNJ = '\u200C'
+
+    /** Clause-opening words: a window cut right before one is strong (see [g2pWindows]). */
+    private val G2P_STRONG_AFTER = setOf("که", "تا", "اما", "ولی", "چون", "اگر", "زیرا")
+
+    /**
+     * Split [sentence] into pronunciation windows of at most
+     * [windowChars] chars. A sentence that fits is one window. Otherwise
+     * its clauses are halved repeatedly (see [halveWindowPart]) until
+     * each part fits — a part with no space stays whole — and neighbouring
+     * parts are then joined greedily, in order, while the joined text
+     * (with one space) still fits. Joining all windows with single spaces
+     * gives back the sentence's words in order.
+     */
+    internal fun g2pWindows(sentence: String, windowChars: Int): List<String> {
+        if (sentence.length <= windowChars) {
+            return if (sentence.isEmpty()) emptyList() else listOf(sentence)
+        }
+        val parts = splitClauses(sentence).toMutableList()
+        if (parts.isEmpty()) return emptyList()
+        while (true) {
+            val at = parts.indexOfFirst { it.length > windowChars && ' ' in it }
+            if (at < 0) break
+            val part = parts.removeAt(at)
+            val (left, right) = halveWindowPart(part)
+            parts.add(at, right)
+            parts.add(at, left)
+        }
+        val windows = mutableListOf<String>()
+        for (part in parts) {
+            val current = windows.lastOrNull()
+            if (current != null) {
+                val trial = "$current $part"
+                if (trial.length <= windowChars) {
+                    windows[windows.size - 1] = trial
+                    continue
+                }
+            }
+            windows += part
+        }
+        return windows
+    }
+
+    /**
+     * Halve one over-long part at its best space: candidates are the spaces
+     * in the middle half of the part (a quarter to three quarters of its
+     * chars), or every space when none lies there. A candidate is strong
+     * when the word after it is in [G2P_STRONG_AFTER], or is `و` / `یا`
+     * and the word before it (trailing punctuation ignored) starts with
+     * `می` or `نمی` or ends with `د` or `ست`. A strong candidate wins over
+     * any other; among the winners the one nearest the middle wins, with
+     * ties going to the earlier one. The caller guarantees a space exists.
+     */
+    private fun halveWindowPart(part: String): Pair<String, String> {
+        val chars = part.toList()
+        val len = chars.size
+        val spaces = chars.indices.filter { chars[it] == ' ' }
+        val middle = spaces.filter { index -> index * 4 >= len && index * 4 <= len * 3 }
+        val candidates = middle.ifEmpty { spaces }
+        fun wordAfter(index: Int): String =
+            splitWords(chars.subList(index + 1, chars.size).joinToString("")).firstOrNull() ?: ""
+        fun wordBefore(index: Int): String {
+            val word = splitWords(chars.subList(0, index).joinToString("")).lastOrNull() ?: ""
+            return word.trimEnd { !it.isLetterOrDigit() }
+        }
+        fun isStrong(index: Int): Boolean {
+            val after = wordAfter(index)
+            if (after in G2P_STRONG_AFTER) return true
+            if (after == "و" || after == "یا") {
+                val before = wordBefore(index)
+                return before.startsWith("می") || before.startsWith("نمی") ||
+                    before.endsWith('د') || before.endsWith("ست")
+            }
+            return false
+        }
+        val strong = candidates.filter { isStrong(it) }
+        val pool = strong.ifEmpty { candidates }
+        val middleAt = len / 2.0
+        var best: Int? = null
+        for (index in pool) {
+            val seen = best
+            val better = seen == null ||
+                kotlin.math.abs(index - middleAt) < kotlin.math.abs(seen - middleAt) - 1e-9
+            if (better) best = index
+        }
+        val at = best ?: throw IllegalStateException("halveWindowPart called on a part with no space: \"$part\"")
+        val left = chars.subList(0, at).joinToString("")
+        val right = chars.subList(at + 1, chars.size).joinToString("")
+        return left.trim() to right.trimStart(' ')
+    }
+
+    /** Whitespace tokens of [text] that contain at least one Persian letter. */
+    internal fun faWords(text: String): List<String> =
+        splitWords(text).filter { word -> word.any { it in NormalizeFa.PERSIAN_LETTERS } }
+
+    private fun zwnjPartCount(word: String): Int = word.split(ZWNJ).size
+
+    private fun persianLetterCount(word: String): Int =
+        word.count { it in NormalizeFa.PERSIAN_LETTERS }
+
+    /**
+     * Drop repeated phoneme words the model emits for very short inputs.
+     * [fa] is the sentence's Persian words. The phoneme list may keep at
+     * most the total ZWNJ part count of [fa]; while it is longer and an
+     * adjacent pair repeats, the second of the first such pair is dropped.
+     * A lone phoneme word that is an exact doubling (`tamtam`) for a
+     * Persian word of at most 3 letters is halved (`tam`).
+     */
+    internal fun dedupeRepeats(fa: List<String>, ph: List<String>): List<String> {
+        val out = ph.toMutableList()
+        val max = fa.sumOf { zwnjPartCount(it) }
+        while (out.size > max) {
+            val at = (1 until out.size).firstOrNull { out[it - 1] == out[it] } ?: break
+            out.removeAt(at)
+        }
+        if (fa.size == 1 && persianLetterCount(fa[0]) <= 3 && out.size == 1) {
+            val word = out[0]
+            if (word.length % 2 == 0) {
+                val half = word.substring(0, word.length / 2)
+                val rest = word.substring(word.length / 2)
+                if (half == rest && half.length >= 2) {
+                    out[0] = half
+                }
+            }
+        }
+        return out
+    }
+
+    /**
+     * For each Persian word in [fa], how many phoneme words it owns: 1, or
+     * its ZWNJ part count when that is more than 1. The counts must sum to
+     * `ph.size` exactly; among assignments that fit, the one minimising
+     * the total |phoneme chars − 1.4 × Persian letters| wins, with ties
+     * going to the earlier word taking 1. Null when nothing fits.
+     */
+    internal fun alignWords(fa: List<String>, ph: List<String>): List<Int>? {
+        val n = fa.size
+        val m = ph.size
+        val choices: List<List<Int>> = fa.map { word ->
+            val parts = zwnjPartCount(word)
+            if (parts > 1) listOf(1, parts) else listOf(1)
+        }
+        // dp[i][j]: best cost for fa[i..] owning ph[j..], with its choice.
+        val dp: Array<Array<Pair<Double, Int>?>> = Array(n + 1) { arrayOfNulls(m + 1) }
+        dp[n][m] = 0.0 to 0
+        for (i in n - 1 downTo 0) {
+            for (j in m downTo 0) {
+                var best: Pair<Double, Int>? = null
+                for (count in choices[i]) {
+                    val end = j + count
+                    if (end > m) continue
+                    val suffix = dp[i + 1][end] ?: continue
+                    val joinedChars = ph.subList(j, end).joinToString(" ").length.toDouble()
+                    val cost = kotlin.math.abs(joinedChars - 1.4 * persianLetterCount(fa[i])) + suffix.first
+                    // Strict `<` keeps the first (smallest) count on a tie.
+                    val seen = best
+                    if (seen == null || cost < seen.first - 1e-9) {
+                        best = cost to count
+                    }
+                }
+                dp[i][j] = best
+            }
+        }
+        if (dp[0][0] == null) return null
+        val counts = mutableListOf<Int>()
+        var j = 0
+        for (i in 0 until n) {
+            val count = dp[i][j]?.second ?: return null
+            counts += count
+            j += count
+        }
+        return counts
+    }
+
+    /**
+     * Join phoneme words into one string per Persian clause, where
+     * [counts] (one per Persian word, in clause order) says how many
+     * phoneme words each Persian word owns. A clause with no Persian word
+     * contributes nothing.
+     */
+    internal fun clausesFromCounts(
+        clausesFa: List<String>,
+        ph: List<String>,
+        counts: List<Int>,
+    ): List<String> {
+        val clauses = mutableListOf<String>()
+        var at = 0
+        var wordAt = 0
+        for (clause in clausesFa) {
+            val words = faWords(clause)
+            val owned = counts.subList(wordAt, wordAt + words.size).sum()
+            wordAt += words.size
+            if (words.isEmpty()) continue
+            clauses += ph.subList(at, at + owned).joinToString(" ")
+            at += owned
+        }
+        return clauses
+    }
+
+    /**
+     * Split phoneme words [ph] into one phoneme clause per Persian clause
+     * in [clausesFa], using [alignWords] over all their Persian words.
+     * A clause with no Persian word contributes nothing. Null when the
+     * words cannot be aligned.
+     */
+    fun phonemeClauses(clausesFa: List<String>, ph: List<String>): List<String>? {
+        val all = clausesFa.flatMap { faWords(it) }
+        val counts = alignWords(all, ph) ?: return null
+        return clausesFromCounts(clausesFa, ph, counts)
+    }
+
+    /** Result of [applyOverrides]: the new phoneme words and the new per-word counts. */
+    data class OverridesResult(val phonemeWords: List<String>, val counts: List<Int>)
+
+    /**
+     * Replace the phoneme group of each Persian word that [lookup] knows
+     * (by its spelling stripped of leading/trailing non-letter, non-ZWNJ
+     * characters) with the override as one phoneme word. When the group's
+     * last word carries the ezafe mark, the ezafe is kept: `ye1` after a
+     * vowel-final override, `e1` otherwise. Returns the new phoneme words
+     * and the new per-word counts (1 for a replaced word, unchanged on a
+     * miss), which the caller uses to keep clause shares right.
+     */
+    internal fun applyOverrides(
+        fa: List<String>,
+        ph: List<String>,
+        counts: List<Int>,
+        lookup: (String) -> String?,
+    ): OverridesResult {
+        val out = mutableListOf<String>()
+        val newCounts = mutableListOf<Int>()
+        var at = 0
+        for ((word, count) in fa.zip(counts)) {
+            val group = ph.subList(at, at + count)
+            at += count
+            val stripped = word.trim { it !in NormalizeFa.PERSIAN_LETTERS && it != ZWNJ }
+            val replaced = if (stripped.isEmpty()) null else lookup(stripped)
+            if (replaced != null) {
+                val hasEzafe = group.lastOrNull()?.endsWith(EZAFE_MARK) == true
+                val wordOut = if (hasEzafe) {
+                    val vowelFinal = replaced.lastOrNull() in setOf('a', 'e', 'o', 'A', 'i', 'u')
+                    if (vowelFinal) "${replaced}ye1" else "${replaced}e1"
+                } else {
+                    replaced
+                }
+                out += wordOut
+                newCounts += 1
+            } else {
+                out.addAll(group)
+                newCounts += count
+            }
+        }
+        return OverridesResult(out, newCounts)
+    }
+
     /**
      * Plan one sentence's phoneme clauses into pieces: whole clauses merge
      * while they fit [maxTokens]; a clause over the budget is split with
