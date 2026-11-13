@@ -118,9 +118,10 @@ class PocketTextV2Test {
             PocketTextV2.splitChunks("a b1 c d e f", countWords, maxTokens = 3, minTokens = 1),
         )
         // The ezafe mark on "b1" binds it to "c": the boundary that fits at
-        // maxTokens 2 never lands between them ("a b1 c" runs over budget).
+        // maxTokens 2 never lands between them, so the cut lands before
+        // the chain instead and every chunk stays within budget.
         assertEquals(
-            listOf("a b1 c", "d e", "f"),
+            listOf("a", "b1 c", "d", "e f"),
             PocketTextV2.splitChunks("a b1 c d e f", countWords, maxTokens = 2, minTokens = 1),
         )
         assertEquals(
@@ -130,6 +131,204 @@ class PocketTextV2Test {
         assertEquals(
             emptyList<String>(),
             PocketTextV2.splitChunks("   ", countWords, maxTokens = 18, minTokens = 8),
+        )
+    }
+
+    @Test
+    fun splitClausesKeepsSoftBreakMarks() {
+        assertEquals(
+            listOf("سلام،", "دنیا؛", "خداحافظ:", "رفت"),
+            PocketTextV2.splitClauses("سلام، دنیا؛ خداحافظ: رفت"),
+        )
+        assertEquals(listOf("سلام دنیا"), PocketTextV2.splitClauses("سلام دنیا"))
+    }
+
+    @Test
+    fun planPiecesMergesTwoShortClauses() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val clauses = listOf("a b", "c d")
+        assertEquals(
+            listOf(TextChunk("a b c d", PocketAudio.PieceEnd.SENTENCE)),
+            PocketTextV2.planPieces(clauses, countWords, 18, 8, PocketAudio.PieceEnd.SENTENCE),
+        )
+    }
+
+    @Test
+    fun planPiecesThreeClausesEndClauseClauseSentenceEnd() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val clause = { word: String -> List(10) { word }.joinToString(" ") }
+        val clauses = listOf(clause("a"), clause("b"), clause("c"))
+        val pieces = PocketTextV2.planPieces(clauses, countWords, 18, 8, PocketAudio.PieceEnd.SENTENCE)
+        assertEquals(3, pieces.size)
+        assertEquals(
+            listOf(PocketAudio.PieceEnd.CLAUSE, PocketAudio.PieceEnd.CLAUSE, PocketAudio.PieceEnd.SENTENCE),
+            pieces.map { it.end },
+        )
+        // The sentenceEnd argument is used verbatim for the last piece.
+        val piecesMid = PocketTextV2.planPieces(clauses, countWords, 18, 8, PocketAudio.PieceEnd.MID)
+        assertEquals(PocketAudio.PieceEnd.MID, piecesMid.last().end)
+    }
+
+    @Test
+    fun planPiecesLongClauseBetweenShortOnes() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val long = List(30) { "w" }.joinToString(" ")
+        val clauses = listOf("a b", long, "c d")
+        val pieces = PocketTextV2.planPieces(clauses, countWords, 18, 8, PocketAudio.PieceEnd.SENTENCE)
+        val ends = pieces.map { it.end }
+        assertEquals("a b", pieces[0].text)
+        assertEquals("c d", pieces.last().text)
+        // Clause edges end Clause, the inside of the split clause ends Mid.
+        assertEquals(PocketAudio.PieceEnd.CLAUSE, ends[0])
+        assertTrue("expected a Mid inside the split clause: $ends", PocketAudio.PieceEnd.MID in ends.subList(1, ends.size - 1))
+        assertEquals(
+            "last sub-piece of the long clause ends at its clause edge: $ends",
+            PocketAudio.PieceEnd.CLAUSE,
+            ends[ends.size - 2],
+        )
+        assertEquals(PocketAudio.PieceEnd.SENTENCE, ends[ends.size - 1])
+        for (piece in pieces) {
+            assertTrue("${piece.text}", countWords(piece.text) <= 18)
+        }
+    }
+
+    @Test
+    fun planPiecesEmptyInputGivesNoPieces() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        assertTrue(
+            PocketTextV2.planPieces(emptyList(), countWords, 18, 8, PocketAudio.PieceEnd.SENTENCE).isEmpty(),
+        )
+    }
+
+    @Test
+    fun chunkBoundariesNeverSplitAnEzafeChain() {
+        // Word counter; every word but the last carries an ezafe mark, so no
+        // boundary may land inside the chain whatever the budget says.
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val chunks = PocketTextV2.splitChunks("ketAbe1 jadide1 duste1 man", countWords, maxTokens = 3, minTokens = 2)
+        assertEquals(listOf("ketAbe1 jadide1 duste1 man"), chunks)
+    }
+
+    @Test
+    fun sensibleCutPrefersBeforeVa() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        // `miravad` ends with `ad`, so it looks like a finite verb and a
+        // cut before the following `va` is preferred.
+        assertEquals(
+            listOf("a b miravad", "va d e f"),
+            PocketTextV2.splitChunks("a b miravad va d e f", countWords, maxTokens = 4, minTokens = 2),
+        )
+    }
+
+    @Test
+    fun sensibleCutBeforeVaAfterNonVerbGetsNoPreference() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        // `SomAli` is not a finite verb, so the cut before `va` gets no
+        // preference and the balanced cut (4/4, not 2/6) wins.
+        assertEquals(
+            listOf("a SomAli va qarbi", "d e f g"),
+            PocketTextV2.splitChunks("a SomAli va qarbi d e f g", countWords, maxTokens = 6, minTokens = 2),
+        )
+    }
+
+    @Test
+    fun sensibleCutNeverAfterDarOrBeforeRa() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val chunks = PocketTextV2.splitChunks("a dar b c d e f g", countWords, maxTokens = 3, minTokens = 2)
+        for (chunk in chunks.dropLast(1)) {
+            assertTrue("$chunks", chunk.split(" ").last() != "dar")
+        }
+        val chunks2 = PocketTextV2.splitChunks("a b rA c d e f g", countWords, maxTokens = 3, minTokens = 2)
+        for (chunk in chunks2.drop(1)) {
+            assertTrue("$chunks2", chunk.split(" ").first() != "rA")
+        }
+    }
+
+    @Test
+    fun sensibleCutNeverAfterVowelYe() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        // `?ostAnhAye` carries no ezafe mark, but its vowel + `ye` ending
+        // still binds it to `SomAli`, so no piece may end with it.
+        for (word in listOf("?ostAnhAye", "hameye", "sedAye", "buye")) {
+            assertFalse(word, PocketTextV2.isAllowedCut(word, "SomAli"))
+        }
+        val chunks = PocketTextV2.splitChunks("a b ?ostAnhAye SomAli c d e f", countWords, maxTokens = 4, minTokens = 2)
+        for (chunk in chunks.dropLast(1)) {
+            assertTrue("$chunks", chunk.split(" ").last() != "?ostAnhAye")
+        }
+    }
+
+    @Test
+    fun sensibleCutNeverAfterANumberWord() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val chunks = PocketTextV2.splitChunks(
+            "jalase sA?ate haSt ?o si daqiqe sobh bargozAr miSavad", countWords, maxTokens = 5, minTokens = 2,
+        )
+        for (chunk in chunks.dropLast(1)) {
+            val last = chunk.split(" ").last()
+            assertTrue("$chunks", last != "si")
+            assertTrue("$chunks", last != "haSt")
+            assertTrue("$chunks", last != "?o")
+        }
+        // No allowed cut exists inside a run of number words, so the
+        // `pack` fallback must still return every word once, in order.
+        val text = "yek do se CahAr panj SeS haft haSt noh dah"
+        val chunks2 = PocketTextV2.splitChunks(text, countWords, maxTokens = 4, minTokens = 2)
+        val words = chunks2.flatMap { it.split(" ") }
+        assertEquals(text.split(" "), words)
+    }
+
+    @Test
+    fun sensibleCutNeverBeforeAVerbOrAfterBayad() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        assertEquals(
+            listOf("fAyle ?eksel rA ?eksport kon", "va dar gugel derAyv ?Aplod kon"),
+            PocketTextV2.splitChunks(
+                "fAyle ?eksel rA ?eksport kon va dar gugel derAyv ?Aplod kon",
+                countWords, maxTokens = 6, minTokens = 2,
+            ),
+        )
+        val chunks = PocketTextV2.splitChunks(
+            "lotfan fAyl rA be ?imeyle1 man beferestid va ?az ?estefAde konid",
+            countWords, maxTokens = 8, minTokens = 2,
+        )
+        for (chunk in chunks.drop(1)) {
+            val first = chunk.split(" ").first()
+            assertTrue("$chunks", first != "beferestid")
+            assertTrue("$chunks", first != "konid")
+        }
+        val chunks2 = PocketTextV2.splitChunks("a b bAyad c d e f g", countWords, maxTokens = 4, minTokens = 2)
+        for (chunk in chunks2.dropLast(1)) {
+            assertTrue("$chunks2", chunk.split(" ").last() != "bAyad")
+        }
+    }
+
+    @Test
+    fun sensibleCutFiftyWordsWithinBudgetAndMinimum() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val text = List(50) { "word" }.joinToString(" ")
+        val chunks = PocketTextV2.splitChunks(text, countWords, maxTokens = 18, minTokens = 8)
+        assertTrue("$chunks", chunks.size >= 3)
+        for (chunk in chunks) {
+            val count = countWords(chunk)
+            assertTrue(chunk, count <= 18)
+            assertTrue(chunk, count >= 8)
+        }
+    }
+
+    @Test
+    fun shortTailMovesWordsBackUnlessAfterABreak() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        // Moving "c" back would cut after "b1", which carries an ezafe
+        // mark, so that cut is not allowed and the short tail stays put.
+        assertEquals(
+            listOf("a1 b1 c", "d"),
+            PocketTextV2.splitChunks("a1 b1 c d", countWords, maxTokens = 3, minTokens = 2),
+        )
+        // After a real break the short tail stays put.
+        assertEquals(
+            listOf("w1 w2 w3.", "w4"),
+            PocketTextV2.splitChunks("w1 w2 w3. w4", countWords, maxTokens = 3, minTokens = 2),
         )
     }
 
