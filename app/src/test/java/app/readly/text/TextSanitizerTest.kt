@@ -336,6 +336,25 @@ class TextSanitizerTest {
     }
 
     @Test
+    fun sanitize_persianText_codeBlockAnnouncedInPersian() {
+        val markdown = "این یک متن فارسی است و کد زیر خوانده نمی‌شود.\n\n```\nval x = 1\n```"
+        assertEquals(
+            "این یک متن فارسی است و کد زیر خوانده نمی‌شود.\n\nبلوک کد خوانده نشد.",
+            TextSanitizer.sanitize(markdown, SourceFormat.MARKDOWN),
+        )
+        val html = "<p>این یک متن فارسی است و کد زیر خوانده نمی‌شود.</p><pre>line1\nline2</pre>"
+        assertEquals(
+            "این یک متن فارسی است و کد زیر خوانده نمی‌شود.\n\nبلوک کد خوانده نشد.",
+            TextSanitizer.sanitize(html, SourceFormat.HTML),
+        )
+        // English text keeps the English announcement.
+        assertEquals(
+            "Some text.\n\nCode block skipped.",
+            TextSanitizer.sanitize("Some text.\n\n```\nval x = 1\n```", SourceFormat.MARKDOWN),
+        )
+    }
+
+    @Test
     fun forSystemTts_removesOnlyUrlsAndEmoji() {
         // System TTS speaks the app's text as given: markup, punctuation and line
         // breaks stay (as pauses); only URLs and emoji go.

@@ -27,13 +27,37 @@ object TextSanitizer {
      * with a description are read as that description and screen-reader text stays.
      */
     fun sanitize(input: String, format: SourceFormat, readHiddenText: Boolean = false): String {
+        // The only English wording this cleaner inserts is the code-block
+        // announcement; in Persian text it is spoken in Persian. The
+        // document language is decided from the text itself the same way
+        // the reference `chunk_language` does (Arabic-script letters
+        // outnumber the other letters); HTML tags are stripped first so
+        // markup never votes. Callers detect the language afterwards, so
+        // there is no language to pass in.
+        val persian = isPersianText(input)
         val paras = when (format) {
-            SourceFormat.HTML -> htmlParagraphs(input, readHiddenText)
+            SourceFormat.HTML -> htmlParagraphs(input, readHiddenText, persian)
             SourceFormat.PLAIN, SourceFormat.MARKDOWN ->
-                markdownParagraphs(if (readHiddenText) input else dropMarkdownImages(input))
+                markdownParagraphs(if (readHiddenText) input else dropMarkdownImages(input), persian)
         }
         return paras.mapNotNull { cleanup(it) }.joinToString("\n\n")
     }
+
+    private val htmlTag = Regex("""<[^>]*>""")
+
+    /** True when Arabic-script letters outnumber the other letters. */
+    internal fun isPersianText(text: String): Boolean {
+        val plain = htmlTag.replace(text, " ")
+        var arabic = 0
+        var other = 0
+        for (c in plain) {
+            if (LatinFa.isArabicScript(c)) arabic++ else if (c.isLetter()) other++
+        }
+        return arabic > other
+    }
+
+    private fun codeBlockText(persian: Boolean): String =
+        if (persian) "بلوک کد خوانده نشد." else "Code block skipped."
 
     /**
      * Minimal cleanup for the system TTS engine: Readly speaks the app's text as
@@ -197,7 +221,7 @@ object TextSanitizer {
     private val italStar = Regex("""(?<!\w)\*([^*\n]+?)\*(?!\w)""")
     private val italUnder = Regex("""(?<!\w)_([^_\n]+?)_(?!\w)""")
 
-    private fun markdownParagraphs(input: String): List<Para> {
+    private fun markdownParagraphs(input: String, persian: Boolean): List<Para> {
         var text = input.replace("\r\n", "\n").replace('\r', '\n')
         text = text.removePrefix("\uFEFF")
         text = stripFrontMatter(text)
@@ -222,7 +246,7 @@ object TextSanitizer {
             if (fence != null) {
                 flush()
                 i = skipFence(lines, i, fence)
-                paras.add(Para("Code block skipped.", punctuate = false))
+                paras.add(Para(codeBlockText(persian), punctuate = false))
                 continue
             }
             if (stripped.isNotEmpty() && stripped.all { it == '=' }) {
@@ -427,7 +451,7 @@ object TextSanitizer {
     private val htmlBlocks = setOf("p", "div", "blockquote", "section", "article")
     private val htmlHeadings = setOf("h1", "h2", "h3", "h4", "h5", "h6")
 
-    private fun htmlParagraphs(input: String, readHiddenText: Boolean): List<Para> {
+    private fun htmlParagraphs(input: String, readHiddenText: Boolean, persian: Boolean): List<Para> {
         val doc = Jsoup.parse(input)
         doc.select(HTML_REMOVE).remove()
         doc.select(NON_PROSE_SELECTORS).remove()
@@ -459,7 +483,7 @@ object TextSanitizer {
             }
             inlineText.clear()
         }
-        collectHtml(doc.body() ?: return paras, paras, inlineText, ::flush)
+        collectHtml(doc.body() ?: return paras, paras, inlineText, ::flush, persian)
         flush()
         return paras
     }
@@ -469,6 +493,7 @@ object TextSanitizer {
         paras: MutableList<Para>,
         inlineText: StringBuilder,
         flush: () -> Unit,
+        persian: Boolean,
     ) {
         for (child in node.childNodes()) {
             when (child) {
@@ -477,7 +502,7 @@ object TextSanitizer {
                     "br", "hr" -> flush()
                     "pre" -> {
                         flush()
-                        paras.add(prePara(child))
+                        paras.add(prePara(child, persian))
                     }
                     "tr" -> {
                         flush()
@@ -496,27 +521,27 @@ object TextSanitizer {
                         val raw = child.wholeText().trim()
                         if ('\n' in raw || '\r' in raw) {
                             flush()
-                            paras.add(Para("Code block skipped.", punctuate = false))
+                            paras.add(Para(codeBlockText(persian), punctuate = false))
                         } else {
                             inlineText.append(child.text())
                         }
                     }
                     in htmlBlocks -> {
                         flush()
-                        collectHtml(child, paras, inlineText, flush)
+                        collectHtml(child, paras, inlineText, flush, persian)
                         flush()
                     }
-                    else -> collectHtml(child, paras, inlineText, flush)
+                    else -> collectHtml(child, paras, inlineText, flush, persian)
                 }
                 else -> Unit
             }
         }
     }
 
-    private fun prePara(pre: Element): Para {
+    private fun prePara(pre: Element, persian: Boolean): Para {
         val raw = pre.wholeText().trim()
         return if ('\n' in raw || '\r' in raw) {
-            Para("Code block skipped.", punctuate = false)
+            Para(codeBlockText(persian), punctuate = false)
         } else {
             Para(raw, punctuate = false)
         }
