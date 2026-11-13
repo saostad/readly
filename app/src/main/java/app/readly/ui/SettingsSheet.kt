@@ -23,6 +23,10 @@ import app.readly.ReadlyApp
 import app.readly.VoicesActivity
 import app.readly.article.ArticleEngine
 import app.readly.article.BpcUiState
+import app.readly.input.pdf.PdfFiles
+import app.readly.input.pdf.PdfLimits
+import app.readly.input.pdf.PdfOcrOptions
+import app.readly.input.pdf.PdfImportStore
 import app.readly.input.sites.RuleUpdateStatus
 import app.readly.input.sites.SiteUiState
 import app.readly.model.VoiceCatalog
@@ -86,9 +90,157 @@ class SettingsSheet(
         fillPersianLine(dialog)
         fillSiteSection(dialog)
         fillPocketSection(dialog)
+        fillPdfSection(dialog)
         dialog.setOnDismissListener { onDismiss() }
         dialog.show()
         Sheets.applyFullWidth(dialog)
+    }
+
+    private fun fillPdfSection(dialog: Dialog) {
+        val box = dialog.findViewById<LinearLayout>(R.id.sheetPdfBox)
+        val defaults = PdfLimits()
+        fun editor(label: Int, value: Int): EditText {
+            box.addView(TextView(activity, null, 0, R.style.Small).apply { setText(label) })
+            return EditText(activity, null, 0, R.style.BoxEdit).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER
+                setText(value.toString())
+                box.addView(this)
+            }
+        }
+        val size = editor(R.string.pdf_max_mb_label, prefs.getInt(PdfFiles.KEY_MAX_MB, defaults.maxFileMb))
+        val chars = editor(R.string.pdf_max_chars_label, prefs.getInt(PdfFiles.KEY_MAX_CHARS, defaults.maxTextChars))
+        val ocrDefaults = PdfOcrOptions()
+        val enabled = Switch(activity).apply {
+            setText(R.string.pdf_ocr_enabled)
+            isChecked = prefs.getBoolean(PdfFiles.KEY_OCR_ENABLED, ocrDefaults.enabled)
+        }
+        box.addView(enabled)
+        box.addView(TextView(activity, null, 0, R.style.Small).apply { setText(R.string.pdf_ocr_language) })
+        val languages = listOf("auto", "eng", "fas", "eng+fas")
+        val language = android.widget.Spinner(activity).apply {
+            adapter = android.widget.ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item,
+                listOf(activity.getString(R.string.pdf_ocr_language_auto), activity.getString(R.string.pdf_ocr_language_english), activity.getString(R.string.pdf_ocr_language_persian), activity.getString(R.string.pdf_ocr_language_both)))
+            val stored = prefs.getString(PdfFiles.KEY_OCR_LANGUAGE, ocrDefaults.languages)
+            val storedIndex = languages.indexOf(stored)
+            if (storedIndex < 0) {
+                android.util.Log.w("Readly", "fallback=true attempted=pdf_ocr_language reason=invalid_saved_language taken=show_default_for_correction")
+                android.widget.Toast.makeText(activity, R.string.pdf_settings_invalid, android.widget.Toast.LENGTH_LONG).show()
+            }
+            setSelection(if (storedIndex < 0) languages.indexOf(ocrDefaults.languages) else storedIndex)
+        }
+        box.addView(language)
+        box.addView(TextView(activity, null, 0, R.style.Small).apply { setText(R.string.image_layout_label) })
+        val layouts = listOf("auto", "sparse", "block", "line")
+        val layout = android.widget.Spinner(activity).apply {
+            adapter = android.widget.ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item,
+                listOf(activity.getString(R.string.image_layout_auto), activity.getString(R.string.image_layout_sparse),
+                    activity.getString(R.string.image_layout_block), activity.getString(R.string.image_layout_line)))
+            val index = layouts.indexOf(prefs.getString(PdfFiles.KEY_IMAGE_LAYOUT, ocrDefaults.imageLayout))
+            if (index < 0) {
+                android.util.Log.w("Readly", "fallback=true attempted=image_ocr_layout reason=invalid_saved_layout taken=show_default_for_correction")
+                android.widget.Toast.makeText(activity, R.string.pdf_settings_invalid, android.widget.Toast.LENGTH_LONG).show()
+            }
+            setSelection(if (index < 0) layouts.indexOf(ocrDefaults.imageLayout) else index)
+        }
+        box.addView(layout)
+        val side = editor(R.string.pdf_ocr_resolution, prefs.getInt(PdfFiles.KEY_OCR_SIDE, ocrDefaults.maxSide))
+        val error = TextView(activity).apply { setTextColor(activity.getColor(R.color.error)) }
+        box.addView(error)
+        box.addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+            setText(R.string.pdf_save_limits)
+            setOnClickListener {
+                val mb = size.text.toString().toIntOrNull()
+                val count = chars.text.toString().toIntOrNull()
+                val resolution = side.text.toString().toIntOrNull()
+                if (mb == null || count == null || resolution == null) {
+                    error.setText(R.string.pocket_enter_number)
+                    return@setOnClickListener
+                }
+                val limits = PdfLimits(mb, count)
+                try {
+                    limits.validate()
+                    PdfOcrOptions(enabled.isChecked, languages[language.selectedItemPosition], resolution, layouts[layout.selectedItemPosition]).validate()
+                } catch (e: IllegalArgumentException) {
+                    android.util.Log.e("Readly", "Document import settings validation failed", e)
+                    error.text = e.message
+                    return@setOnClickListener
+                }
+                prefs.edit().putInt(PdfFiles.KEY_MAX_MB, mb).putInt(PdfFiles.KEY_MAX_CHARS, count)
+                    .putBoolean(PdfFiles.KEY_OCR_ENABLED, enabled.isChecked)
+                    .putString(PdfFiles.KEY_OCR_LANGUAGE, languages[language.selectedItemPosition])
+                    .putInt(PdfFiles.KEY_OCR_SIDE, resolution)
+                    .putString(PdfFiles.KEY_IMAGE_LAYOUT, layouts[layout.selectedItemPosition]).apply()
+                error.text = ""
+                android.widget.Toast.makeText(activity, R.string.pdf_limits_saved, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        })
+        box.addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+            setText(R.string.pdf_imports_history)
+            setOnClickListener { dialog.dismiss(); showPdfImports() }
+        })
+        box.addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+            setText(R.string.pdf_imports_clear)
+            setOnClickListener {
+                android.app.AlertDialog.Builder(activity).setMessage(R.string.pdf_imports_clear_confirm)
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .setPositiveButton(android.R.string.ok) { _, _ ->
+                        (activity.application as ReadlyApp).ioExecutor.execute {
+                            try {
+                                PdfImportStore(activity).use { it.clearFinished() }
+                                activity.runOnUiThread { android.widget.Toast.makeText(activity, R.string.pdf_imports_cleared, android.widget.Toast.LENGTH_SHORT).show() }
+                            } catch (e: Exception) { pdfError(e) }
+                        }
+                    }.show()
+            }
+        })
+    }
+
+    private fun pdfError(error: Exception) {
+        android.util.Log.e("Readly", "Saved document operation failed", error)
+        activity.runOnUiThread {
+            if (!activity.isFinishing && !activity.isDestroyed) android.widget.Toast.makeText(activity,
+                if (error is app.readly.input.pdf.PdfImportException) error.message else activity.getString(R.string.document_operation_failed),
+                android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun showPdfImports() {
+        (activity.application as ReadlyApp).ioExecutor.execute {
+            try {
+                val imports = PdfImportStore(activity).use { it.list() }
+                activity.runOnUiThread {
+                    if (activity.isFinishing || activity.isDestroyed) return@runOnUiThread
+                    if (imports.isEmpty()) {
+                        android.widget.Toast.makeText(activity, R.string.pdf_imports_empty, android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        android.app.AlertDialog.Builder(activity).setTitle(R.string.pdf_imports_history)
+                            .setItems(imports.map { "${it.title} · ${it.status}" }.toTypedArray()) { _, index ->
+                                val item = imports[index]
+                                if (item.status != "ready") {
+                                    android.widget.Toast.makeText(activity, R.string.pdf_imports_unready, android.widget.Toast.LENGTH_LONG).show()
+                                } else {
+                                    (activity.application as ReadlyApp).ioExecutor.execute {
+                                        try {
+                                            val file = PdfImportStore(activity).use { it.textFile(item.id, PdfFiles.limits(activity)) }
+                                            activity.runOnUiThread {
+                                                if (activity.isFinishing || activity.isDestroyed) {
+                                                    if (!file.delete()) android.util.Log.w("Readly", "Couldn't remove abandoned PDF replay")
+                                                } else {
+                                                    try { ReaderService.readPdf(activity, file.name, item.title, item.notice) }
+                                                    catch (e: Exception) {
+                                                        if (!file.delete()) android.util.Log.w("Readly", "Couldn't remove failed PDF replay")
+                                                        pdfError(e)
+                                                    }
+                                                }
+                                            }
+                                        } catch (e: Exception) { pdfError(e) }
+                                    }
+                                }
+                            }.setNegativeButton(android.R.string.cancel, null).show()
+                    }
+                }
+            } catch (e: Exception) { pdfError(e) }
+        }
     }
 
     private fun fillSpeakers(dialog: Dialog, pack: VoicePack) {

@@ -143,11 +143,11 @@ class ShareInputTest {
     }
 
     @Test
-    fun resolve_imageFile_failsWithKindMessage() {
+    fun resolve_archiveFile_failsWithKindMessage() {
         assertEquals(
-            "Readly can only read text, Markdown and HTML files, not image/png (photo.png).",
+            "Readly can read pictures, PDF, text, Markdown and HTML files, not application/zip (archive.zip).",
             failsWith {
-                send(streamName = "photo.png", streamMime = "image/png", streamText = "bogus")
+                send(streamName = "archive.zip", streamMime = "application/zip", streamText = "bogus")
             },
         )
     }

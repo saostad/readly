@@ -87,7 +87,7 @@ object ShareInput {
                 "text/html", "application/xhtml+xml" -> SourceFormat.HTML
                 else if kind.startsWith("text/") -> SourceFormat.PLAIN
                 else -> throw IllegalArgumentException(
-                    "Readly can only read text, Markdown and HTML files, " +
+                    "Readly can read pictures, PDF, text, Markdown and HTML files, " +
                         "not ${mime ?: type ?: "unknown"} ($displayName).",
                 )
             }

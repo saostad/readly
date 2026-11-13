@@ -70,7 +70,7 @@ voices appear; the Kotlin test `PiperCatalogJsonTest` validates the file.
 
 In any app, tap **Share** and choose **Readly**, or select some text and choose
 **Read aloud**. Readly accepts links, plain text, Markdown and HTML, including
-shared `.md`, `.html` and `.txt` files.
+shared `.md`, `.html`, `.txt`, and `.pdf` files, photos, and screenshots.
 
 On first launch Readly downloads the Kokoro voice (a one-time 320 MB
 download); afterwards everything runs on the phone and reading works offline.
@@ -110,6 +110,62 @@ checks it against the same 531-line golden file smart-voices uses
 Playback runs in the background with notification, lock-screen and headset
 controls (previous/next sentence, pause/play, stop). The voice and speed picked
 in the app apply from the next sentence.
+
+### Photos and screenshots
+
+Take a photo with your camera, or take a screenshot, then use **Share → Readly**
+from your gallery or screenshot preview. Readly recognizes the text on your phone
+and starts reading it with your usual playback controls. No camera permission or
+upload is needed. Share one still picture at a time. JPEG, PNG, static WebP, and
+HEIC/AVIF images that your Android device can decode are supported; animated
+images are rejected with an explanation.
+
+Camera rotation and mirroring metadata are applied before OCR. Large images are
+decoded at a bounded size, and transparent areas are placed on white. For tiny text
+in a long scrolling screenshot, crop to the relevant section or increase the OCR
+resolution in **Voice & speed → Documents & OCR**. The default picture layout is
+**Automatic layout**. Choose **Scattered text / signs** for isolated labels,
+**Text block** for a dense screenshot, or **Single line** for one line. Layout and language
+settings apply to new imports. OCR is an approximation: blur, glare, perspective,
+handwriting, and complex layouts can cause mistakes. An image with no recognized
+text shows an error instead of starting empty playback.
+
+Pictures use the same language settings and private saved-document history as
+PDFs below. Turning off scanned-PDF OCR does not disable explicitly shared pictures.
+
+### PDF textbooks and documents
+
+Share a PDF file from your file manager or PDF app and choose **Readly**. Readly
+copies it into private app storage and extracts text from every page in
+order, with progress and a Cancel button, then reads it with the usual voice and
+playback controls. Extraction runs on the phone, without uploading the document.
+
+Selectable-text PDFs use their text layer. Scanned pages are recognized on the
+phone with Tesseract OCR; English and Persian models are bundled, so OCR needs no
+upload, account, or separate download. Readly shows which pages used OCR and warns
+that recognition can make mistakes. It reports pages with no readable text and
+fails explicitly if an entire document is unreadable. Password-protected PDFs must
+be unlocked before sharing. Complex columns, tables, equations, unusual fonts, and
+poor scans can affect reading order or recognition accuracy.
+
+In **Voice & speed → Documents & OCR**, adjust the file-size limit (default 200 MB)
+and extracted-text limit (default 2,000,000 characters). OCR is on by default;
+automatic language selection first recognizes each scanned page or picture with
+both models, then repeats OCR with Persian if Persian/Arabic-script letters
+outnumber other letters, or English otherwise. This script heuristic can misidentify
+short or blurry text and does not distinguish Persian from other Arabic-script
+languages. You can instead choose English, Persian, or both for mixed-language
+pages, or turn scanned-PDF OCR off. Its page resolution is
+adjustable from 800 to 4000 pixels on the longest side (default 2400); larger pages
+use more memory and take longer. Imports over a limit fail
+with a message; books are never silently truncated. Large PDFs are passed to the
+reader by a private file id, so their text does not overflow Android's share-message
+size limit. Keep the import screen open until the book is ready; interrupted
+imports are marked failed and can be shared again. Source files, page text, OCR
+model provenance and processing status are saved privately. Use **Imported documents**
+in the same settings section to read a saved book again without repeating OCR, or
+**Clear imported documents** to remove saved sources and text. The temporary playback
+handoff file is removed after the service loads it.
 
 ## Reading websites
 
@@ -287,6 +343,9 @@ wait for the voice.
 
 Readly's original source code is licensed under the [MIT License](LICENSE).
 Third-party code, extensions, models, and voice assets retain their respective
-licenses. See the bundled [Bypass Paywalls Clean license](app/src/main/assets/bpc/LICENSE)
-and the [Phonon documentation](tools/phonon/README.md) for included notices and
+licenses. See the bundled [Bypass Paywalls Clean license](app/src/main/assets/bpc/LICENSE),
+the [OCR model license](app/src/main/assets/ocr/LICENSE),
+[OCR library notices](app/src/main/assets/ocr/notices/README.txt),
+[PDFBox notices](app/src/main/assets/pdfbox/NOTICE.txt), and the
+[Phonon documentation](tools/phonon/README.md) for included notices and
 licensing information; other voice models remain subject to their providers' terms.

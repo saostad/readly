@@ -139,6 +139,11 @@
         </activity>
 
         <activity
+            android:name=".DocumentImportActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <activity
             android:name=".ShareActivity"
             android:excludeFromRecents="true"
             android:exported="true"
@@ -154,6 +159,9 @@
                 <data android:mimeType="text/html" />
                 <data android:mimeType="text/*" />
                 <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/x-pdf" />
+                <data android:mimeType="image/*" />
             </intent-filter>
             <intent-filter android:label="Read aloud">
                 <action android:name="android.intent.action.PROCESS_TEXT" />

@@ -28,6 +28,7 @@ import android.os.SystemClock
 import android.service.media.MediaBrowserService
 import android.util.Log
 import android.widget.Toast
+import app.readly.input.pdf.PdfFiles
 import app.readly.InstallTask
 import app.readly.MainActivity
 import app.readly.R
@@ -116,6 +117,7 @@ class ReaderService : MediaBrowserService() {
         const val ACTION_DOWNLOAD_VOICE = "app.readly.DOWNLOAD_VOICE"
         const val ACTION_PREVIEW = "app.readly.PREVIEW"
 
+        private const val EXTRA_PDF_ID = "pdfId"
         const val EXTRA_TEXT = "text"
         const val EXTRA_TITLE = "title"
         const val EXTRA_FORMAT = "format"
@@ -450,6 +452,19 @@ class ReaderService : MediaBrowserService() {
                     .putExtra(EXTRA_TITLE, title)
                     .putExtra(EXTRA_FORMAT, format.name)
                     .putExtra(EXTRA_NOTICE, notice?.take(MAX_READ_NOTICE_CHARS)),
+            )
+        }
+
+        /** Starts a PDF through the same read pipeline, with a private file id instead of a large text extra. */
+        fun readPdf(context: Context, id: String, title: String, notice: String) {
+            context.startForegroundService(
+                Intent(context, ReaderService::class.java)
+                    .setAction(ACTION_READ)
+                    .putExtra(EXTRA_CALLER, CALLER_TOKEN)
+                    .putExtra(EXTRA_PDF_ID, id)
+                    .putExtra(EXTRA_TITLE, title)
+                    .putExtra(EXTRA_FORMAT, SourceFormat.PLAIN.name)
+                    .putExtra(EXTRA_NOTICE, notice),
             )
         }
 
@@ -1142,6 +1157,7 @@ class ReaderService : MediaBrowserService() {
                     intent.getStringExtra(EXTRA_TITLE) ?: "",
                     intent.getStringExtra(EXTRA_FORMAT) ?: SourceFormat.PLAIN.name,
                     intent.getStringExtra(EXTRA_NOTICE),
+                    intent.getStringExtra(EXTRA_PDF_ID),
                 )
             }
             ACTION_READ_URL -> {
@@ -1233,7 +1249,7 @@ class ReaderService : MediaBrowserService() {
         }
     }
 
-    private fun handleRead(text: String, title: String, formatName: String, notice: String?) {
+    private fun handleRead(text: String, title: String, formatName: String, notice: String?, pdfId: String? = null) {
         executeRead("READ") {
             currentHost = ""
             val finished = AtomicBoolean(false)
@@ -1248,7 +1264,8 @@ class ReaderService : MediaBrowserService() {
                     postError(e)
                     return@executeRead
                 }
-                startReading(title, text, format, notice = notice, onRequestDone = ::finish)
+                val content = if (pdfId == null) text else PdfFiles.read(this, pdfId)
+                startReading(title, content, format, notice = notice, onRequestDone = ::finish)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 finish()

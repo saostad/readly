@@ -27,6 +27,18 @@ import java.util.concurrent.Executors
 class ReadlyApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        if (getDatabasePath("pdf-imports.db").exists()) {
+            try {
+                val interrupted = app.readly.input.pdf.PdfImportStore(this).use { it.recoverInterrupted() }
+                if (interrupted > 0) {
+                    Log.w("Readly", "fallback=true attempted=pdf_import reason=process_interrupted taken=mark_failed count=$interrupted")
+                    android.widget.Toast.makeText(this, R.string.pdf_import_interrupted, android.widget.Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                Log.e("Readly", "Couldn't recover PDF import status", e)
+                android.widget.Toast.makeText(this, R.string.pdf_state_failed, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
         // Before any activity or service touches the catalog.
         VoiceCatalog.ensureLoaded(this)
         // Initializes the shared rule store and runs one throttled automatic

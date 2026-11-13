@@ -77,6 +77,9 @@ dependencies {
     implementation("org.mozilla.geckoview:geckoview:158.0.20261007201254")
     implementation(libs.commons.compress)
     implementation(libs.jsoup)
+    implementation(libs.pdfbox)
+    implementation(libs.tesseract)
+    implementation(libs.exif)
     // readability4j pulls jsoup 1.11.2 and kotlin-stdlib 1.3.72 transitively; we
     // keep our own jsoup 1.23.2 (forced below) and the Kotlin plugin's stdlib.
     // slf4j-api is kept: Readability4J's class init calls LoggerFactory, so

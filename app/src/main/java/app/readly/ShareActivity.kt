@@ -9,6 +9,8 @@ import android.util.Log
 import android.widget.Toast
 import app.readly.input.ShareInput
 import app.readly.input.ShareRequest
+import app.readly.input.pdf.PdfText
+import app.readly.input.pdf.ImageInput
 import app.readly.model.VoiceModelStore
 import app.readly.playback.ReaderService
 import java.io.File
@@ -29,6 +31,16 @@ class ShareActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleShare()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleShare()
+    }
+
+    private fun handleShare() {
         // Setup shows only when nothing is installed: a Persian-only setup
         // (Pocket, no main voice) reads shares without a detour.
         if (!VoiceModelStore.anyInstalled(File(noBackupFilesDir, "voices"))) {
@@ -40,6 +52,26 @@ class ShareActivity : Activity() {
             return
         }
         try {
+            @Suppress("DEPRECATION")
+            val sharedUri: Uri? = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+                ?: intent.data?.takeIf { intent.action == Intent.ACTION_SEND }
+            if (sharedUri != null) {
+                val name = queryDisplayName(sharedUri)
+                val mime = contentResolver.getType(sharedUri)
+                val pdf = PdfText.isPdf(intent.type, name, mime)
+                val image = ImageInput.isImage(intent.type, name, mime)
+                if (pdf || image) {
+                    Log.i("Readly", "Share: importing ${if (pdf) "PDF" else "image"}")
+                    startActivity(Intent(this, DocumentImportActivity::class.java)
+                        .putExtra("sharedImage", !pdf && image)
+                        .setData(sharedUri)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        .putExtra(Intent.EXTRA_TITLE, name))
+                    finish()
+                    return
+                }
+            }
             when (val request = resolveIntent(intent)) {
                 is ShareRequest.Read -> {
                     Log.i("Readly", "Share: text read; skipping main-voice preload so the detected voice loads first")
@@ -57,7 +89,7 @@ class ShareActivity : Activity() {
             Log.e("Readly", "Couldn't handle the shared item: $message", e)
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
-            val message = "Couldn't open the shared item: ${e.javaClass.name}: ${e.message}"
+            val message = "Couldn't open the shared item. Share it again from the original app."
             Log.e("Readly", message, e)
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
         }
@@ -127,13 +159,8 @@ class ShareActivity : Activity() {
     }
 
     private fun queryDisplayName(uri: Uri): String? {
-        return try {
-            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
-            }
-        } catch (e: Exception) {
-            Log.w("Readly", "Couldn't read the shared file's name for $uri", e)
-            null
+        return contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
         }
     }
 }
