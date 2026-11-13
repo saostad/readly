@@ -50,6 +50,10 @@ object ReadLater {
 
     fun remove(list: List<SavedArticle>, url: String): List<SavedArticle> = list.filterNot { it.url == url }
 
+    /** Puts a removed row back where it was (Undo), ordered by when it was saved. */
+    fun restore(list: List<SavedArticle>, article: SavedArticle): List<SavedArticle> =
+        (list.filterNot { it.url == article.url } + article).sortedByDescending { it.addedAtMs }
+
     /** Renames a saved row once the article's real title is known. */
     fun retitle(list: List<SavedArticle>, url: String, title: String): List<SavedArticle> =
         if (title.isBlank()) list else list.map { if (it.url == url) it.copy(title = title) else it }
@@ -98,6 +102,24 @@ object ListeningHistory {
         return (listOf(entry) + list.filterNot { it.url == url }).take(MAX_ENTRIES)
     }
 
+    /**
+     * Marks [url] heard from the article menu, even when it was never played (no
+     * entry yet: one is added with no length, which counts as fully heard).
+     */
+    fun markHeard(list: List<HistoryEntry>, url: String, title: String, siteLabel: String, nowMs: Long): List<HistoryEntry> {
+        val previous = list.firstOrNull { it.url == url }
+        val entry = previous?.copy(finished = true, offsetChars = previous.bodyChars, updatedAtMs = nowMs)
+            ?: HistoryEntry(url, title, siteLabel, 0, 0, finished = true, updatedAtMs = nowMs)
+        return (listOf(entry) + list.filterNot { it.url == url }).take(MAX_ENTRIES)
+    }
+
+    /** Forgets [url]: it shows as unheard again and loses its resume point. */
+    fun forget(list: List<HistoryEntry>, url: String): List<HistoryEntry> = list.filterNot { it.url == url }
+
+    /** Puts [entry] back as it was (Undo), ordered by when it was last updated. */
+    fun restore(list: List<HistoryEntry>, entry: HistoryEntry): List<HistoryEntry> =
+        (list.filterNot { it.url == entry.url } + entry).sortedByDescending { it.updatedAtMs }.take(MAX_ENTRIES)
+
     fun finish(list: List<HistoryEntry>, url: String, nowMs: Long): List<HistoryEntry> {
         val entry = list.firstOrNull { it.url == url } ?: return list
         val done = entry.copy(finished = true, offsetChars = entry.bodyChars, updatedAtMs = nowMs)
@@ -125,6 +147,33 @@ object ListeningHistory {
                 o.optInt("offset"), o.optInt("body"), o.optBoolean("done"), o.optLong("at"),
             )
         }
+    }
+}
+
+/**
+ * Articles hidden from the website lists and Latest (the article menu's "Hide"):
+ * newest first, one entry per address, at most [MAX_ENTRIES]. Stored as JSON.
+ */
+object HiddenArticles {
+
+    /** Storage cap: past it the oldest hidden address shows again. */
+    const val MAX_ENTRIES = 500
+
+    fun hide(list: List<String>, url: String): List<String> {
+        val clean = url.trim()
+        require(clean.isNotEmpty()) { "That article has no address." }
+        return (listOf(clean) + list.filterNot { it == clean }).take(MAX_ENTRIES)
+    }
+
+    fun unhide(list: List<String>, url: String): List<String> = list.filterNot { it == url.trim() }
+
+    fun encode(list: List<String>): String = JSONArray().apply { list.forEach { put(it) } }.toString()
+
+    /** @throws org.json.JSONException when the stored list is corrupt. */
+    fun decode(json: String?): List<String> {
+        if (json.isNullOrBlank()) return emptyList()
+        val array = JSONArray(json)
+        return (0 until array.length()).map { array.getString(it) }
     }
 }
 

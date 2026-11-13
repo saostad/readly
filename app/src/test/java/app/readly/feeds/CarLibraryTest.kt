@@ -51,6 +51,58 @@ class CarLibraryTest {
     }
 
     @Test
+    fun history_menuMarksHeardForgetsAndRestores() {
+        // Never played: marking heard adds a finished entry the car shows as heard.
+        var h = ListeningHistory.markHeard(emptyList(), "https://a.example/1", "One", "A", nowMs = 5)
+        assertEquals(2 to 1.0, CarBrowser.completion(h[0]))
+        assertEquals("One", h[0].title)
+        // Half heard: marking heard finishes it at its full length.
+        h = ListeningHistory.record(h, "https://b.example/2", "Two", "B", 400, 1_000, nowMs = 6)
+        val before = h.first { it.url == "https://b.example/2" }
+        h = ListeningHistory.markHeard(h, "https://b.example/2", "", "", nowMs = 7)
+        assertTrue(h[0].finished)
+        assertEquals(1_000, h[0].offsetChars)
+        // Undo puts the half-heard entry back at its old place, with its resume point.
+        h = ListeningHistory.restore(h, before)
+        assertEquals(listOf("https://b.example/2", "https://a.example/1"), h.map { it.url })
+        assertEquals(400, h[0].offsetChars)
+        assertFalse(h[0].finished)
+        // Forgetting makes it unheard again.
+        val forgotten = ListeningHistory.forget(h, "https://b.example/2")
+        assertEquals(0, CarBrowser.completion(forgotten.firstOrNull { it.url == "https://b.example/2" }).first)
+        assertEquals(1, forgotten.size)
+    }
+
+    @Test
+    fun readLater_restorePutsARemovedLinkBackInPlace() {
+        var list = ReadLater.add(emptyList(), "https://a.example/1", "One", nowMs = 1)
+        list = ReadLater.add(list, "https://b.example/2", "Two", nowMs = 2)
+        list = ReadLater.add(list, "https://c.example/3", "Three", nowMs = 3)
+        val removed = list[1]
+        val restored = ReadLater.restore(ReadLater.remove(list, removed.url), removed)
+        assertEquals(list, restored)
+    }
+
+    @Test
+    fun hidden_newestFirstUniqueCappedAndUndoable() {
+        var hidden = HiddenArticles.hide(emptyList(), "https://a.example/1")
+        hidden = HiddenArticles.hide(hidden, "https://b.example/2")
+        hidden = HiddenArticles.hide(hidden, " https://a.example/1 ")
+        assertEquals(listOf("https://a.example/1", "https://b.example/2"), hidden)
+        assertEquals(listOf("https://a.example/1"), HiddenArticles.unhide(hidden, "https://b.example/2"))
+        assertEquals(hidden, HiddenArticles.decode(HiddenArticles.encode(hidden)))
+        var many = hidden
+        for (i in 0..HiddenArticles.MAX_ENTRIES) many = HiddenArticles.hide(many, "https://x.example/$i")
+        assertEquals(HiddenArticles.MAX_ENTRIES, many.size)
+        assertFalse("https://b.example/2" in many)
+    }
+
+    @Test(expected = org.json.JSONException::class)
+    fun hidden_corruptStorageIsAnError() {
+        HiddenArticles.decode("[unclosed")
+    }
+
+    @Test
     fun completion_marksForTheCar() {
         assertEquals(0, CarBrowser.completion(null).first)
         val partial = HistoryEntry("u", "t", "s", 250, 1_000, finished = false, updatedAtMs = 1)

@@ -28,6 +28,7 @@ import app.readly.playback.ReaderSnapshot
 import app.readly.playback.ReaderState
 import app.readly.playback.ReaderStatus
 import app.readly.text.SourceFormat
+import app.readly.ui.HomeBrowser
 import app.readly.ui.SettingsSheet
 import java.io.File
 import java.util.Locale
@@ -36,8 +37,9 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * First-run voice download, then Home: a card to read text aloud, voice chips,
- * a phone-voice tip and a footer hint. Playback state arrives from [ReaderState],
+ * First-run voice download, then Home: the Android Auto layout (Websites, Latest,
+ * Saved and Recents tabs, see [HomeBrowser]); the top bar's text button opens a card
+ * to read pasted text aloud, with the voice chips and the phone-voice tip. Playback state arrives from [ReaderState],
  * so rotation never loses it; voice and speed live in the settings sheet.
  * Setup shows only when nothing is installed, and offers Persian-only readers
  * Pocket Farsi as an alternative to the main voice.
@@ -98,6 +100,18 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var miniBar: LinearLayout
     private lateinit var miniText: TextView
     private lateinit var miniToggle: ImageButton
+    private lateinit var miniDetail: TextView
+    private lateinit var miniProgress: ProgressBar
+
+    /** Ticks the loading step's elapsed time once a second while a step is running. */
+    private val stepTicker = object : Runnable {
+        override fun run() {
+            updateMiniBar(ReaderState.snapshot)
+        }
+    }
+    private lateinit var pastePanel: LinearLayout
+    private lateinit var pasteToggle: ImageButton
+    private lateinit var home: HomeBrowser
 
     private val readerListener = ReaderState.Listener { render(it) }
 
@@ -149,7 +163,23 @@ class MainActivity : Activity(), InstallTask.Listener {
         miniBar = findViewById(R.id.miniBar)
         miniText = findViewById(R.id.miniText)
         miniToggle = findViewById(R.id.miniToggle)
+        miniDetail = findViewById(R.id.miniDetail)
+        miniProgress = findViewById(R.id.miniBarProgress)
         needVoiceBanner = findViewById(R.id.needVoiceBanner)
+        pastePanel = findViewById(R.id.pastePanel)
+        pasteToggle = findViewById(R.id.pasteToggle)
+        pasteToggle.setOnClickListener { setPastePanelOpen(pastePanel.visibility != View.VISIBLE) }
+        home = HomeBrowser(
+            this,
+            tabRow = findViewById(R.id.tabRow),
+            header = findViewById(R.id.browseHeader),
+            back = findViewById(R.id.browseBack),
+            headerTitle = findViewById(R.id.browseTitle),
+            content = findViewById(R.id.browseContent),
+        ) {
+            startActivity(Intent(this, FeedsActivity::class.java))
+            overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+        }
         if (intent?.getBooleanExtra(EXTRA_NEED_VOICE, false) == true) {
             needVoiceBanner.visibility = View.VISIBLE
         }
@@ -240,6 +270,23 @@ class MainActivity : Activity(), InstallTask.Listener {
     override fun onStart() {
         super.onStart()
         ReaderState.addListener(readerListener)
+        home.start()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        when {
+            pastePanel.visibility == View.VISIBLE -> setPastePanelOpen(false)
+            home.onBack() -> Unit
+            else -> super.onBackPressed()
+        }
+    }
+
+    /** Shows or hides the paste-and-read card (and its voice chips and tip). */
+    private fun setPastePanelOpen(open: Boolean) {
+        pastePanel.visibility = if (open) View.VISIBLE else View.GONE
+        pasteToggle.imageTintList = getColorStateList(if (open) R.color.accent else R.color.text2)
+        if (open) inputEdit.requestFocus()
     }
 
     override fun onPause() {
@@ -249,6 +296,8 @@ class MainActivity : Activity(), InstallTask.Listener {
 
     override fun onStop() {
         ReaderState.removeListener(readerListener)
+        miniBar.removeCallbacks(stepTicker)
+        home.stop()
         setupSamples.release()
         setupPlaying = false
         setupLoading = false
@@ -344,6 +393,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     }
 
     override fun onDestroy() {
+        home.close()
         task?.let { if (it.listener === this) it.listener = null }
         super.onDestroy()
     }
@@ -482,15 +532,34 @@ class MainActivity : Activity(), InstallTask.Listener {
         }
     }
 
-    /** Mini-bar pinned to the bottom of Home while the reader isn't IDLE. */
+    /**
+     * Mini-bar pinned to the bottom of Home while the reader isn't IDLE. While audio
+     * hasn't started it names the step being waited on, with a progress bar and the
+     * time it has taken so far.
+     */
     private fun updateMiniBar(snap: ReaderSnapshot) {
+        miniBar.removeCallbacks(stepTicker)
         if (readerContainer.visibility != View.VISIBLE || snap.status == ReaderStatus.IDLE) {
             miniBar.visibility = View.GONE
             return
         }
         miniBar.visibility = View.VISIBLE
         val label = snap.title.ifBlank { snap.host.ifBlank { getString(R.string.source_text) } }
-        miniText.text = getString(R.string.minibar_format, label)
+        val step = app.readly.playback.LoadingStep.of(snap)
+        app.readly.ui.LoadingViews.bindBar(miniProgress, step)
+        if (step != null) {
+            miniText.text = app.readly.ui.LoadingViews.title(this, step)
+            app.readly.ui.LoadingViews.bindText(
+                miniDetail,
+                // Elapsed time first: a long title must not push it off the line.
+                listOf(app.readly.ui.LoadingViews.detail(step, snap.stepSinceMs), label)
+                    .filter { it.isNotBlank() }.joinToString(" · "),
+            )
+            miniBar.postDelayed(stepTicker, 1_000)
+        } else {
+            miniText.text = getString(R.string.minibar_format, label)
+            miniDetail.visibility = View.GONE
+        }
         miniToggle.setImageResource(
             if (snap.status == ReaderStatus.PAUSED) R.drawable.ic_play else R.drawable.ic_pause,
         )

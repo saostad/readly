@@ -2,6 +2,7 @@ package app.readly.playback
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 
 /** Playback status shown in the UI and the notification. */
@@ -57,6 +58,12 @@ data class ReaderSnapshot(
     val retryUrl: String? = null,
     /** In the ASK state, the voice the Download button would fetch (null when none). */
     val askPackId: String? = null,
+    /** While FETCHING a voice download: 0..100; -1 when not downloading. */
+    val downloadPercent: Int = -1,
+    /** While LOADING_VOICE: the voice's short name ("" when unknown). */
+    val loadingVoice: String = "",
+    /** When the current [LoadingStep] began ([SystemClock.elapsedRealtime]); 0 when none. */
+    val stepSinceMs: Long = 0L,
 )
 
 /**
@@ -91,7 +98,8 @@ object ReaderState {
 
     fun update(transform: (ReaderSnapshot) -> ReaderSnapshot) {
         runOnMain {
-            snapshot = transform(snapshot)
+            val previous = snapshot
+            snapshot = LoadingStep.stamp(previous, transform(previous), SystemClock.elapsedRealtime())
             listeners.toList().forEach { listener ->
                 try {
                     listener.onChanged(snapshot)

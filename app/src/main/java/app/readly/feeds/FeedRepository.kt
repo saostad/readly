@@ -6,6 +6,7 @@ import android.util.Log
 import app.readly.input.ArticleFetcher
 import app.readly.playback.ReaderService
 import java.io.IOException
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The one place the phone screen and the Android Auto browser read and change the
@@ -27,6 +28,9 @@ class FeedRepository(context: Context) {
 
         /** Where each Android Auto article stopped (Recents, resume, heard marks), JSON. */
         const val KEY_HISTORY = "autoHistory"
+
+        /** Articles hidden from the website lists and Latest, JSON. */
+        const val KEY_HIDDEN = "autoHidden"
 
         /** Open the next article in the list while one plays (default on). */
         const val KEY_PREFETCH = "autoPrefetch"
@@ -182,6 +186,113 @@ class FeedRepository(context: Context) {
         prefs.edit().putString(
             KEY_HISTORY, ListeningHistory.encode(ListeningHistory.finish(history(), url, System.currentTimeMillis())),
         ).apply()
+    }
+
+    // ------------------------------------------------- Article actions ---
+    // The article menu's actions (phone home screen). Each returns what Undo needs.
+
+    /** Told after an article action changed marks or lists, so open lists reload. */
+    fun interface ItemsListener {
+        fun onItemsChanged()
+    }
+
+    private val itemsListeners = CopyOnWriteArrayList<ItemsListener>()
+
+    fun addItemsListener(listener: ItemsListener) {
+        itemsListeners += listener
+    }
+
+    fun removeItemsListener(listener: ItemsListener) {
+        itemsListeners -= listener
+    }
+
+    private fun itemsChanged() {
+        itemsListeners.forEach { it.onItemsChanged() }
+    }
+
+    /** Marks [url] heard; returns its previous history entry (null when it had none). */
+    @Synchronized
+    fun markHeard(url: String, title: String, siteLabel: String): HistoryEntry? {
+        val history = history()
+        val previous = history.firstOrNull { it.url == url }
+        val updated = ListeningHistory.markHeard(history, url, title, siteLabel, System.currentTimeMillis())
+        prefs.edit().putString(KEY_HISTORY, ListeningHistory.encode(updated)).apply()
+        itemsChanged()
+        return previous
+    }
+
+    /** Forgets [url] (unheard, no resume point); returns the removed entry for Undo. */
+    @Synchronized
+    fun forgetHistory(url: String): HistoryEntry? {
+        val history = history()
+        val previous = history.firstOrNull { it.url == url } ?: return null
+        prefs.edit().putString(KEY_HISTORY, ListeningHistory.encode(ListeningHistory.forget(history, url))).apply()
+        itemsChanged()
+        return previous
+    }
+
+    /** Undo for [markHeard] / [forgetHistory]: puts [previous] back, or forgets [url] when null. */
+    @Synchronized
+    fun restoreHistory(url: String, previous: HistoryEntry?) {
+        val history = history()
+        val updated = if (previous == null) {
+            ListeningHistory.forget(history, url)
+        } else {
+            ListeningHistory.restore(history, previous)
+        }
+        prefs.edit().putString(KEY_HISTORY, ListeningHistory.encode(updated)).apply()
+        itemsChanged()
+    }
+
+    /** Removes [url] from Saved; returns the removed row for Undo (null when it wasn't there). */
+    @Synchronized
+    fun takeSaved(url: String): SavedArticle? {
+        val list = saved()
+        val previous = list.firstOrNull { it.url == url } ?: return null
+        prefs.edit().putString(KEY_SAVED, ReadLater.encode(ReadLater.remove(list, url))).apply()
+        itemsChanged()
+        return previous
+    }
+
+    /** Undo for [takeSaved]. */
+    @Synchronized
+    fun restoreSaved(article: SavedArticle) {
+        prefs.edit().putString(KEY_SAVED, ReadLater.encode(ReadLater.restore(saved(), article))).apply()
+        itemsChanged()
+    }
+
+    /**
+     * The hidden addresses. An unreadable list is reported and thrown; the lists then
+     * show everything with a notice instead of guessing.
+     */
+    @Throws(IOException::class)
+    fun hidden(): Set<String> = try {
+        HiddenArticles.decode(prefs.getString(KEY_HIDDEN, null)).toSet()
+    } catch (e: org.json.JSONException) {
+        Log.e(TAG, "Hidden articles list is unreadable: ${e.message}", e)
+        throw IOException("Your hidden articles list couldn't be read, so hidden articles show again.", e)
+    }
+
+    /** Hides [url] from the website lists and Latest (the car's too). */
+    @Synchronized
+    fun hide(url: String) {
+        val list = try {
+            HiddenArticles.decode(prefs.getString(KEY_HIDDEN, null))
+        } catch (e: org.json.JSONException) {
+            // Starting over loses nothing visible: an unreadable list hides nothing already.
+            Log.w(TAG, "fallback=true attempted=read-hidden reason=\"${e.message}\" taken=new-hidden-list", e)
+            emptyList()
+        }
+        prefs.edit().putString(KEY_HIDDEN, HiddenArticles.encode(HiddenArticles.hide(list, url))).apply()
+        itemsChanged()
+    }
+
+    /** Undo for [hide]. */
+    @Synchronized
+    fun unhide(url: String) {
+        val list = HiddenArticles.decode(prefs.getString(KEY_HIDDEN, null))
+        prefs.edit().putString(KEY_HIDDEN, HiddenArticles.encode(HiddenArticles.unhide(list, url))).apply()
+        itemsChanged()
     }
 
     fun setPlayNext(on: Boolean) {

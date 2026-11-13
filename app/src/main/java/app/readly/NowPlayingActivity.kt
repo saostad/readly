@@ -44,6 +44,14 @@ class NowPlayingActivity : Activity() {
     private lateinit var askRow: View
     private lateinit var askDownload: Button
     private lateinit var transportRow: View
+    private lateinit var loadingPanel: View
+    private lateinit var loadingBar: android.widget.ProgressBar
+    private lateinit var loadingTitle: TextView
+    private lateinit var loadingDetail: TextView
+    private lateinit var loadingHint: TextView
+
+    /** Ticks the loading step's elapsed time once a second while a step is running. */
+    private val stepTicker = Runnable { renderLoading(ReaderState.snapshot) }
 
     /** True once a non-IDLE state was seen; an IDLE after that closes the screen. */
     private var hasStarted = false
@@ -85,6 +93,11 @@ class NowPlayingActivity : Activity() {
         askRow = findViewById(R.id.npAskRow)
         askDownload = findViewById(R.id.npAskDownload)
         transportRow = findViewById(R.id.npTransportRow)
+        loadingPanel = findViewById(R.id.npLoadingPanel)
+        loadingBar = findViewById(R.id.npLoadingBar)
+        loadingTitle = findViewById(R.id.npLoadingTitle)
+        loadingDetail = findViewById(R.id.npLoadingDetail)
+        loadingHint = findViewById(R.id.npLoadingHint)
         askDownload.setOnClickListener { sendAction(ReaderService.ACTION_DOWNLOAD_VOICE) }
         findViewById<Button>(R.id.npAskReadAnyway).setOnClickListener {
             sendAction(ReaderService.ACTION_READ_ANYWAY)
@@ -120,6 +133,7 @@ class NowPlayingActivity : Activity() {
 
     override fun onStop() {
         ReaderState.removeListener(readerListener)
+        loadingPanel.removeCallbacks(stepTicker)
         super.onStop()
     }
 
@@ -156,6 +170,7 @@ class NowPlayingActivity : Activity() {
         renderArt(snap)
         renderBrowserRow(snap)
         renderAskRow(snap)
+        renderLoading(snap)
         renderSentence(snap)
         renderProgress(snap)
         playPauseButton.setImageResource(
@@ -196,6 +211,19 @@ class NowPlayingActivity : Activity() {
             } else {
                 View.GONE
             }
+    }
+
+    /** The step being waited on before audio plays, with its elapsed time and a hint. */
+    private fun renderLoading(snap: ReaderSnapshot) {
+        loadingPanel.removeCallbacks(stepTicker)
+        val step = app.readly.playback.LoadingStep.of(snap)
+        loadingPanel.visibility = if (step != null) View.VISIBLE else View.GONE
+        app.readly.ui.LoadingViews.bindBar(loadingBar, step)
+        if (step == null) return
+        loadingTitle.text = app.readly.ui.LoadingViews.title(this, step)
+        app.readly.ui.LoadingViews.bindText(loadingDetail, app.readly.ui.LoadingViews.detail(step, snap.stepSinceMs))
+        app.readly.ui.LoadingViews.bindText(loadingHint, app.readly.ui.LoadingViews.hint(this, step))
+        loadingPanel.postDelayed(stepTicker, 1_000)
     }
 
     /**

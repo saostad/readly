@@ -67,6 +67,48 @@
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/npLoadingPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <ProgressBar
+                android:id="@+id/npLoadingBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="4dp"
+                android:indeterminate="true"
+                android:indeterminateTint="@color/accent"
+                android:max="100"
+                android:progressBackgroundTint="@color/surface3"
+                android:progressTint="@color/accent" />
+
+            <TextView
+                android:id="@+id/npLoadingTitle"
+                style="@style/CardTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" />
+
+            <TextView
+                android:id="@+id/npLoadingDetail"
+                style="@style/Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@color/text2" />
+
+            <TextView
+                android:id="@+id/npLoadingHint"
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp" />
+        </LinearLayout>
+
+        <LinearLayout
             android:id="@+id/npBrowserRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

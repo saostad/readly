@@ -1605,6 +1605,7 @@ class ReaderService : MediaBrowserService() {
                 status = ReaderStatus.FETCHING,
                 title = title,
                 currentText = "Downloading a $display voice (${pack.sizeMb} MB)…",
+                downloadPercent = 0,
                 index = 0,
                 total = 0,
                 retryUrl = null,
@@ -1667,7 +1668,10 @@ class ReaderService : MediaBrowserService() {
                     if (it.status != ReaderStatus.FETCHING) {
                         it
                     } else {
-                        it.copy(currentText = "Downloading a $display voice (${pack.sizeMb} MB)… $percent%")
+                        it.copy(
+                            currentText = "Downloading a $display voice (${pack.sizeMb} MB)… $percent%",
+                            downloadPercent = percent,
+                        )
                     }
                 }
             }
@@ -2292,7 +2296,8 @@ class ReaderService : MediaBrowserService() {
         if (!engines.isLoaded(packId)) {
             // A fetch shows FETCHING until the engine load actually starts; only
             // then does the status become LOADING_VOICE.
-            ReaderState.update { it.copy(status = ReaderStatus.LOADING_VOICE, errorMessage = null) }
+            val voice = VoiceCatalog.byId(packId)?.let { VoiceCatalog.shortName(it) }.orEmpty()
+            ReaderState.update { it.copy(status = ReaderStatus.LOADING_VOICE, errorMessage = null, loadingVoice = voice) }
             updateNotification()
         }
         return engines.preload(packId)

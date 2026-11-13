@@ -260,6 +260,15 @@
                         android:text="@string/app_name" />
 
                     <ImageButton
+                        android:id="@+id/pasteToggle"
+                        style="@style/IconButton"
+                        android:layout_width="34dp"
+                        android:layout_height="34dp"
+                        android:layout_marginEnd="8dp"
+                        android:contentDescription="@string/paste_toggle_desc"
+                        android:src="@drawable/ic_text" />
+
+                    <ImageButton
                         android:id="@+id/settingsButton"
                         style="@style/IconButton"
                         android:layout_width="34dp"
@@ -267,6 +276,14 @@
                         android:contentDescription="@string/settings_desc"
                         android:src="@drawable/ic_settings" />
                 </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/pastePanel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="14dp"
+                    android:orientation="vertical"
+                    android:visibility="gone">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -334,70 +351,6 @@
                             android:drawableTint="@color/onAccent"
                             android:text="@string/read_button" />
                     </LinearLayout>
-                </LinearLayout>
-
-                <LinearLayout
-                    android:id="@+id/noticeCard"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="@drawable/card_background"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:padding="14dp"
-                    android:visibility="gone">
-
-                    <TextView
-                        android:id="@+id/noticeText"
-                        style="@style/Body"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1" />
-
-                    <Button
-                        style="@style/Btn.Text"
-                        android:id="@+id/dismissNotice"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:contentDescription="@string/dismiss_desc"
-                        android:text="@string/dismiss_button" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:id="@+id/errorCard"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="@drawable/card_background"
-                    android:orientation="vertical"
-                    android:padding="14dp"
-                    android:visibility="gone">
-
-                    <TextView
-                        android:id="@+id/errorMessage"
-                        style="@style/Body"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:textColor="@color/error" />
-
-                    <Button
-                        style="@style/Btn.Primary"
-                        android:id="@+id/openPageButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:text="@string/nyt_open_page"
-                        android:visibility="gone" />
-
-                    <TextView
-                        android:id="@+id/openPageHelp"
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:text="@string/nyt_open_page_help"
-                        android:visibility="gone" />
                 </LinearLayout>
 
                 <TextView
@@ -508,6 +461,120 @@
                     android:layout_marginTop="16dp"
                     android:gravity="center"
                     android:text="@string/footer_hint" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/noticeCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/card_background"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="14dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/noticeText"
+                        style="@style/Body"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1" />
+
+                    <Button
+                        style="@style/Btn.Text"
+                        android:id="@+id/dismissNotice"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:contentDescription="@string/dismiss_desc"
+                        android:text="@string/dismiss_button" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/errorCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/card_background"
+                    android:orientation="vertical"
+                    android:padding="14dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/errorMessage"
+                        style="@style/Body"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/error" />
+
+                    <Button
+                        style="@style/Btn.Primary"
+                        android:id="@+id/openPageButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="@string/nyt_open_page"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/openPageHelp"
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/nyt_open_page_help"
+                        android:visibility="gone" />
+                </LinearLayout>
+
+
+                <LinearLayout
+                    android:id="@+id/tabRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:orientation="horizontal" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="@color/line" />
+
+                <LinearLayout
+                    android:id="@+id/browseHeader"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <ImageButton
+                        android:id="@+id/browseBack"
+                        style="@style/IconButton"
+                        android:layout_width="34dp"
+                        android:layout_height="34dp"
+                        android:contentDescription="@string/back_desc"
+                        android:src="@drawable/ic_back" />
+
+                    <TextView
+                        android:id="@+id/browseTitle"
+                        style="@style/CardTitle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:maxLines="1" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/browseContent"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:paddingBottom="72dp"
+                    android:orientation="vertical" />
             </LinearLayout>
         </LinearLayout>
     </ScrollView>
@@ -526,15 +593,43 @@
         android:padding="10dp"
         android:visibility="gone">
 
-        <TextView
-            android:id="@+id/miniText"
-            style="@style/Body"
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginStart="4dp"
             android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1" />
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/miniText"
+                style="@style/Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1" />
+
+            <TextView
+                android:id="@+id/miniDetail"
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:visibility="gone" />
+
+            <ProgressBar
+                android:id="@+id/miniBarProgress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="3dp"
+                android:layout_marginTop="6dp"
+                android:indeterminate="true"
+                android:indeterminateTint="@color/accent"
+                android:max="100"
+                android:progressBackgroundTint="@color/surface3"
+                android:progressTint="@color/accent"
+                android:visibility="gone" />
+        </LinearLayout>
 
         <ImageButton
             android:id="@+id/miniToggle"

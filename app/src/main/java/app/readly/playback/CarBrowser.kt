@@ -68,6 +68,9 @@ class CarBrowser(
         private const val STATUS_FULLY_PLAYED = 2
         private const val COMPLETION_PERCENTAGE = "androidx.media.MediaItem.Extras.COMPLETION_PERCENTAGE"
 
+        /** Readly's own row extra: the article's site name (for the phone's article menu). */
+        const val EXTRA_SITE_LABEL = "app.readly.SITE_LABEL"
+
         /** Apps allowed to browse the saved websites: Android Auto, the Assistant, car media UIs. */
         val TRUSTED_CLIENTS = setOf(
             "com.google.android.projection.gearhead",
@@ -77,7 +80,13 @@ class CarBrowser(
             "com.android.systemui",
         )
 
-        /** An article row's id: `article:<listId>|<url>` (list ids never contain `|`). */
+        /** True for a "tap to retry" row: opening it reloads its list from the network. */
+        fun isRetry(mediaId: String): Boolean = mediaId.startsWith(RETRY)
+
+        /** True for an information row ("No websites yet", errors) that leads nowhere. */
+        fun isNotice(mediaId: String): Boolean = mediaId == NOTICE
+
+                /** An article row's id: `article:<listId>|<url>` (list ids never contain `|`). */
         fun articleId(listId: String, url: String): String = "$ARTICLE$listId|$url"
 
         /** The list id and address in an article row's id, or null for any other id. */
@@ -123,12 +132,29 @@ class CarBrowser(
         }
     }
 
+    /** An article action (heard, hidden, removed) can change every open list's rows. */
+    private val itemsListener = FeedRepository.ItemsListener {
+        main.post {
+            listOf(LATEST, SAVED, RECENTS, RECENT_ROOT).forEach(notifyChildrenChanged)
+            val sites = try {
+                feeds.sites()
+            } catch (e: Exception) {
+                Log.e(TAG, "Couldn't refresh the website lists after an article change", e)
+                emptyList()
+            }
+            sites.forEach { notifyChildrenChanged(SITE + it.id) }
+            notifyChildrenChanged(WEBSITES)
+        }
+    }
+
     init {
         feeds.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        feeds.addItemsListener(itemsListener)
     }
 
     fun close() {
         feeds.prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
+        feeds.removeItemsListener(itemsListener)
         executor.shutdownNow()
     }
 
@@ -207,7 +233,8 @@ class CarBrowser(
             RECENTS, RECENT_ROOT -> recentEntries()
             LATEST -> null
             else -> feeds.site(listId)?.let { site ->
-                feeds.cachedHeadlines(listId)?.map { CarEntry(listId, it, site.label()) }
+                val hidden = hiddenOrNotice().first
+                feeds.cachedHeadlines(listId)?.filterNot { it.url in hidden }?.map { CarEntry(listId, it, site.label()) }
             }
         }
     }
@@ -227,6 +254,7 @@ class CarBrowser(
     fun nextUnheard(onPick: (CarEntry?) -> Unit) {
         executor.execute {
             val heard = feeds.history().associateBy { it.url }
+            val hidden = hiddenOrNotice().first
             val pick = try {
                 feeds.sites().firstNotNullOfOrNull { site ->
                     val headlines = try {
@@ -235,7 +263,7 @@ class CarBrowser(
                         Log.w(TAG, "Auto-play skipped ${FeedSites.hostOf(site.url)}: ${e.message}")
                         emptyList()
                     }
-                    val entries = headlines.map { CarEntry(site.id, it, site.label()) }
+                    val entries = headlines.filterNot { it.url in hidden }.map { CarEntry(site.id, it, site.label()) }
                     listed[site.id] = entries
                     entries.firstOrNull { heard[it.headline.url]?.finished != true }
                 }
@@ -258,6 +286,17 @@ class CarBrowser(
         }
     }
 
+    /**
+     * The hidden addresses, plus a notice row when the stored list is unreadable (then
+     * nothing is hidden, and the row says so instead of silently showing them).
+     */
+    private fun hiddenOrNotice(): Pair<Set<String>, MediaItem?> = try {
+        feeds.hidden() to null
+    } catch (e: Exception) {
+        Log.w(TAG, "fallback=true attempted=read-hidden reason=\"${e.message}\" taken=show-all")
+        emptySet<String>() to browsable(NOTICE, "Hidden articles are showing", e.message)
+    }
+
     // ------------------------------------------------------------ tabs ---
 
     private fun siteItems(): MutableList<MediaItem> {
@@ -273,9 +312,11 @@ class CarBrowser(
             )
         }
         val heard = feeds.history().associateBy { it.url }
+        val hidden = hiddenOrNotice().first
         return sites.mapTo(mutableListOf()) { site ->
             // "3 new" when the titles are already loaded; never a network call per tile.
-            val unheard = feeds.cachedHeadlines(site.id)?.count { heard[it.url]?.finished != true }
+            val unheard = feeds.cachedHeadlines(site.id)
+                ?.count { heard[it.url]?.finished != true && it.url !in hidden }
             browsable(
                 SITE + site.id,
                 site.label(),
@@ -299,9 +340,10 @@ class CarBrowser(
             )
         }
         val guessed = loaded.list.source == HeadlineSource.PAGE_LINKS && loaded.list.notice != null
-        val entries = loaded.list.headlines.map { CarEntry(site.id, it, site.label()) }
+        val (hidden, hiddenNotice) = hiddenOrNotice()
+        val entries = loaded.list.headlines.filterNot { it.url in hidden }.map { CarEntry(site.id, it, site.label()) }
         listed[site.id] = entries
-        val items = mutableListOf<MediaItem>()
+        val items = listOfNotNull(hiddenNotice).toMutableList<MediaItem>()
         if (loaded.stale) {
             // The stale-list notice is the first row, and tapping it retries.
             items += browsable(RETRY + site.id, "Showing an older list · tap to refresh", loaded.notices.first())
@@ -327,11 +369,12 @@ class CarBrowser(
         }
         val failed = mutableListOf<String>()
         val stale = mutableListOf<String>()
+        val (hidden, hiddenNotice) = hiddenOrNotice()
         val lists = sites.mapNotNull { site ->
             try {
                 val loaded = feeds.headlines(site, force)
                 if (loaded.stale) stale += site.label()
-                site.label() to loaded.list.headlines
+                site.label() to loaded.list.headlines.filterNot { it.url in hidden }
             } catch (e: Exception) {
                 Log.e(TAG, "Latest couldn't load ${FeedSites.hostOf(site.url)} (site=${site.id})", e)
                 failed += site.label()
@@ -340,7 +383,7 @@ class CarBrowser(
         }
         val entries = LatestMix.interleave(lists, feeds.limits().maxArticles)
         listed[LATEST] = entries
-        val items = mutableListOf<MediaItem>()
+        val items = listOfNotNull(hiddenNotice).toMutableList<MediaItem>()
         if (failed.isNotEmpty() || stale.isNotEmpty()) {
             val subtitle = listOfNotNull(
                 failed.takeIf { it.isNotEmpty() }?.let { "Couldn't load ${it.joinToString(", ")}" },
@@ -436,6 +479,7 @@ class CarBrowser(
                         Bundle().apply {
                             putInt(PLAYBACK_STATUS, status)
                             if (status == STATUS_PARTIALLY_PLAYED) putDouble(COMPLETION_PERCENTAGE, fraction)
+                            putString(EXTRA_SITE_LABEL, entry.siteLabel)
                         },
                     )
                     .build(),
