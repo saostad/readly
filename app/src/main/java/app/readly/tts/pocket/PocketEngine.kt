@@ -26,6 +26,7 @@ import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.sin
 import kotlin.math.sqrt
+import app.readly.text.LatinFa
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -360,6 +361,7 @@ class PocketEngine(
             tuning,
             { cleaned -> phonemiseLocked(cleaned) },
             { piece -> tokenizer.encode(PocketTextV2.stripEzafe(piece)).size },
+            { word -> LatinFa.phonemeOverrides()[word] },
             { Thread.currentThread().isInterrupted },
         )
         if (Thread.currentThread().isInterrupted) throw InterruptedException()
@@ -409,6 +411,7 @@ class PocketEngine(
                 phonemes
             },
             { piece -> tokenizer.encode(PocketTextV2.stripEzafe(piece)).size },
+            { word -> LatinFa.phonemeOverrides()[word] },
             isStopped,
         )
         for (blank in plan.blanks) {

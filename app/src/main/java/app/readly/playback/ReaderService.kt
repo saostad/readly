@@ -56,6 +56,7 @@ import app.readly.text.LanguageDetector
 import app.readly.text.NormalizeOptions
 import app.readly.text.SentenceChunker
 import app.readly.text.SourceFormat
+import app.readly.text.SpokenNotice
 import app.readly.text.SpokenText
 import app.readly.text.TextSanitizer
 import app.readly.tts.EngineManager
@@ -593,6 +594,14 @@ class ReaderService : MediaBrowserService() {
     /** True once this document showed the "read as written" pronunciation notice. */
     @Volatile
     private var docSpokenNoticeShown = false
+
+    /** True once this document showed the approximate-Persian-pronunciation notice. */
+    @Volatile
+    private var docPersianApproxNoticeShown = false
+
+    /** True once this document showed the skipped-text Persian notice. */
+    @Volatile
+    private var docPersianSkippedNoticeShown = false
 
     /** Text held while Smart voice waits for the user's Ask choice. Read-anyway consumes it. */
     private data class PendingAsk(
@@ -2329,6 +2338,8 @@ class ReaderService : MediaBrowserService() {
             docAudioMs = 0.0
             docChars = 0
             docSpokenNoticeShown = false
+            docPersianApproxNoticeShown = false
+            docPersianSkippedNoticeShown = false
         }
         val rate = try {
             ensureEngineOrThrow(docPack.id)
@@ -2508,10 +2519,28 @@ class ReaderService : MediaBrowserService() {
         // The voice reads normalized text ("2 kg" as "two kilograms"); the screen keeps
         // the chunk as written.
         val spokenResult = SpokenText.forVoice(text, lang, normalizeOptions(this))
-        if (spokenResult.degraded && !docSpokenNoticeShown) {
-            docSpokenNoticeShown = true
-            val note = getString(R.string.pronunciation_degraded_notice)
-            ReaderState.update { it.copy(notice = listOfNotNull(it.notice, note).joinToString(" ")) }
+        val spokenNote = when (spokenResult.notice) {
+            SpokenNotice.APPROXIMATE_PERSIAN -> if (!docPersianApproxNoticeShown) {
+                docPersianApproxNoticeShown = true
+                getString(R.string.persian_approximate_notice)
+            } else {
+                null
+            }
+            SpokenNotice.SKIPPED_TEXT -> if (!docPersianSkippedNoticeShown) {
+                docPersianSkippedNoticeShown = true
+                getString(R.string.persian_skipped_notice)
+            } else {
+                null
+            }
+            null -> if (spokenResult.degraded && !docSpokenNoticeShown) {
+                docSpokenNoticeShown = true
+                getString(R.string.pronunciation_degraded_notice)
+            } else {
+                null
+            }
+        }
+        if (spokenNote != null) {
+            ReaderState.update { it.copy(notice = listOfNotNull(it.notice, spokenNote).joinToString(" ")) }
         }
         val spoken = spokenResult.text
         val begin = SystemClock.elapsedRealtime()

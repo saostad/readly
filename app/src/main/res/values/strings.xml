@@ -142,6 +142,8 @@
     <string name="date_day_first_label">Dates day first</string>
     <string name="date_day_first_help">Reads 09/10 as 9 October. A date like 14/03 in the same text decides on its own.</string>
     <string name="pronunciation_degraded_notice">Some text is read as written: a pronunciation rule couldn\'t run on it.</string>
+    <string name="persian_approximate_notice">Some English words were read with an approximate Persian pronunciation.</string>
+    <string name="persian_skipped_notice">Some text was skipped: the Persian voice can only read Persian and English letters.</string>
     <string name="dismiss_button">✕</string>
     <string name="dismiss_desc">Dismiss</string>
     <string name="settings_desc">Voice and speed settings</string>

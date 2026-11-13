@@ -576,7 +576,8 @@ object PocketTextV2 {
      * pronounce each [g2pWindows] window with [phonemise] (given the
      * [cleanSentenceForG2p] window) plus [translatePhonemes],
      * [dedupeRepeats] and [alignWords] per window against that window's
-     * [faWords], concatenate the phoneme words and counts,
+     * [faWords], applying [overrides] to each aligned window,
+     * concatenate the phoneme words and counts,
      * [clausesFromCounts] over [splitClauses], then [planPieces] and
      * strip ezafe marks. A sentence's last piece ends
      * [PocketAudio.PieceEnd.SENTENCE], except the last sentence of the
@@ -593,6 +594,7 @@ object PocketTextV2 {
         tuning: PocketTuning,
         phonemise: (String) -> String,
         countTokens: (String) -> Int,
+        overrides: (String) -> String? = { null },
         isStopped: () -> Boolean = { false },
     ): V2Plan {
         val sentences = splitSentences(normalized)
@@ -620,8 +622,9 @@ object PocketTextV2 {
                     aligned = false
                     phWords += windowPh
                 } else {
-                    phWords += windowPh
-                    counts += windowCounts
+                    val applied = applyOverrides(fa, windowPh, windowCounts, overrides)
+                    phWords += applied.phonemeWords
+                    counts += applied.counts
                 }
             }
             if (!sawPhonemes || phWords.all { it.isBlank() }) {

@@ -1,5 +1,6 @@
 package app.readly.tts.pocket
 
+import app.readly.text.LatinFa
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -256,6 +257,21 @@ class PocketTextV2Test {
             listOf(TextChunk("onlyone", PocketAudio.PieceEnd.SENTENCE)),
             plan.chunks,
         )
+    }
+
+    @Test
+    fun planV2Chunks_appliesPhonemeOverrides() {
+        val countWords = { s: String -> s.split(" ").filter { it.isNotEmpty() }.size }
+        val plan = PocketTextV2.planV2Chunks(
+            "فایل اکسل را",
+            PocketTuning(),
+            { "fAyle1 ?exkel rA" },
+            countWords,
+            { word -> LatinFa.phonemeOverrides()[word] },
+        )
+        assertFalse(plan.alignmentFallback)
+        assertEquals(1, plan.chunks.size)
+        assertTrue(plan.chunks[0].text, plan.chunks[0].text.contains("?eksel"))
     }
 
     @Test
