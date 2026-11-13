@@ -20,7 +20,8 @@ data class SpokenResult(
 
 /**
  * The text a voice reads for a chunk. English text goes through [EnglishNormalizer];
- * Persian text has its Latin words converted to Persian spelling by [LatinFa] so the
+ * Persian text is expanded by [FaText] (times, dates, currency, symbols), then its
+ * Latin words are converted to Persian spelling by [LatinFa] so the
  * Persian voice reads them; other languages have their own front ends (Piper's espeak)
  * and are read as they are. The chunk's display text never changes.
  */
@@ -28,7 +29,7 @@ object SpokenText {
     fun forVoice(chunkText: String, lang: String, options: NormalizeOptions): SpokenResult {
         if (lang == "fa") {
             return try {
-                val result = LatinFa.persianize(chunkText)
+                val result = LatinFa.persianize(FaText.expand(chunkText))
                 if (result.approximated.isNotEmpty()) {
                     NormalizerLog.warn(
                         "fallback: true, attempted=english_word_list, " +

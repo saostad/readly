@@ -24,6 +24,14 @@ class SpokenTextTest {
     }
 
     @Test
+    fun persianTimeIsExpandedAndNotDegraded() {
+        val result = SpokenText.forVoice("جلسه ساعت ۸:۳۰ است.", "fa", NormalizeOptions())
+        assertEquals("جلسه ساعت 8 و 30 دقیقه است.", result.text)
+        assertFalse(result.degraded)
+        assertNull(result.notice)
+    }
+
+    @Test
     fun persianListedLatinWordIsReadAndNotDegraded() {
         val result = SpokenText.forVoice("فایل PDF را بفرست", "fa", NormalizeOptions())
         assertEquals("فایل پی\u200Cدی\u200Cاف را بفرست", result.text)
