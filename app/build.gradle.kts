@@ -25,8 +25,10 @@ android {
         applicationId = "app.readly"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI passes the release version (see .github/workflows/release.yml);
+        // local builds keep the defaults.
+        versionCode = (findProperty("readlyVersionCode") as String?)?.toInt() ?: 1
+        versionName = (findProperty("readlyVersionName") as String?) ?: "0.1.0"
 
         ndk {
             abiFilters += "arm64-v8a"

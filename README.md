@@ -29,6 +29,21 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 For wireless debugging, pair then connect:
 `adb pair <ip:port>` then `adb connect <ip:port>`.
 
+## Releases
+
+Every push to `main` runs `.github/workflows/release.yml`: unit tests, lint, then
+a GitHub release `vX.Y.Z` with `readly-vX.Y.Z.apk` attached. If anything fails,
+no release is made. `scripts/next_version.sh` picks the version from the commits
+since the last tag: `feat:` bumps the minor number, `type!:` or a
+`BREAKING CHANGE` footer bumps the major, and anything else bumps the patch.
+The versionCode is `major*1000000 + minor*1000 + patch`.
+
+The release APK is signed with the same debug key as local builds (the
+`DEBUG_KEYSTORE_BASE64` secret; the `SIGNING_CERT_SHA256` repository variable is
+checked against the APK), so releases and local builds install over each other.
+Local builds have versionCode 1, so installing one over a release needs
+`adb install -r -d` (allow a downgrade).
+
 ## Updating the voice list
 
 The Piper voices (`app/src/main/assets/piper_voices.json`, every
