@@ -34,13 +34,14 @@ object SentenceChunker {
 
     /**
      * @param lang BCP 47 language (`en`, `fa`, `ar`): picks the sentence-break
-     *   locale, adds `،` as a split point for fa/ar, and disables the English
-     *   abbreviation glue for other languages.
+     *   locale, adds `،` and `؛` as split points for fa/ar, and disables the
+     *   English abbreviation glue for other languages.
      */
     fun chunk(input: String, lang: String = "en"): List<Chunk> {
         if (input.isBlank()) return emptyList()
-        val splitPunct = if (lang == "fa" || lang == "ar") {
-            splitPunctEn + '،'
+        val clauseMarksOnly = lang == "fa" || lang == "ar"
+        val splitPunct = if (clauseMarksOnly) {
+            splitPunctEn + '،' + '؛'
         } else {
             splitPunctEn
         }
@@ -65,7 +66,7 @@ object SentenceChunker {
                             included = i
                             i++
                         } else {
-                            cut = cutFirst(input, start, sentences[i].second, splitPunct)
+                            cut = cutFirst(input, start, sentences[i].second, splitPunct, clauseMarksOnly)
                             break
                         }
                     }
@@ -79,9 +80,15 @@ object SentenceChunker {
                         sentences = sentences.drop(included + 1)
                     }
                 } else if (firstEnd - firstStart > FIRST_WHOLE_MAX) {
-                    val (head, rest) = cutFirst(input, firstStart, firstEnd, splitPunct)
-                    out.add(Chunk(input.substring(head.first, head.second), head.first, head.second))
-                    sentences = listOf(rest) + sentences.drop(1)
+                    val cut = cutFirst(input, firstStart, firstEnd, splitPunct, clauseMarksOnly)
+                    if (cut != null) {
+                        val (head, rest) = cut
+                        out.add(Chunk(input.substring(head.first, head.second), head.first, head.second))
+                        sentences = listOf(rest) + sentences.drop(1)
+                    }
+                    // With no clause mark to cut at (fa/ar), the sentence is
+                    // left whole and goes through splitLong below like every
+                    // later sentence.
                 } else {
                     out.add(Chunk(input.substring(firstStart, firstEnd), firstStart, firstEnd))
                     sentences = sentences.drop(1)
@@ -164,17 +171,37 @@ object SentenceChunker {
             )
 
     /**
-     * Cuts an over-long first sentence: after the last `, ; : —` (plus `،` for
-     * fa/ar) at offset 25..80 (the chunk keeps the punctuation), else at the last
-     * space before 60, else a hard cut at 60. The rest becomes the start of chunk 2
-     * under the normal rules.
+     * Cuts an over-long first sentence: after the last `, ; : —` (plus `،`
+     * and `؛` for fa/ar) at offset 25..80 (the chunk keeps the punctuation),
+     * else at the last space before 60, else a hard cut at 60. The rest
+     * becomes the start of chunk 2 under the normal rules.
+     *
+     * For fa/ar ([clauseMarksOnly]) a cut is made only at a clause mark up
+     * to offset [FIRST_PUNCT_MAX]; the Persian clause that opens the task's
+     * example sentence ends at offset 21, so the search starts at the
+     * sentence start rather than at [FIRST_PUNCT_MIN]. With no clause mark
+     * there this returns null and the caller leaves the sentence whole for
+     * [splitLong] instead of cutting it mid-phrase at a space.
      */
     private fun cutFirst(
         input: String,
         start: Int,
         end: Int,
         splitPunct: Set<Char>,
-    ): Pair<Pair<Int, Int>, Pair<Int, Int>> {
+        clauseMarksOnly: Boolean,
+    ): Pair<Pair<Int, Int>, Pair<Int, Int>>? {
+        if (clauseMarksOnly) {
+            val to = minOf(start + FIRST_PUNCT_MAX, end - 1)
+            var punct = -1
+            var i = start
+            while (i <= to) {
+                if (input[i] in splitPunct) punct = i
+                i++
+            }
+            if (punct < start) return null
+            return (start to trimEnd(input, start, punct + 1)) to
+                (trimStart(input, punct + 1, end) to end)
+        }
         val from = start + FIRST_PUNCT_MIN
         val to = minOf(start + FIRST_PUNCT_MAX, end - 1)
         var punct = -1

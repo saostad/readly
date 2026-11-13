@@ -221,6 +221,50 @@ class SentenceChunkerTest {
     }
 
     @Test
+    fun chunk_fa_firstSentence_cutsOnlyAtClauseMark() {
+        val input = "به گزارش خبرگزاری‌ها، سازمان هواشناسی اعلام کرد که از اواخر هفتهٔ جاری بارش باران و برف در بیشتر استان‌های شمالی و غربی کشور آغاز می‌شود و رانندگان باید در جاده‌های کوهستانی با احتیاط بیشتری رانندگی کنند."
+        val chunks = SentenceChunker.chunk(input, "fa")
+        assertEquals(2, chunks.size)
+        assertEquals("به گزارش خبرگزاری‌ها،", chunks[0].text)
+        for (chunk in chunks) {
+            assertEquals(chunk.text, input.substring(chunk.start, chunk.end))
+        }
+    }
+
+    @Test
+    fun chunk_fa_firstSentenceWithoutClauseMark_staysWhole() {
+        val first = "ا".repeat(141) + "."
+        assertEquals(142, first.length)
+        val chunks = SentenceChunker.chunk(first, "fa")
+        assertEquals(1, chunks.size)
+        assertEquals(first, chunks[0].text)
+        assertEquals(chunks[0].text, first.substring(chunks[0].start, chunks[0].end))
+    }
+
+    @Test
+    fun chunk_en_firstSentenceWithoutClauseMark_stillCutsAsToday() {
+        // Same shape as the Persian no-mark sentence: English still cuts.
+        val first = "a".repeat(141) + "."
+        assertEquals(142, first.length)
+        val chunks = SentenceChunker.chunk(first, "en")
+        assertEquals(2, chunks.size)
+        assertEquals(60, chunks[0].text.length)
+        for (chunk in chunks) {
+            assertEquals(chunk.text, first.substring(chunk.start, chunk.end).trim())
+        }
+        // Same shape as the Persian clause-mark sentence: an early comma
+        // does not hold English to a clause-only cut, so the space
+        // fallback before char 60 still applies.
+        val withComma = "Report from agencies, " + "word ".repeat(30).trim() + "."
+        val commaChunks = SentenceChunker.chunk(withComma, "en")
+        assertTrue(commaChunks.size >= 2)
+        assertTrue(commaChunks[0].text.length <= 60)
+        for (chunk in commaChunks) {
+            assertEquals(chunk.text, withComma.substring(chunk.start, chunk.end).trim())
+        }
+    }
+
+    @Test
     fun chunk_tinyFirstSentence_mergesForwardWithin80Chars() {
         val first = "سلام!"
         val second = "این یک آزمایش است."
