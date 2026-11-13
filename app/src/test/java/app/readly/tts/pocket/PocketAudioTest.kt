@@ -155,7 +155,13 @@ class PocketAudioTest {
         val ms = (System.nanoTime() - t0) / 1e6
         println("masterChunk 6 s fixture: %.1f ms".format(ms))
         assertEquals(raw.size, mastered.size)
-        assertTrue("masterChunk took %.1f ms, expected < 60 ms".format(ms), ms < 60.0)
+        // READLY_MASTER_CHUNK_BUDGET_MS raises the budget on slower machines (CI
+        // runners are ~3.5× slower); the old O(n·lookahead) code was far slower still.
+        val budgetMs = System.getenv("READLY_MASTER_CHUNK_BUDGET_MS")?.let {
+            it.toDoubleOrNull()?.takeIf { v -> v > 0 }
+                ?: throw AssertionError("READLY_MASTER_CHUNK_BUDGET_MS must be a positive number, got '$it'")
+        } ?: 60.0
+        assertTrue("masterChunk took %.1f ms, expected < %.0f ms".format(ms, budgetMs), ms < budgetMs)
     }
 
     @Test

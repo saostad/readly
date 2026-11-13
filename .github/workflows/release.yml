@@ -20,6 +20,8 @@ env:
   ANDROID_BUILD_TOOLS: "build-tools;37.0.0"
   ANDROID_NDK: "ndk;30.0.16248370"
   ANDROID_NDK_VERSION: "30.0.16248370"
+  # Hosted runners are ~3.5x slower than the dev machine (68 ms vs 19 ms).
+  READLY_MASTER_CHUNK_BUDGET_MS: "250"
 
 jobs:
   release:
@@ -61,13 +63,13 @@ jobs:
           test -f "$platforms/android-37/android.jar"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       # Phonon's native library is git-ignored and takes ~10 minutes to build, so it
       # is cached and rebuilt only when the build script (with its pinned commit) changes.
       - name: Restore Phonon native library
         id: phonon-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: app/src/main/jniLibs/arm64-v8a/libptts_ffi.so
           key: phonon-${{ env.ANDROID_NDK_VERSION }}-${{ hashFiles('tools/phonon/build-android-lib.sh') }}

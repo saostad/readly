@@ -25,6 +25,9 @@ class ChunkPipelineTest {
         val writes = Collections.synchronizedList(mutableListOf<Int>())
         val releaseFirstWrite = CountDownLatch(1)
 
+        /** Trips after the first write lands. */
+        val firstWriteDone = CountDownLatch(1)
+
         @Volatile
         var blockFirstWrite = false
 
@@ -40,6 +43,7 @@ class ChunkPipelineTest {
                 assertTrue(releaseFirstWrite.await(TIMEOUT_S, TimeUnit.SECONDS))
             }
             writes.add(samples.size)
+            firstWriteDone.countDown()
         }
 
         override fun flush() {
@@ -472,8 +476,10 @@ class ChunkPipelineTest {
             synth = { index, _, emit ->
                 synthCalls.add(index)
                 emit(samples(100))
-                // The piece has started playing before the throw lands.
+                // The piece has started playing, and its audio reached the sink, before
+                // the throw lands (onChunkStarted fires just before the write).
                 assertTrue(startedLatch.await(TIMEOUT_S, TimeUnit.SECONDS))
+                assertTrue(sink.firstWriteDone.await(TIMEOUT_S, TimeUnit.SECONDS))
                 throw RuntimeException("boom-piece")
             },
             sink = sink,
