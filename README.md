@@ -68,6 +68,11 @@ voices appear; the Kotlin test `PiperCatalogJsonTest` validates the file.
 
 ## Use
 
+In Readly, tap **Open file** on the home screen to choose a PDF, photo,
+screenshot, text, Markdown, or HTML file in Android's file browser. The file
+starts reading with the same OCR settings, limits, and playback controls used
+for shared files. Cancelling the browser leaves the current reading alone.
+
 In any app, tap **Share** and choose **Readly**, or select some text and choose
 **Read aloud**. Readly accepts links, plain text, Markdown and HTML, including
 shared `.md`, `.html`, `.txt`, and `.pdf` files, photos, and screenshots.
@@ -114,7 +119,8 @@ in the app apply from the next sentence.
 ### Photos and screenshots
 
 Take a photo with your camera, or take a screenshot, then use **Share → Readly**
-from your gallery or screenshot preview. Readly recognizes the text on your phone
+from your gallery or screenshot preview, or choose the picture with **Open file**
+inside Readly. Readly recognizes the text on your phone
 and starts reading it with your usual playback controls. No camera permission or
 upload is needed. Share one still picture at a time. JPEG, PNG, static WebP, and
 HEIC/AVIF images that your Android device can decode are supported; animated
@@ -135,7 +141,8 @@ PDFs below. Turning off scanned-PDF OCR does not disable explicitly shared pictu
 
 ### PDF textbooks and documents
 
-Share a PDF file from your file manager or PDF app and choose **Readly**. Readly
+Tap **Open file** in Readly and choose a PDF, or share a PDF file from your file
+manager or PDF app and choose **Readly**. Readly
 copies it into private app storage and extracts text from every page in
 order, with progress and a Cancel button, then reads it with the usual voice and
 playback controls. Extraction runs on the phone, without uploading the document.
@@ -166,6 +173,19 @@ model provenance and processing status are saved privately. Use **Imported docum
 in the same settings section to read a saved book again without repeating OCR, or
 **Clear imported documents** to remove saved sources and text. The temporary playback
 handoff file is removed after the service loads it.
+
+### Browsing your library
+
+Open file and Paste text stay at the top of the phone screen. The bottom
+navigation stays visible while browsing **Websites**, **Latest**, **Library**, or
+**Recents**, with the current reading above it. **Library → Documents** lists
+imported PDFs and pictures; tap one to read its saved text without repeating OCR.
+**Library → Saved articles** contains links saved for later.
+
+Websites use compact rows with small artwork by default. In **Voice & speed**,
+turn **Compact website lists** off to return to large tiles. This setting also
+requests list or grid presentation in Android Auto; the car host renders those
+hints using its own layout. Changing the setting refreshes the browser lists.
 
 ## Reading websites
 
@@ -227,16 +247,17 @@ Readly shows up in Android Auto as a media app. In **Voice & speed →
 Android Auto websites** add news sites or feed addresses (and an optional
 name). In the car, open Readly. There are four tabs:
 
-- **Websites**: your sites as tiles ("3 new" counts unheard articles); pick one
+- **Websites**: compact website rows by default ("3 new" counts unheard articles); pick one
   to see its article titles, then tap a title to hear it.
 - **Latest**: the newest articles from all your sites, taking turns.
 - **Saved**: links you shared on the phone with **Share → Read later**.
 - **Recents**: what you listened to, half-finished articles first.
 
-The phone's home screen shows the same four tabs, tiles and rows (it browses
-the same lists the car does, so heard marks and Shuffle match), plus an
-**Add website** tile. The text button in the top bar opens the paste-and-read
-card with the voice chips.
+The phone uses the same article lists, heard marks and Shuffle actions, with
+fixed bottom navigation for **Websites**, **Latest**, **Library**, and **Recents**.
+**Library** contains imported PDFs and pictures as well as **Saved articles**.
+**Open file** and **Paste text** stay in the header. **Add website** is a compact
+action below the website list; large tiles remain available in settings.
 
 On the phone, each article has a **⋮** menu (or long-press the row): **Mark as
 heard / unheard**, **Save to Read later**, and a delete that fits the list:

@@ -143,6 +143,19 @@ class ShareInputTest {
     }
 
     @Test
+    fun resolve_textFileWithGenericPickerMime_readsAsPlain() {
+        val got = send(
+            type = null,
+            streamName = "STORY.TXT",
+            streamMime = "application/octet-stream",
+            streamText = "Once upon a time",
+        ) as ShareRequest.Read
+        assertEquals(SourceFormat.PLAIN, got.format)
+        assertEquals("STORY", got.title)
+        assertEquals("Once upon a time", got.text)
+    }
+
+    @Test
     fun resolve_archiveFile_failsWithKindMessage() {
         assertEquals(
             "Readly can read pictures, PDF, text, Markdown and HTML files, not application/zip (archive.zip).",

@@ -125,7 +125,8 @@ class DocumentImportActivity : Activity() {
                 } else {
                     try {
                         ReaderService.readPdf(this, textId, title, notice)
-                        startActivity(Intent(this, MainActivity::class.java))
+                        startActivity(Intent(this, MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
                         finish()
                     } catch (e: Exception) {
                         Log.e("Readly", "Document import couldn't start playback", e)

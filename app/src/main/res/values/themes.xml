@@ -11,12 +11,14 @@
         <item name="android:textColorPrimary">@color/text</item>
         <item name="android:textColorSecondary">@color/text2</item>
         <item name="android:buttonStyle">@style/Btn</item>
+        <item name="android:switchStyle">@style/SheetSwitch</item>
     </style>
 
     <!-- Full-width bottom-sheet dialog (Sheets.applyFullWidth runs after show()).
          Not floating, no minimum width, no window background of its own:
          asBottomSheet() sets the sheet drawable with its top corners. -->
     <style name="SheetDialog" parent="@android:style/Theme.Material.Dialog">
+        <item name="android:switchStyle">@style/SheetSwitch</item>
         <item name="android:windowIsFloating">false</item>
         <item name="android:windowBackground">@null</item>
         <item name="android:windowMinWidthMajor">100%</item>

@@ -1,6 +1,8 @@
 package app.readly
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -28,6 +30,16 @@ import java.io.File
  * English voice first, then the detected one.
  */
 class ShareActivity : Activity() {
+
+    companion object {
+        /** A file picked inside Readly uses exactly the same path as a shared file. */
+        fun fileIntent(context: Context, uri: Uri): Intent = Intent(context, ShareActivity::class.java)
+            .setAction(Intent.ACTION_SEND)
+            .setData(uri)
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .apply { clipData = ClipData.newRawUri(context.getString(R.string.open_file_button), uri) }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

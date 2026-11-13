@@ -16,6 +16,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -39,7 +40,7 @@ import kotlin.math.roundToInt
 /**
  * First-run voice download, then Home: the Android Auto layout (Websites, Latest,
  * Saved and Recents tabs, see [HomeBrowser]); the top bar's text button opens a card
- * to read pasted text aloud, with the voice chips and the phone-voice tip. Playback state arrives from [ReaderState],
+ * to read pasted text, and Open file uses Android's document picker. Playback state arrives from [ReaderState],
  * so rotation never loses it; voice and speed live in the settings sheet.
  * Setup shows only when nothing is installed, and offers Persian-only readers
  * Pocket Farsi as an alternative to the main voice.
@@ -84,7 +85,7 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var inputError: TextView
     private lateinit var noticeCard: LinearLayout
     private lateinit var noticeText: TextView
-    private lateinit var dismissNotice: Button
+    private lateinit var dismissNotice: ImageButton
     private lateinit var errorCard: LinearLayout
     private lateinit var errorMessage: TextView
     private lateinit var openPageButton: Button
@@ -110,7 +111,9 @@ class MainActivity : Activity(), InstallTask.Listener {
         }
     }
     private lateinit var pastePanel: LinearLayout
-    private lateinit var pasteToggle: ImageButton
+    private lateinit var pasteToggle: Button
+    private lateinit var homeHeader: LinearLayout
+    private lateinit var homeTabs: LinearLayout
     private lateinit var home: HomeBrowser
 
     private val readerListener = ReaderState.Listener { render(it) }
@@ -167,11 +170,15 @@ class MainActivity : Activity(), InstallTask.Listener {
         miniProgress = findViewById(R.id.miniBarProgress)
         needVoiceBanner = findViewById(R.id.needVoiceBanner)
         pastePanel = findViewById(R.id.pastePanel)
+        homeHeader = findViewById(R.id.readerHeader)
+        homeTabs = findViewById(R.id.tabRow)
         pasteToggle = findViewById(R.id.pasteToggle)
         pasteToggle.setOnClickListener { setPastePanelOpen(pastePanel.visibility != View.VISIBLE) }
+        findViewById<Button>(R.id.openFileButton).setOnClickListener { openFile() }
         home = HomeBrowser(
             this,
-            tabRow = findViewById(R.id.tabRow),
+            tabRow = homeTabs,
+            onNavigate = { findViewById<ScrollView>(R.id.homeScroll).scrollTo(0, 0) },
             header = findViewById(R.id.browseHeader),
             back = findViewById(R.id.browseBack),
             headerTitle = findViewById(R.id.browseTitle),
@@ -285,8 +292,45 @@ class MainActivity : Activity(), InstallTask.Listener {
     /** Shows or hides the paste-and-read card (and its voice chips and tip). */
     private fun setPastePanelOpen(open: Boolean) {
         pastePanel.visibility = if (open) View.VISIBLE else View.GONE
-        pasteToggle.imageTintList = getColorStateList(if (open) R.color.accent else R.color.text2)
+        pasteToggle.compoundDrawableTintList = getColorStateList(if (open) R.color.accent else R.color.text2)
         if (open) inputEdit.requestFocus()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun openFile() {
+        try {
+            startActivityForResult(
+                Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf(
+                        "application/pdf", "application/x-pdf", "image/*", "text/*",
+                        "application/xhtml+xml", "application/octet-stream",
+                    ))
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                },
+                FILE_REQUEST,
+            )
+        } catch (error: Exception) {
+            Log.e("Readly", "Couldn't open the document picker", error)
+            Toast.makeText(this, R.string.open_file_picker_failed, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    @Deprecated("Activity result API; this app uses platform activities")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != FILE_REQUEST || resultCode == RESULT_CANCELED) return
+        try {
+            check(resultCode == RESULT_OK) { "Document picker returned an unexpected result: $resultCode" }
+            val uri = data?.data ?: error("Document picker returned no file")
+            // The picker and Android sharing enter the same validated import/read pipeline.
+            // Forward the temporary grant; PDFs and images are copied into private storage.
+            startActivity(ShareActivity.fileIntent(this, uri))
+        } catch (error: Exception) {
+            Log.e("Readly", "Couldn't open the selected document", error)
+            Toast.makeText(this, R.string.open_file_failed, Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onPause() {
@@ -414,10 +458,12 @@ class MainActivity : Activity(), InstallTask.Listener {
         // Now Playing over the article browser while it loads.
         when (val route = app.readly.article.ArticleRoute.routeInput(text)) {
             is app.readly.article.ArticleRoute.Decision.Article -> {
+                setPastePanelOpen(false)
                 startActivity(ArticleActivity.intent(this, route.url))
                 overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
             }
             is app.readly.article.ArticleRoute.Decision.Prose -> {
+                setPastePanelOpen(false)
                 ReaderService.read(this, route.text, route.title, SourceFormat.PLAIN)
                 startActivity(Intent(this, NowPlayingActivity::class.java))
                 overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
@@ -453,6 +499,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         SettingsSheet(this) {
             refreshChips()
             updateTip()
+            home.refreshLayout()
         }.show()
     }
 
@@ -747,6 +794,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun showIdle() {
         setupContainer.visibility = View.VISIBLE
         readerContainer.visibility = View.GONE
+        homeHeader.visibility = View.GONE
+        homeTabs.visibility = View.GONE
         setSetupVisible(true)
         setProgressVisible(false)
         setErrorVisible(false)
@@ -756,6 +805,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun showProgress() {
         setupContainer.visibility = View.VISIBLE
         readerContainer.visibility = View.GONE
+        homeHeader.visibility = View.GONE
+        homeTabs.visibility = View.GONE
         setSetupVisible(true)
         downloadButton.visibility = View.GONE
         downloadHelp.visibility = View.GONE
@@ -769,6 +820,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun showError() {
         setupContainer.visibility = View.VISIBLE
         readerContainer.visibility = View.GONE
+        homeHeader.visibility = View.GONE
+        homeTabs.visibility = View.GONE
         setSetupVisible(true)
         downloadButton.visibility = View.GONE
         downloadHelp.visibility = View.GONE
@@ -782,6 +835,8 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun showReader() {
         setupContainer.visibility = View.GONE
         readerContainer.visibility = View.VISIBLE
+        homeHeader.visibility = View.VISIBLE
+        homeTabs.visibility = View.VISIBLE
         updateNotifRow()
         updateMiniBar(ReaderState.snapshot)
     }
@@ -813,6 +868,7 @@ class MainActivity : Activity(), InstallTask.Listener {
 
     companion object {
         private const val NOTIF_REQUEST = 1
+        private const val FILE_REQUEST = 2
 
         /** Boolean extra: a share arrived before the voice was installed. */
         const val EXTRA_NEED_VOICE = "needVoice"

@@ -21,7 +21,7 @@ import java.util.concurrent.Executors
 
 /**
  * The Android Auto screens behind [ReaderService]. Four tabs: **Websites** (the saved
- * sites as tiles, each opening its article titles), **Latest** (every site's newest
+ * sites as compact rows or optional tiles, each opening its article titles), **Latest** (every site's newest
  * articles taking turns), **Saved** (links shared to Read later) and **Recents**
  * (what you listened to, with half-finished ones first to resume). Every list starts
  * with a Shuffle row. Rows carry heard / part-heard marks from the listening history.
@@ -34,6 +34,7 @@ import java.util.concurrent.Executors
 class CarBrowser(
     private val feeds: FeedRepository,
     private val main: Handler,
+    private val compactWebsites: () -> Boolean,
     private val notifyChildrenChanged: (String) -> Unit,
 ) {
     companion object {
@@ -54,7 +55,7 @@ class CarBrowser(
         private const val NOTICE = "notice"
         private const val TAG = "Readly"
 
-        // Android Auto content-style hints (protocol keys): websites as a grid, articles as a list.
+        // Android Auto content-style hints (protocol keys): website density is configurable; articles use lists.
         private const val CONTENT_STYLE_SUPPORTED = "android.media.browse.CONTENT_STYLE_SUPPORTED"
         private const val CONTENT_STYLE_BROWSABLE = "android.media.browse.CONTENT_STYLE_BROWSABLE_HINT"
         private const val CONTENT_STYLE_PLAYABLE = "android.media.browse.CONTENT_STYLE_PLAYABLE_HINT"
@@ -116,6 +117,8 @@ class CarBrowser(
         }
     }
 
+    private val websiteStyle: Int get() = if (compactWebsites()) CONTENT_STYLE_LIST else CONTENT_STYLE_GRID
+
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "readly-car") }
 
     /** What each list showed the car last, so a tap, ⏭ or Shuffle uses the same order. */
@@ -164,7 +167,7 @@ class CarBrowser(
     fun root(clientPackage: String, clientUid: Int, rootHints: Bundle?): MediaBrowserService.BrowserRoot {
         val extras = Bundle().apply {
             putBoolean(CONTENT_STYLE_SUPPORTED, true)
-            putInt(CONTENT_STYLE_BROWSABLE, CONTENT_STYLE_GRID)
+            putInt(CONTENT_STYLE_BROWSABLE, websiteStyle)
             putInt(CONTENT_STYLE_PLAYABLE, CONTENT_STYLE_LIST)
         }
         if (!isTrusted(clientPackage, clientUid)) {
@@ -184,7 +187,7 @@ class CarBrowser(
             // Top-level folders become the car's tabs (at most four).
             parentId == ROOT -> result.sendResult(
                 mutableListOf(
-                    browsable(WEBSITES, "Websites", null, childrenStyle = CONTENT_STYLE_GRID),
+                    browsable(WEBSITES, "Websites", null, childrenStyle = websiteStyle),
                     browsable(LATEST, "Latest", null, childrenStyle = CONTENT_STYLE_LIST),
                     browsable(SAVED, "Saved", null, childrenStyle = CONTENT_STYLE_LIST),
                     browsable(RECENTS, "Recents", null, childrenStyle = CONTENT_STYLE_LIST),

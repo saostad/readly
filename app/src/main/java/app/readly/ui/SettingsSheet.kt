@@ -84,6 +84,7 @@ class SettingsSheet(
         fillSwitch(dialog, R.id.sheetNormalizeSwitch, ReaderService.KEY_NORMALIZE_TEXT)
         fillSwitch(dialog, R.id.sheetRespellSwitch, ReaderService.KEY_RESPELL_NAMES, default = false)
         fillSwitch(dialog, R.id.sheetHiddenTextSwitch, ReaderService.KEY_READ_HIDDEN_TEXT, default = false)
+        fillSwitch(dialog, R.id.sheetCompactWebsitesSwitch, WebsiteLayout.KEY_COMPACT, default = WebsiteLayout.DEFAULT_COMPACT)
         fillDayFirstSwitch(dialog)
         fillPhoneRow(dialog)
         fillAutoSitesRow(dialog)
@@ -219,22 +220,7 @@ class SettingsSheet(
                                 if (item.status != "ready") {
                                     android.widget.Toast.makeText(activity, R.string.pdf_imports_unready, android.widget.Toast.LENGTH_LONG).show()
                                 } else {
-                                    (activity.application as ReadlyApp).ioExecutor.execute {
-                                        try {
-                                            val file = PdfImportStore(activity).use { it.textFile(item.id, PdfFiles.limits(activity)) }
-                                            activity.runOnUiThread {
-                                                if (activity.isFinishing || activity.isDestroyed) {
-                                                    if (!file.delete()) android.util.Log.w("Readly", "Couldn't remove abandoned PDF replay")
-                                                } else {
-                                                    try { ReaderService.readPdf(activity, file.name, item.title, item.notice) }
-                                                    catch (e: Exception) {
-                                                        if (!file.delete()) android.util.Log.w("Readly", "Couldn't remove failed PDF replay")
-                                                        pdfError(e)
-                                                    }
-                                                }
-                                            }
-                                        } catch (e: Exception) { pdfError(e) }
-                                    }
+                                    app.readly.input.pdf.DocumentPlayback.read(activity, item.id)
                                 }
                             }.setNegativeButton(android.R.string.cancel, null).show()
                     }

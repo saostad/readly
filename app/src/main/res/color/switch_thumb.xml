@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:state_checked="true"
-        android:color="@color/onAccent" />
-    <item android:color="@color/text2" />
+    <item android:state_enabled="false" android:color="@color/switchDisabledThumb" />
+    <item android:state_checked="true" android:color="@color/switchOnThumb" />
+    <item android:color="@color/switchOffThumb" />
 </selector>

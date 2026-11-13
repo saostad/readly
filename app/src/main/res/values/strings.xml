@@ -197,6 +197,9 @@
     <string name="search_hint">Search</string>
     <string name="back_desc">Back</string>
     <string name="paste_toggle_desc">Read pasted text or a link</string>
+    <string name="open_file_button">Open file</string>
+    <string name="open_file_picker_failed">Couldn\'t open the file browser. Try again, or share the file to Readly from your file manager.</string>
+    <string name="open_file_failed">Couldn\'t open the selected file. Try selecting it again or share it to Readly from the original app.</string>
     <string name="home_connecting">Loading your websites…</string>
     <string name="home_connect_failed">Couldn\'t open your websites and saved articles. Close Readly and open it again.</string>
     <string name="home_list_failed">Couldn\'t load this list. Tap the tab to try again.</string>
@@ -330,4 +333,22 @@
     <string name="image_layout_auto">Automatic layout</string>
     <string name="image_layout_block">Text block</string>
     <string name="image_layout_line">Single line</string>
+    <string name="paste_text_button">Paste text</string>
+    <string name="compact_websites_label">Compact website lists</string>
+    <string name="compact_websites_help">Small artwork and readable rows on the phone and Android Auto. Turn off for large website tiles.</string>
+    <string name="websites_heading">Your websites</string>
+    <string name="library_title">Library</string>
+    <string name="library_documents">Documents</string>
+    <string name="library_articles">Saved articles</string>
+    <string name="library_loading">Loading your documents…</string>
+    <string name="library_empty">Your imported PDFs and pictures appear here. Tap Open file to add one, or share a file to Readly.</string>
+    <string name="library_ready">Ready to read</string>
+    <string name="library_failed">Import failed · open the original again</string>
+    <string name="library_cancelled">Import cancelled</string>
+    <string name="library_processing">Import in progress</string>
+    <string name="library_picture">Picture</string>
+    <string name="library_pdf">PDF</string>
+    <string name="website_artwork_unavailable">Website artwork unavailable. Showing a generic icon.</string>
+    <string name="switch_on">ON</string>
+    <string name="switch_off">OFF</string>
 </resources>

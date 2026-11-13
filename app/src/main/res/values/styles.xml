@@ -106,10 +106,29 @@
     </style>
 
     <style name="SheetSwitch" parent="@android:style/Widget.Material.CompoundButton.Switch">
-        <item name="android:thumbTint">@color/switch_thumb</item>
-        <item name="android:trackTint">@color/switch_track</item>
+        <!-- Custom opaque drawables avoid the platform track's low default alpha. -->
+        <item name="android:thumb">@drawable/switch_thumb</item>
+        <item name="android:track">@drawable/switch_track</item>
+        <item name="android:thumbTint">@null</item>
+        <item name="android:trackTint">@null</item>
+        <item name="android:splitTrack">false</item>
+        <item name="android:showText">true</item>
+        <item name="android:textOn">@string/switch_on</item>
+        <item name="android:textOff">@string/switch_off</item>
+        <item name="android:switchTextAppearance">@style/SwitchStateText</item>
+        <item name="android:switchMinWidth">76dp</item>
+        <item name="android:thumbTextPadding">4dp</item>
+        <item name="android:switchPadding">12dp</item>
+        <item name="android:minHeight">48dp</item>
         <item name="android:textColor">@color/text</item>
         <item name="android:fontFamily">sans-serif</item>
+    </style>
+
+    <style name="SwitchStateText" parent="@android:style/TextAppearance.Material.Caption">
+        <item name="android:textColor">@color/onAccent</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
     </style>
 
     <style name="CalmSeekBar" parent="@android:style/Widget.Material.SeekBar">

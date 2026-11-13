@@ -836,7 +836,16 @@ class ReaderService : MediaBrowserService() {
             isActive = true
         }
         sessionToken = mediaSession.sessionToken
-        carBrowser = CarBrowser((application as ReadlyApp).feeds, mainHandler) { notifyChildrenChanged(it) }
+        carBrowser = CarBrowser((application as ReadlyApp).feeds, mainHandler,
+            { app.readly.ui.WebsiteLayout.compact(this) }) { notifyChildrenChanged(it) }
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).registerOnSharedPreferenceChangeListener(appearanceListener)
+    }
+
+    private val appearanceListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == app.readly.ui.WebsiteLayout.KEY_COMPACT) {
+            notifyChildrenChanged(CarBrowser.ROOT)
+            notifyChildrenChanged(CarBrowser.WEBSITES)
+        }
     }
 
     override fun onGetRoot(clientPackageName: String, clientUid: Int, rootHints: Bundle?): BrowserRoot {
@@ -1220,6 +1229,7 @@ class ReaderService : MediaBrowserService() {
         notificationManager.cancel(NOTIF_ID)
         abandonFocus()
         setNoisyRegistered(false)
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).unregisterOnSharedPreferenceChangeListener(appearanceListener)
         carBrowser.close()
         mediaSession.isActive = false
         mediaSession.release()

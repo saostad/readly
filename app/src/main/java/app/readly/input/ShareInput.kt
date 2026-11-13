@@ -80,6 +80,7 @@ object ShareInput {
         }
         val lowerName = (name ?: "").lowercase()
         val format = when {
+            lowerName.endsWith(".txt") -> SourceFormat.PLAIN
             lowerName.endsWith(".md") || lowerName.endsWith(".markdown") -> SourceFormat.MARKDOWN
             lowerName.endsWith(".html") || lowerName.endsWith(".htm") -> SourceFormat.HTML
             else -> when (val kind = (mime ?: type ?: "").substringBefore(";").trim().lowercase()) {

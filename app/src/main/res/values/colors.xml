@@ -16,4 +16,8 @@
     <color name="onAccent">#16121F</color>
     <color name="ok">#7FD1A8</color>
     <color name="error">#F28B82</color>
+    <color name="switchOnThumb">#FFFFFF</color>
+    <color name="switchOffThumb">#D9DDE7</color>
+    <color name="switchOffTrack">#424957</color>
+    <color name="switchDisabledThumb">#969DAD</color>
 </resources>

@@ -114,6 +114,20 @@
             android:layout_marginTop="4dp"
             android:max="15" />
 
+        <Switch
+            android:id="@+id/sheetCompactWebsitesSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:minHeight="48dp"
+            android:text="@string/compact_websites_label" />
+
+        <TextView
+            style="@style/Small"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/compact_websites_help" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

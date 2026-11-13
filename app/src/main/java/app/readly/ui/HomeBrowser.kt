@@ -18,6 +18,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -27,6 +28,8 @@ import android.widget.ProgressBar
 import android.widget.Space
 import android.widget.TextView
 import android.widget.Toast
+import app.readly.input.pdf.DocumentPlayback
+import app.readly.input.pdf.PdfImportStore
 import app.readly.R
 import app.readly.ReadlyApp
 import app.readly.playback.CarBrowser
@@ -35,8 +38,8 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * The phone's home screen in the Android Auto layout: the same tabs (Websites as
- * tiles, Latest, Saved, Recents), rows, heard marks and Shuffle rows as the car.
+ * The phone's compact browser: fixed navigation, website rows and a document Library.
+ * Article lists, heard marks and Shuffle actions are shared with the car.
  * It is a [MediaBrowser] client of [ReaderService], so the lists come from the very
  * [CarBrowser] the car uses and a tap plays through the same `playFromMediaId`.
  */
@@ -47,12 +50,14 @@ class HomeBrowser(
     back: ImageButton,
     private val headerTitle: TextView,
     private val content: LinearLayout,
+    private val onNavigate: () -> Unit = {},
     private val onManageWebsites: () -> Unit,
 ) {
     private companion object {
         const val TAG = "Readly"
         const val PREFS = "home_ui"
         const val KEY_TAB = "tab"
+        const val KEY_LIBRARY_DOCUMENTS = "libraryDocuments"
 
         // Android Auto's own extras on each row (the same keys CarBrowser sets).
         const val PLAYBACK_STATUS = "android.media.extra.PLAYBACK_STATUS"
@@ -88,6 +93,10 @@ class HomeBrowser(
     /** Folders opened inside the current tab (a website's articles), deepest last. */
     private val stack = mutableListOf<Level>()
     private var subscribed: String? = null
+    private var lastItems: List<MediaItem> = emptyList()
+    private var libraryDocuments = prefs.getBoolean(KEY_LIBRARY_DOCUMENTS, true)
+    private var renderGeneration = 0
+    private var artworkNoticeShown = false
 
     init {
         back.setOnClickListener { onBack() }
@@ -145,6 +154,7 @@ class HomeBrowser(
         browser = null
         controller = null
         subscribed = null
+        renderGeneration++
     }
 
     fun close() {
@@ -156,6 +166,7 @@ class HomeBrowser(
     fun onBack(): Boolean {
         if (stack.isEmpty()) return false
         stack.removeAt(stack.lastIndex)
+        onNavigate()
         open(stack.lastOrNull()?.id ?: currentTab ?: return false)
         return true
     }
@@ -177,42 +188,46 @@ class HomeBrowser(
         tabRow.removeAllViews()
         for (tab in tabs) {
             val selected = tab.mediaId == currentTab
+            val label = if (tab.mediaId == CarBrowser.SAVED) activity.getString(R.string.library_title) else tab.description.title
+            val icon = when (tab.mediaId) {
+                CarBrowser.WEBSITES -> R.drawable.ic_globe
+                CarBrowser.LATEST -> R.drawable.ic_latest
+                CarBrowser.SAVED -> R.drawable.ic_library
+                else -> R.drawable.ic_recent
+            }
             val cell = LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER_HORIZONTAL
+                gravity = Gravity.CENTER
+                minimumHeight = dp(60)
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 isClickable = true
                 isFocusable = true
+                isSelected = selected
                 foreground = activity.getDrawable(selectableBackground())
-                contentDescription = tab.description.title
+                contentDescription = label
+                setPadding(0, dp(6), 0, dp(6))
                 setOnClickListener { selectTab(tab.mediaId) }
             }
-            cell.addView(
-                TextView(activity).apply {
-                    text = tab.description.title
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                    setTextColor(activity.getColor(if (selected) R.color.text else R.color.text3))
-                    typeface = Typeface.create(Typeface.DEFAULT, if (selected) Typeface.BOLD else Typeface.NORMAL)
-                    gravity = Gravity.CENTER
-                    setPadding(0, dp(10), 0, dp(10))
-                    maxLines = 1
-                },
-            )
-            cell.addView(
-                View(activity).apply {
-                    background = activity.getDrawable(R.drawable.tab_indicator)
-                    visibility = if (selected) View.VISIBLE else View.INVISIBLE
-                    layoutParams = LinearLayout.LayoutParams(dp(28), dp(3))
-                },
-            )
+            cell.addView(ImageView(activity).apply {
+                setImageResource(icon)
+                imageTintList = activity.getColorStateList(if (selected) R.color.accent else R.color.text3)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(dp(22), dp(22)))
+            cell.addView(text(label, 11.5f, if (selected) R.color.text else R.color.text3, bold = selected, lines = 1)
+                .apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, 0) })
             tabRow.addView(cell)
         }
+    }
+
+    fun refreshLayout() {
+        subscribed?.let { open(it) }
     }
 
     private fun selectTab(id: String?) {
         id ?: return
         // Tapping the open tab again reloads it (and retries after an error).
         currentTab = id
+        onNavigate()
         stack.clear()
         prefs.edit().putString(KEY_TAB, id).apply()
         drawTabs()
@@ -224,6 +239,7 @@ class HomeBrowser(
         val b = browser?.takeIf { it.isConnected } ?: return
         subscribed?.let { b.unsubscribe(it) }
         subscribed = id
+        renderGeneration++
         if (undo?.listId != id) undo = null
         val level = stack.lastOrNull()
         header.visibility = if (level != null) View.VISIBLE else View.GONE
@@ -235,15 +251,105 @@ class HomeBrowser(
     // ------------------------------------------------------------ lists ---
 
     private fun render(parentId: String, items: List<MediaItem>) {
+        val generation = ++renderGeneration
+        lastItems = items
         content.removeAllViews()
         undo?.takeIf { it.listId == parentId }?.let { content.addView(undoBar(it)) }
-        val tiles = items.filter { it.isBrowsable && it.description.iconUri != null }
-        val rows = items - tiles.toSet()
-        rows.forEach { content.addView(row(it)) }
-        val websites = parentId == CarBrowser.WEBSITES
-        if (tiles.isNotEmpty() || websites) {
-            grid(tiles, withAddTile = websites)
+        if (parentId == CarBrowser.SAVED) {
+            libraryFilters()
+            if (libraryDocuments) {
+                renderDocuments(generation)
+                return
+            }
         }
+        if (parentId == CarBrowser.WEBSITES) {
+            content.addView(text(activity.getString(R.string.websites_heading), 18f, R.color.text, bold = true, lines = 1)
+                .apply { setPadding(0, dp(4), 0, dp(8)) })
+        }
+        val compact = WebsiteLayout.compact(activity)
+        val tiles = if (compact) emptyList() else items.filter { it.isBrowsable && it.description.iconUri != null }
+        (items - tiles.toSet()).forEach { content.addView(row(it)) }
+        val websites = parentId == CarBrowser.WEBSITES
+        if (tiles.isNotEmpty() || (websites && !compact)) grid(tiles, withAddTile = websites)
+        else if (websites) content.addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+            setText(R.string.home_add_website)
+            minimumHeight = dp(48)
+            setOnClickListener { onManageWebsites() }
+        })
+    }
+
+    private fun libraryFilters() {
+        content.addView(text(activity.getString(R.string.library_title), 18f, R.color.text, bold = true, lines = 1)
+            .apply { setPadding(0, dp(4), 0, dp(8)) })
+        val filters = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        for ((documents, label) in listOf(true to R.string.library_documents, false to R.string.library_articles)) {
+            filters.addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+                setText(label)
+                minimumHeight = dp(48)
+                isSelected = libraryDocuments == documents
+                setTextColor(activity.getColor(if (isSelected) R.color.accent else R.color.text2))
+                setOnClickListener {
+                    libraryDocuments = documents
+                    prefs.edit().putBoolean(KEY_LIBRARY_DOCUMENTS, documents).apply()
+                    onNavigate()
+                    subscribed?.let { render(it, lastItems) }
+                }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        content.addView(filters)
+    }
+
+    private fun renderDocuments(generation: Int) {
+        val loading = text(activity.getString(R.string.library_loading), 13f, R.color.text2, lines = 2)
+        content.addView(loading)
+        (activity.application as ReadlyApp).ioExecutor.execute {
+            try {
+                val imports = PdfImportStore(activity).use { it.list() }
+                main.post {
+                    if (generation == renderGeneration && !activity.isDestroyed && !activity.isFinishing) {
+                        content.removeView(loading)
+                        if (imports.isEmpty()) content.addView(text(activity.getString(R.string.library_empty), 14f, R.color.text2, lines = 4)
+                            .apply { setPadding(0, dp(16), 0, dp(16)) })
+                        for (item in imports) content.addView(documentRow(item))
+                    }
+                }
+            } catch (error: Exception) {
+                Log.e(TAG, "Couldn't load the document library", error)
+                main.post {
+                    if (generation == renderGeneration && !activity.isDestroyed && !activity.isFinishing) {
+                        loading.text = activity.getString(R.string.document_operation_failed)
+                        loading.setTextColor(activity.getColor(R.color.error))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun documentRow(item: PdfImportStore.Import): View = LinearLayout(activity).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        minimumHeight = dp(72)
+        setPadding(0, dp(10), 0, dp(10))
+        isClickable = true
+        isFocusable = true
+        foreground = activity.getDrawable(selectableBackground())
+        addView(ImageView(activity).apply {
+            setImageResource(if (item.kind == "image") R.drawable.ic_image else R.drawable.ic_text)
+            imageTintList = activity.getColorStateList(R.color.accent)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(dp(32), dp(32)).apply { marginEnd = dp(12) })
+        val labels = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
+        labels.addView(text(item.title, 15f, R.color.text, bold = true, lines = 2))
+        val state = activity.getString(when (item.status) {
+            "ready" -> R.string.library_ready
+            "failed" -> R.string.library_failed
+            "cancelled" -> R.string.library_cancelled
+            else -> R.string.library_processing
+        })
+        val kind = activity.getString(if (item.kind == "image") R.string.library_picture else R.string.library_pdf)
+        labels.addView(text("$kind · $state", 12f, if (item.status == "failed") R.color.error else R.color.text2, lines = 1))
+        addView(labels, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        setOnClickListener { DocumentPlayback.read(activity, item.id) }
     }
 
     private fun grid(items: List<MediaItem>, withAddTile: Boolean) {
@@ -319,19 +425,29 @@ class HomeBrowser(
         val shuffle = CarBrowser.parseShuffle(id) != null
         val outer = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(12), 0, dp(12))
+            minimumHeight = dp(64)
+            setPadding(0, dp(8), 0, dp(8))
         }
         val line = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        val siteArt = item.isBrowsable && item.description.iconUri != null
         val icon = when {
             shuffle -> R.drawable.ic_shuffle
             item.isPlayable && heard -> R.drawable.ic_check
             item.isPlayable -> R.drawable.ic_play
             else -> null
         }
-        if (icon != null) {
+        if (siteArt) {
+            val image = ImageView(activity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = activity.getDrawable(R.drawable.tile_background)
+                clipToOutline = true
+            }
+            line.addView(image, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(12) })
+            loadArt(item.description.iconUri!!, image)
+        } else if (icon != null) {
             line.addView(
                 ImageView(activity).apply {
                     setImageResource(icon)
@@ -351,7 +467,7 @@ class HomeBrowser(
         }
         texts.addView(text(item.description.title, 15f, titleColor, bold = shuffle, lines = 2))
         item.description.subtitle?.takeIf { it.isNotBlank() }?.let {
-            texts.addView(text(it, 12.5f, R.color.text3, lines = 2).apply { setPadding(0, dp(3), 0, 0) })
+            texts.addView(text(it, 12.5f, R.color.text3, lines = 1).apply { setPadding(0, dp(3), 0, 0) })
         }
         line.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val article = CarBrowser.parseArticle(id)
@@ -414,6 +530,7 @@ class HomeBrowser(
             open(id)
             return
         }
+        onNavigate()
         stack += Level(id, item.description.title?.toString().orEmpty())
         open(id)
     }
@@ -548,13 +665,23 @@ class HomeBrowser(
             val bitmap = try {
                 activity.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
             } catch (e: Exception) {
-                null.also {
-                    Log.w(TAG, "fallback=true attempted=site-artwork reason=\"${e.javaClass.simpleName}\" taken=plain-tile")
-                }
+                Log.e(TAG, "Couldn't load website artwork", e)
+                null
             }
+            if (bitmap == null) Log.w(TAG, "fallback=true attempted=site-artwork reason=unreadable_image taken=generic_icon")
             main.post {
                 if (bitmap != null) artCache.put(key, bitmap)
-                if (into.tag == key && bitmap != null) into.setImageBitmap(bitmap)
+                if (into.tag == key) {
+                    if (bitmap != null) into.setImageBitmap(bitmap)
+                    else {
+                        into.setImageResource(R.drawable.ic_globe)
+                        into.contentDescription = activity.getString(R.string.website_artwork_unavailable)
+                        if (!artworkNoticeShown && !activity.isFinishing && !activity.isDestroyed) {
+                            artworkNoticeShown = true
+                            Toast.makeText(activity, R.string.website_artwork_unavailable, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
             }
         }
     }
