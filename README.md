@@ -376,3 +376,41 @@ the [OCR model license](app/src/main/assets/ocr/LICENSE),
 [PDFBox notices](app/src/main/assets/pdfbox/NOTICE.txt), and the
 [Phonon documentation](tools/phonon/README.md) for included notices and
 licensing information; other voice models remain subject to their providers' terms.
+
+### Browse, search, and bookmarks
+
+**Filters & sort** above article lists controls unheard status, website, language,
+maximum estimated listening time, and feed/date/title/website/length order. These
+preferences also apply to Android Auto article lists and their playback queues.
+Publication dates that are missing sort last. Language and length become available
+when an article is opened; filtering on those fields excludes unknown articles.
+The estimated reading pace is editable in the filter dialog.
+
+**Search** on Home searches saved feed headlines, Read later, listening history,
+imported document text, saved readings, and bookmark notes. Search uses local data;
+refresh feeds to include newer headlines. Reading text is saved privately on the
+phone for search and replay. In **Now playing**, use **Bookmark sentence / add
+note** to save the current sentence. **Bookmarks** on Home lets you replay that
+exact saved position, edit its note, or delete the bookmark. Note edits detect
+concurrent changes. Settings → Documents & OCR can clear saved readings that have
+no bookmarks; imported documents and bookmarked readings are preserved.
+
+### Feed updates and Settings
+
+Settings is grouped into **Playback**, **Feeds & time zone**, **Voices**, and
+**Documents & OCR**. Expand a group to change its controls. The article time zone
+defaults to New York, handles daylight saving time, and can follow the device or
+another selected zone.
+
+Under **Feeds & time zone**, enable scheduled feed refresh, choose an interval
+(15–1440 minutes), and set unmetered-network, battery-not-low, and charging
+requirements. Background refresh is off by default. Android schedules the exact
+run time and may defer work to conserve battery. The schedule survives reboots.
+Feed headlines and their successful update timestamps are stored locally; a failed
+refresh keeps the previous list and displays a warning and its older timestamp.
+The schedule downloads headlines, not full articles or audio.
+
+On **Android Auto**, open **Websites → Refresh feeds** for all sources, **Latest →
+Refresh feeds**, or **Refresh feed** inside a website. Website rows and feed lists
+show the last successful update date and time in your selected time zone. Refresh
+failures and background refresh status are visible on the Websites screen.

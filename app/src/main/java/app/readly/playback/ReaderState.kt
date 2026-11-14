@@ -64,6 +64,8 @@ data class ReaderSnapshot(
     val loadingVoice: String = "",
     /** When the current [LoadingStep] began ([SystemClock.elapsedRealtime]); 0 when none. */
     val stepSinceMs: Long = 0L,
+    /** Immutable saved text behind Search and Bookmarks. */
+    val readingId: String = "",
 )
 
 /**

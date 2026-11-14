@@ -1,6 +1,7 @@
 package app.readly.ui
 
 import android.app.Activity
+import android.content.Intent
 import android.content.ComponentName
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -323,6 +324,21 @@ class HomeBrowser(
         val generation = ++renderGeneration
         lastItems = items
         content.removeAllViews()
+        val tools = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        fun tool(label: String, action: () -> Unit) {
+            tools.addView(Button(activity, null, 0, R.style.Btn_Text).apply { text = label; setOnClickListener { action() } },
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        tool("Search") { activity.startActivity(Intent(activity, app.readly.LibraryActivity::class.java)) }
+        tool("Bookmarks") { activity.startActivity(Intent(activity, app.readly.LibraryActivity::class.java).putExtra("bookmarks", true)) }
+        if (parentId != CarBrowser.WEBSITES && !(parentId == CarBrowser.SAVED && libraryDocuments)) {
+            tool("Filters & sort") { ArticleFilterDialog.show(activity) { refreshLayout() } }
+            val filter = feeds.filter()
+            content.addView(text("${if (filter.unheard) "Unheard · " else ""}${filter.site.ifBlank { "All websites" }} · ${filter.sort.label}" +
+                (if (filter.language.isNotBlank()) " · ${filter.language}" else "") +
+                (filter.maxMinutes?.let { " · Up to $it min" } ?: ""), 12f, R.color.text2, lines = 3))
+        }
+        content.addView(tools)
         undo?.takeIf { it.listId == parentId }?.let { content.addView(undoBar(it)) }
         if (parentId == CarBrowser.SAVED) {
             libraryFilters()
@@ -472,7 +488,7 @@ class HomeBrowser(
             addView(art, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(text(title, 14f, R.color.text, bold = true, lines = 1).apply { setPadding(dp(2), dp(8), dp(2), 0) })
             if (!subtitle.isNullOrBlank()) {
-                addView(text(subtitle, 12f, R.color.text2, lines = 1).apply { setPadding(dp(2), dp(2), dp(2), 0) })
+                addView(text(subtitle, 12f, R.color.text2, lines = 3).apply { setPadding(dp(2), dp(2), dp(2), 0) })
             }
         }
 
@@ -527,7 +543,7 @@ class HomeBrowser(
         }
         texts.addView(text(item.description.title, 15f, titleColor, bold = shuffle, lines = 2))
         item.description.subtitle?.takeIf { it.isNotBlank() }?.let {
-            texts.addView(text(it, 12.5f, R.color.text3, lines = 1).apply { setPadding(0, dp(3), 0, 0) })
+            texts.addView(text(it, 12.5f, R.color.text3, lines = if (siteArt) 3 else 2).apply { setPadding(0, dp(3), 0, 0) })
         }
         line.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val article = CarBrowser.parseArticle(id)

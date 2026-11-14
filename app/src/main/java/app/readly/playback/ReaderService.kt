@@ -98,6 +98,8 @@ import java.util.concurrent.atomic.AtomicInteger
 class ReaderService : MediaBrowserService() {
 
     companion object {
+        const val ACTION_READ_SAVED = "app.readly.READ_SAVED"
+        private const val EXTRA_READING_ID = "readingId"
         const val ACTION_READ = "app.readly.READ"
         const val ACTION_PRELOAD = "app.readly.PRELOAD"
         const val ACTION_TOGGLE = "app.readly.TOGGLE"
@@ -135,7 +137,7 @@ class ReaderService : MediaBrowserService() {
          */
         private const val EXTRA_CALLER = "caller"
         private val CALLER_TOKEN: String = UUID.randomUUID().toString()
-        private val CALLER_ONLY_ACTIONS = setOf(ACTION_READ, ACTION_READ_URL, ACTION_PREVIEW)
+        private val CALLER_ONLY_ACTIONS = setOf(ACTION_READ, ACTION_READ_URL, ACTION_PREVIEW, ACTION_READ_SAVED)
 
         /** Android Auto custom actions: one sentence back / forward (⏮ / ⏭ change article there). */
         private const val CUSTOM_SENTENCE_BACK = "app.readly.SENTENCE_BACK"
@@ -437,17 +439,25 @@ class ReaderService : MediaBrowserService() {
          * reading (the browser fallback's extraction/cleanup notices);
          * longer values are truncated to [MAX_READ_NOTICE_CHARS].
          */
+        fun readSaved(context: Context, readingId: String, sentence: Int) {
+            require(readingId.isNotBlank() && sentence >= 0)
+            context.startForegroundService(Intent(context, ReaderService::class.java).setAction(ACTION_READ_SAVED)
+                .putExtra(EXTRA_CALLER, CALLER_TOKEN).putExtra(EXTRA_READING_ID, readingId).putExtra(EXTRA_INDEX, sentence))
+        }
+
         fun read(
             context: Context,
             text: String,
             title: String,
             format: SourceFormat,
             notice: String? = null,
+            sourceUrl: String = "",
         ) {
             context.startForegroundService(
                 Intent(context, ReaderService::class.java)
                     .setAction(ACTION_READ)
                     .putExtra(EXTRA_CALLER, CALLER_TOKEN)
+                    .putExtra(EXTRA_URL, sourceUrl)
                     .putExtra(EXTRA_TEXT, text)
                     .putExtra(EXTRA_TITLE, title)
                     .putExtra(EXTRA_FORMAT, format.name)
@@ -643,6 +653,8 @@ class ReaderService : MediaBrowserService() {
     private var currentPackId: String = ""
     private var currentLang: String = "en"
     private var currentHost: String = ""
+    private var currentSourceUrl = ""
+    private var currentReadingId = ""
     /** Audio ms and chars synthesized so far in this document (producer writes). */
     @Volatile
     private var docAudioMs = 0.0
@@ -1166,6 +1178,39 @@ class ReaderService : MediaBrowserService() {
             return START_NOT_STICKY
         }
         when (intent?.action) {
+            ACTION_READ_SAVED -> {
+                carQueue = null
+                cancelCarRead()
+                pendingRequests.incrementAndGet()
+                val id = intent.getStringExtra(EXTRA_READING_ID).orEmpty()
+                val index = intent.getIntExtra(EXTRA_INDEX, 0)
+                executeRead("READ_SAVED") {
+                    val done = AtomicBoolean(false)
+                    val finish = { if (done.compareAndSet(false, true)) pendingRequests.decrementAndGet(); Unit }
+                    try {
+                        val saved = app.readly.library.ReadingStore(this).use { it.reading(id) }
+                        app.readly.library.BookmarkRules.validate(saved, index)
+                        val chunks = saved.sentences.map { Chunk(it, 0, it.length) }
+                        stopPipeline()
+                        currentHost = saved.host
+                        currentSourceUrl = saved.url
+                        val choice = SmartVoice.pick(saved.language, installedPacks(), installedLangPack(saved.language),
+                            rtfByPack(), isSmartOn(this), activePack(this), canAutoDownload = false)
+                        val pack = when (choice) {
+                            is SmartVoice.Choice.Use -> choice.pack
+                            SmartVoice.Choice.MainVoice -> activePack(this)
+                            else -> {
+                                postError(IOException("Download a ${languageName(saved.language)} voice in Settings → Voices, then reopen this saved reading."))
+                                return@executeRead
+                            }
+                        }
+                        startPipeline(chunks, saved.title, index, pack, saved.language, finish, savedReadingId = saved.id)
+                    } catch (error: Exception) {
+                        Log.e("Readly", "Couldn't replay saved reading id=$id", error)
+                        postError(IOException("Couldn't open the saved reading. Reopen your library and try again.", error))
+                    } finally { finish() }
+                }
+            }
             ACTION_READ -> {
                 carQueue = null
                 cancelCarRead()
@@ -1176,6 +1221,7 @@ class ReaderService : MediaBrowserService() {
                     intent.getStringExtra(EXTRA_FORMAT) ?: SourceFormat.PLAIN.name,
                     intent.getStringExtra(EXTRA_NOTICE),
                     intent.getStringExtra(EXTRA_PDF_ID),
+                    intent.getStringExtra(EXTRA_URL).orEmpty(),
                 )
             }
             ACTION_READ_URL -> {
@@ -1268,9 +1314,10 @@ class ReaderService : MediaBrowserService() {
         }
     }
 
-    private fun handleRead(text: String, title: String, formatName: String, notice: String?, pdfId: String? = null) {
+    private fun handleRead(text: String, title: String, formatName: String, notice: String?, pdfId: String? = null, sourceUrl: String = "") {
         executeRead("READ") {
-            currentHost = ""
+            currentSourceUrl = sourceUrl
+            currentHost = if (sourceUrl.isBlank()) "" else FeedSites.hostOf(sourceUrl)
             val finished = AtomicBoolean(false)
             fun finish() {
                 if (finished.compareAndSet(false, true)) pendingRequests.decrementAndGet()
@@ -1315,6 +1362,7 @@ class ReaderService : MediaBrowserService() {
                     url
                 }
                 currentHost = host
+                currentSourceUrl = url
                 // Foreground was already entered in onStartCommand; a worker-side
                 // startForeground here could run after a concurrent goIdle() detached.
                 ReaderState.update {
@@ -1556,6 +1604,7 @@ class ReaderService : MediaBrowserService() {
         } else {
             emptyList()
         }
+        if (carStart != null) { currentSourceUrl = carStart.url; currentHost = FeedSites.hostOf(carStart.url) }
         currentCarStart = carStart?.copy(introChunks = intro.size)
         startPipeline(intro + body, title, startIndex, docPack, lang, onRequestDone)
         val notice = listOfNotNull(notice, resumeNotice).joinToString(" ").ifBlank { null }
@@ -2405,6 +2454,7 @@ class ReaderService : MediaBrowserService() {
         docPack: VoicePack,
         lang: String,
         onRequestDone: (() -> Unit)? = null,
+        savedReadingId: String? = null,
     ) {
         if (destroyed || Thread.currentThread().isInterrupted) {
             onRequestDone?.invoke()
@@ -2435,6 +2485,17 @@ class ReaderService : MediaBrowserService() {
         } catch (e: Exception) {
             onRequestDone?.invoke()
             postError(e)
+            return
+        }
+        try {
+            if (savedReadingId != null) currentReadingId = savedReadingId
+            else if (onRequestDone != null) currentReadingId = app.readly.library.ReadingStore(this).use {
+                it.saveReading(title, currentHost, lang, currentSourceUrl, chunks.map { chunk -> chunk.text })
+            }
+        } catch (error: Exception) {
+            Log.e("Readly", "Couldn't save the reading for search and bookmarks", error)
+            onRequestDone?.invoke()
+            postError(IOException("Couldn't save this reading. Free some storage and try again.", error))
             return
         }
         // No ensureForeground(): onStartCommand entered the foreground on the main
@@ -2531,6 +2592,7 @@ class ReaderService : MediaBrowserService() {
         }
         ReaderState.update {
             it.copy(
+                readingId = currentReadingId,
                 status = ReaderStatus.READING,
                 title = title,
                 currentText = chunks[startIndex].text,

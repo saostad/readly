@@ -84,8 +84,9 @@ class HeadlineCache(
                 ),
             )
         }
-        synchronized(lock) { entries[site.id] = Entry(list, now, site.url, site.mode, limits.maxArticles) }
-        return LoadedHeadlines(list, now, stale = false, notices = listOfNotNull(list.notice))
+        val completedAt = clock()
+        synchronized(lock) { entries[site.id] = Entry(list, completedAt, site.url, site.mode, limits.maxArticles) }
+        return LoadedHeadlines(list, completedAt, stale = false, notices = listOfNotNull(list.notice))
     }
 
     /** The cached title for [url] on any site, for the reading's title. */
@@ -98,6 +99,14 @@ class HeadlineCache(
 
     /** The website overview can disclose an unresolved failure without fetching again. */
     fun refreshNotice(siteId: String): String? = synchronized(lock) { entries[siteId]?.refreshNotice }
+
+    fun seed(site: FeedSite, limits: FeedLimits, loaded: LoadedHeadlines) {
+        synchronized(lock) {
+            if (entries[site.id] == null) entries[site.id] = Entry(loaded.list, loaded.fetchedAtMs, site.url, site.mode, limits.maxArticles, if (loaded.stale) loaded.notices.firstOrNull() else null)
+        }
+    }
+
+    fun fetchedAt(siteId: String): Long? = synchronized(lock) { entries[siteId]?.fetchedAtMs }
 
     fun forget(siteId: String) {
         synchronized(lock) { entries.remove(siteId) }

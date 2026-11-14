@@ -126,7 +126,7 @@
     <string name="tip_sub">TalkBack, Maps and other apps will use it.</string>
     <string name="setup_button">Set up</string>
     <string name="footer_hint">Share → Readly · or select text → Read aloud</string>
-    <string name="sheet_title">Voice &amp; speed</string>
+    <string name="sheet_title">Settings</string>
     <string name="change_pack_short">Change pack</string>
     <string name="tap_voice_hint">Tap a voice to hear it.</string>
     <string name="speaker_chip_format">▶ %1$s</string>
@@ -164,7 +164,7 @@
     <string name="pocket_enter_number">Enter a number.</string>
     <string name="dismiss_button">✕</string>
     <string name="dismiss_desc">Dismiss</string>
-    <string name="settings_desc">Voice and speed settings</string>
+    <string name="settings_desc">Settings</string>
     <string name="phone_voice_label">Phone voice</string>
 
     <string name="now_reading_title">Now reading</string>
@@ -354,4 +354,13 @@
     <string name="feed_refresh_action">Refresh current list</string>
     <string name="feed_refreshing">Refreshing…</string>
     <string name="feed_refresh_failed">Couldn\'t refresh this list. Pull down again or tap Refresh to retry.</string>
+    <string name="feed_time_zone_label">Article time zone</string>
+    <string name="feed_time_zone_new_york">New York (America/New_York)</string>
+    <string name="feed_time_zone_device">Device time zone (%1$s)</string>
+    <string name="feed_time_zone_help">Used for article dates and last-updated times. Defaults to New York and adjusts for daylight saving time.</string>
+    <string name="bookmark_sentence">Bookmark sentence / add note</string>
+    <string name="settings_playback">Playback</string>
+    <string name="settings_feeds">Feeds &amp; time zone</string>
+    <string name="settings_voices">Voices</string>
+    <string name="settings_documents">Documents &amp; OCR</string>
 </resources>

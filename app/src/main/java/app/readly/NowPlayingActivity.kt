@@ -123,6 +123,9 @@ class NowPlayingActivity : Activity() {
             }
         }
 
+        findViewById<Button>(R.id.npBookmark).setOnClickListener {
+            app.readly.ui.BookmarkDialogs.add(this, ReaderState.snapshot)
+        }
         render(ReaderState.snapshot)
     }
 
@@ -167,6 +170,8 @@ class NowPlayingActivity : Activity() {
         } else {
             hasStarted = true
         }
+        findViewById<Button>(R.id.npBookmark).isEnabled = snap.readingId.isNotBlank() &&
+            snap.status in listOf(ReaderStatus.READING, ReaderStatus.PAUSED, ReaderStatus.FINISHED)
         renderArt(snap)
         renderBrowserRow(snap)
         renderAskRow(snap)

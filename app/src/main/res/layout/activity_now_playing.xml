@@ -165,6 +165,13 @@
             android:textColor="@color/text"
             android:textSize="16.5sp" />
 
+        <Button
+            android:id="@+id/npBookmark"
+            style="@style/Btn.Text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/bookmark_sentence" />
+
         <SeekBar
             android:id="@+id/sentenceBar"
             android:layout_width="match_parent"

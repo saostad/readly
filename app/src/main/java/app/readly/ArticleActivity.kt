@@ -686,7 +686,7 @@ class ArticleActivity : Activity() {
             }
             val finalUrl = currentUrl
             when (val outcome = readTracker.finishRead(read, finalUrl) {
-                ReaderService.read(this, clean, title, SourceFormat.PLAIN, notice)
+                ReaderService.read(this, clean, title, SourceFormat.PLAIN, notice, sourceUrl = finalUrl.orEmpty())
                 startActivity(Intent(this, NowPlayingActivity::class.java))
                 overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
                 handoffDone = true

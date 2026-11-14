@@ -1,23 +1,20 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Voice & speed bottom sheet. Speaker chips are built in code. -->
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<?xml version='1.0' encoding='utf-8'?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content">
-
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="16dp"
         android:paddingTop="10dp">
-
         <View
             android:layout_width="38dp"
             android:layout_height="4dp"
             android:layout_gravity="center_horizontal"
             android:layout_marginBottom="12dp"
             android:background="@drawable/grab_handle" />
-
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -25,557 +22,514 @@
             android:textColor="@color/text"
             android:textSize="16sp"
             android:textStyle="bold" />
-
-        <LinearLayout
+        <Button
+            android:id="@+id/settingsPlaybackToggle"
+            style="@style/Btn.Text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingBottom="10dp">
-
-            <TextView
-                android:id="@+id/sheetPackName"
-                style="@style/CardTitle"
-                android:layout_width="0dp"
+            android:text="@string/settings_playback"
+            android:gravity="start|center_vertical" />
+        <LinearLayout
+            android:id="@+id/settingsPlaybackGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="visible">
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1" />
-
-            <Button
-                style="@style/Btn.Text"
-                android:id="@+id/sheetChangePack"
-                android:layout_width="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/speed_section"
+                    android:textColor="@color/text"
+                    android:textSize="13.5sp"
+                    android:textStyle="bold" />
+                <TextView
+                    android:id="@+id/sheetSpeedValue"
+                    style="@style/Small"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+            <SeekBar
+                android:id="@+id/sheetSpeedSeek"
+                style="@style/CalmSeekBar"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/change_pack_short" />
+                android:layout_marginTop="4dp"
+                android:max="15" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingBottom="10dp">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/normalize_text_label"
+                        android:textColor="@color/text"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/normalize_text_help" />
+                </LinearLayout>
+                <Switch
+                    android:id="@+id/sheetNormalizeSwitch"
+                    style="@style/SheetSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingBottom="10dp">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/respell_names_label"
+                        android:textColor="@color/text"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/respell_names_help" />
+                </LinearLayout>
+                <Switch
+                    android:id="@+id/sheetRespellSwitch"
+                    style="@style/SheetSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingBottom="10dp">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/read_hidden_text_label"
+                        android:textColor="@color/text"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/read_hidden_text_help" />
+                </LinearLayout>
+                <Switch
+                    android:id="@+id/sheetHiddenTextSwitch"
+                    style="@style/SheetSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingBottom="10dp">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/date_day_first_label"
+                        android:textColor="@color/text"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/date_day_first_help" />
+                </LinearLayout>
+                <Switch
+                    android:id="@+id/sheetDayFirstSwitch"
+                    style="@style/SheetSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
         </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/line" />
-
-        <app.readly.ui.FlowLayout
-            android:id="@+id/sheetSpeakers"
+        <Button
+            android:id="@+id/settingsFeedsToggle"
+            style="@style/Btn.Text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp" />
-
-        <TextView
-            android:id="@+id/sheetSpeakerHint"
-            style="@style/Small"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:text="@string/tap_voice_hint" />
-
-        <TextView
-            android:id="@+id/sheetSingleVoice"
-            style="@style/Small"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="@string/single_voice_note"
-            android:visibility="gone" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="10dp"
-            android:background="@color/line" />
-
+            android:text="@string/settings_feeds"
+            android:gravity="start|center_vertical" />
         <LinearLayout
+            android:id="@+id/settingsFeedsGroup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
+            android:orientation="vertical"
+            android:visibility="gone">
             <TextView
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/speed_section"
+                android:layout_marginTop="12dp"
+                android:labelFor="@+id/sheetTimeZone"
+                android:text="@string/feed_time_zone_label"
                 android:textColor="@color/text"
                 android:textSize="13.5sp"
                 android:textStyle="bold" />
-
+            <Spinner
+                android:id="@+id/sheetTimeZone"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp" />
             <TextView
-                android:id="@+id/sheetSpeedValue"
                 style="@style/Small"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
-        </LinearLayout>
-
-        <SeekBar
-            android:id="@+id/sheetSpeedSeek"
-            style="@style/CalmSeekBar"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:max="15" />
-
-        <Switch
-            android:id="@+id/sheetCompactWebsitesSwitch"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:minHeight="48dp"
-            android:text="@string/compact_websites_label" />
-
-        <TextView
-            style="@style/Small"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/compact_websites_help" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="10dp"
-            android:background="@color/line" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingBottom="10dp">
-
-            <LinearLayout
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/smart_voice_label"
-                    android:textColor="@color/text"
-                    android:textSize="13.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    style="@style/Small"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/smart_voice_help" />
-            </LinearLayout>
-
+                android:text="@string/feed_time_zone_help" />
             <Switch
-                android:id="@+id/sheetSmartSwitch"
-                style="@style/SheetSwitch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
-        </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/line" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingBottom="10dp">
-
-            <LinearLayout
-                android:layout_width="0dp"
+                android:id="@+id/sheetCompactWebsitesSwitch"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="match_parent"
+                android:layout_marginTop="12dp"
+                android:minHeight="48dp"
+                android:text="@string/compact_websites_label" />
+            <TextView
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/compact_websites_help" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <LinearLayout
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:text="@string/auto_download_short"
-                    android:textColor="@color/text"
-                    android:textSize="13.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    style="@style/Small"
-                    android:layout_width="match_parent"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/auto_sites_label"
+                        android:textColor="@color/text"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        android:id="@+id/sheetAutoSitesStatus"
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+                <Button
+                    style="@style/Btn.Text"
+                    android:id="@+id/sheetAutoSitesButton"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/auto_download_short_help" />
+                    android:text="@string/auto_sites_manage" />
             </LinearLayout>
-
-            <Switch
-                android:id="@+id/sheetAutoSwitch"
-                style="@style/SheetSwitch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
-        </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/line" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingBottom="10dp">
-
-            <LinearLayout
-                android:layout_width="0dp"
+            <TextView
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/normalize_text_label"
-                    android:textColor="@color/text"
-                    android:textSize="13.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    style="@style/Small"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/normalize_text_help" />
-            </LinearLayout>
-
-            <Switch
-                android:id="@+id/sheetNormalizeSwitch"
-                style="@style/SheetSwitch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
-        </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/line" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingBottom="10dp">
-
+                android:layout_marginTop="10dp"
+                android:text="@string/nyt_section_title"
+                android:textColor="@color/text"
+                android:textSize="13.5sp"
+                android:textStyle="bold" />
             <LinearLayout
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="match_parent"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingBottom="10dp">
+                <LinearLayout
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:text="@string/respell_names_label"
-                    android:textColor="@color/text"
-                    android:textSize="13.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    style="@style/Small"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/respell_names_help" />
-            </LinearLayout>
-
-            <Switch
-                android:id="@+id/sheetRespellSwitch"
-                style="@style/SheetSwitch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
-        </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/line" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingBottom="10dp">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/read_hidden_text_label"
-                    android:textColor="@color/text"
-                    android:textSize="13.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    style="@style/Small"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/read_hidden_text_help" />
-            </LinearLayout>
-
-            <Switch
-                android:id="@+id/sheetHiddenTextSwitch"
-                style="@style/SheetSwitch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
-        </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/line" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingBottom="10dp">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/date_day_first_label"
-                    android:textColor="@color/text"
-                    android:textSize="13.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    style="@style/Small"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/date_day_first_help" />
-            </LinearLayout>
-
-            <Switch
-                android:id="@+id/sheetDayFirstSwitch"
-                style="@style/SheetSwitch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
-        </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/line" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/phone_voice_label"
-                    android:textColor="@color/text"
-                    android:textSize="13.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/sheetPhoneStatus"
-                    style="@style/Small"
-                    android:layout_width="match_parent"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/nyt_auto_label"
+                        android:textColor="@color/text"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/nyt_auto_help" />
+                </LinearLayout>
+                <Switch
+                    android:id="@+id/sheetNytAutoSwitch"
+                    style="@style/SheetSwitch"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content" />
             </LinearLayout>
-
             <Button
                 style="@style/Btn.Text"
-                android:id="@+id/sheetPhoneButton"
+                android:id="@+id/sheetNytCheck"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/setup_button" />
+                android:text="@string/nyt_check_updates" />
+            <TextView
+                android:id="@+id/sheetNytStatus"
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp" />
+            <TextView
+                android:id="@+id/sheetNytError"
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textColor="@color/error"
+                android:visibility="gone" />
+            <LinearLayout
+                android:id="@+id/sheetRefreshSchedule"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="16dp" />
         </LinearLayout>
-
-        <LinearLayout
+        <Button
+            android:id="@+id/settingsVoicesToggle"
+            style="@style/Btn.Text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
+            android:text="@string/settings_voices"
+            android:gravity="start|center_vertical" />
+        <LinearLayout
+            android:id="@+id/settingsVoicesGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
             <LinearLayout
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingBottom="10dp">
                 <TextView
-                    android:layout_width="match_parent"
+                    android:id="@+id/sheetPackName"
+                    style="@style/CardTitle"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:text="@string/auto_sites_label"
-                    android:textColor="@color/text"
-                    android:textSize="13.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/sheetAutoSitesStatus"
-                    style="@style/Small"
-                    android:layout_width="match_parent"
+                    android:layout_weight="1" />
+                <Button
+                    style="@style/Btn.Text"
+                    android:id="@+id/sheetChangePack"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/change_pack_short" />
+            </LinearLayout>
+            <app.readly.ui.FlowLayout
+                android:id="@+id/sheetSpeakers"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp" />
+            <TextView
+                android:id="@+id/sheetSpeakerHint"
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/tap_voice_hint" />
+            <TextView
+                android:id="@+id/sheetSingleVoice"
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/single_voice_note"
+                android:visibility="gone" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingBottom="10dp">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/smart_voice_label"
+                        android:textColor="@color/text"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/smart_voice_help" />
+                </LinearLayout>
+                <Switch
+                    android:id="@+id/sheetSmartSwitch"
+                    style="@style/SheetSwitch"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content" />
             </LinearLayout>
-
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingBottom="10dp">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/auto_download_short"
+                        android:textColor="@color/text"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/auto_download_short_help" />
+                </LinearLayout>
+                <Switch
+                    android:id="@+id/sheetAutoSwitch"
+                    style="@style/SheetSwitch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/phone_voice_label"
+                        android:textColor="@color/text"
+                        android:textSize="13.5sp"
+                        android:textStyle="bold" />
+                    <TextView
+                        android:id="@+id/sheetPhoneStatus"
+                        style="@style/Small"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+                <Button
+                    style="@style/Btn.Text"
+                    android:id="@+id/sheetPhoneButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/setup_button" />
+            </LinearLayout>
+            <TextView
+                android:id="@+id/sheetPersianLine"
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:visibility="gone" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/pocket_advanced_title"
+                android:textColor="@color/text"
+                android:textSize="13.5sp"
+                android:textStyle="bold" />
+            <LinearLayout
+                android:id="@+id/sheetPocketBox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
             <Button
                 style="@style/Btn.Text"
-                android:id="@+id/sheetAutoSitesButton"
+                android:id="@+id/sheetPocketReset"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/auto_sites_manage" />
+                android:text="@string/pocket_reset_defaults" />
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/sheetPersianLine"
-            style="@style/Small"
+        <Button
+            android:id="@+id/settingsDocumentsToggle"
+            style="@style/Btn.Text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:visibility="gone" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="10dp"
-            android:background="@color/line" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="@string/nyt_section_title"
-            android:textColor="@color/text"
-            android:textSize="13.5sp"
-            android:textStyle="bold" />
-
+            android:text="@string/settings_documents"
+            android:gravity="start|center_vertical" />
         <LinearLayout
+            android:id="@+id/settingsDocumentsGroup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingBottom="10dp">
-
+            android:orientation="vertical"
+            android:visibility="gone">
+            <TextView
+                style="@style/CardTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/pdf_settings_title" />
+            <TextView
+                style="@style/Small"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/pdf_limits_help" />
             <LinearLayout
-                android:layout_width="0dp"
+                android:id="@+id/sheetPdfBox"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/nyt_auto_label"
-                    android:textColor="@color/text"
-                    android:textSize="13.5sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    style="@style/Small"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/nyt_auto_help" />
-            </LinearLayout>
-
-            <Switch
-                android:id="@+id/sheetNytAutoSwitch"
-                style="@style/SheetSwitch"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content" />
+                android:orientation="vertical" />
         </LinearLayout>
-
-        <Button
-            style="@style/Btn.Text"
-            android:id="@+id/sheetNytCheck"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/nyt_check_updates" />
-
-        <TextView
-            android:id="@+id/sheetNytStatus"
-            style="@style/Small"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp" />
-
-        <TextView
-            android:id="@+id/sheetNytError"
-            style="@style/Small"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:textColor="@color/error"
-            android:visibility="gone" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="10dp"
-            android:background="@color/line" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:text="@string/pocket_advanced_title"
-            android:textColor="@color/text"
-            android:textSize="13.5sp"
-            android:textStyle="bold" />
-
-        <LinearLayout
-            android:id="@+id/sheetPocketBox"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical" />
-
-        <Button
-            style="@style/Btn.Text"
-            android:id="@+id/sheetPocketReset"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/pocket_reset_defaults" />
-        <TextView
-            style="@style/CardTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/pdf_settings_title" />
-        <TextView
-            style="@style/Small"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/pdf_limits_help" />
-        <LinearLayout
-            android:id="@+id/sheetPdfBox"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical" />
     </LinearLayout>
 </ScrollView>

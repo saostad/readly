@@ -3,6 +3,7 @@ package app.readly.feeds
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import app.readly.library.*
 import app.readly.input.ArticleFetcher
 import app.readly.playback.ReaderService
 import java.io.IOException
@@ -40,8 +41,11 @@ class FeedRepository(context: Context) {
 
         /** Start the next unheard article when Android Auto opens Readly (default off). */
         const val KEY_AUTO_PLAY = "autoPlayOnConnect"
+        private const val KEY_UPDATED_PREFIX = "feedUpdated:"
         private const val TAG = "Readly"
     }
+
+    private val appContext = context.applicationContext
 
     val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences(ReaderService.PREFS_NAME, Context.MODE_PRIVATE)
@@ -53,6 +57,7 @@ class FeedRepository(context: Context) {
         },
         clock = System::currentTimeMillis,
         onWarn = { Log.w(TAG, "Android Auto headlines: $it") },
+        formatTime = { updatedTime(it) },
     )
 
     /**
@@ -82,17 +87,51 @@ class FeedRepository(context: Context) {
 
     fun remove(id: String) {
         save(sites().filterNot { it.id == id })
+        ReadingStore(appContext).use { it.removeFeed(id) }
         cache.forget(id)
+        prefs.edit().remove(KEY_UPDATED_PREFIX + id).apply()
     }
 
     fun setMode(id: String, mode: FindMode) {
         save(sites().map { if (it.id == id) it.copy(mode = mode) else it })
+        ReadingStore(appContext).use { it.removeFeed(id) }
         cache.forget(id)
+        prefs.edit().remove(KEY_UPDATED_PREFIX + id).apply()
     }
 
     private fun save(sites: List<FeedSite>) {
         prefs.edit().putString(KEY_SITES, FeedSites.encode(sites)).apply()
     }
+
+    fun filter(): ArticleFilter = ArticleFilter(
+        prefs.getBoolean("filterUnheard", false), prefs.getString("filterSite", "").orEmpty(),
+        prefs.getString("filterLanguage", "").orEmpty(), prefs.getInt("filterMinutes", 0).takeIf { it > 0 },
+        prefs.getInt("filterPace", ArticleFilter.DEFAULT_WORDS_PER_MINUTE),
+        ArticleSort.valueOf(prefs.getString("filterSort", ArticleSort.SOURCE.name)!!),
+    ).also { it.validate() }
+
+    fun saveFilter(filter: ArticleFilter) {
+        filter.validate()
+        prefs.edit().putBoolean("filterUnheard", filter.unheard).putString("filterSite", filter.site)
+            .putString("filterLanguage", filter.language).putInt("filterMinutes", filter.maxMinutes ?: 0)
+            .putInt("filterPace", filter.wordsPerMinute).putString("filterSort", filter.sort.name).apply()
+        itemsChanged()
+    }
+
+    fun filterArticles(entries: List<CarEntry>): List<CarEntry> = ReadingStore(appContext).use { store ->
+        filter().apply(entries, history().filter { it.finished }.map { it.url }.toSet(), store.facts())
+    }
+
+    fun articleFacts(): Map<String, ArticleFacts> = ReadingStore(appContext).use { it.facts() }
+
+    fun timeZoneId(): String = prefs.getString(FeedTimes.KEY_TIME_ZONE, FeedTimes.DEFAULT_TIME_ZONE)!!
+
+    fun updatedTime(epochMs: Long): String = FeedTimes.format(epochMs, timeZoneId())
+
+    fun publicationTime(raw: String?): String? = FeedTimes.published(raw, timeZoneId()) { Log.w(TAG, it) }
+
+    fun lastUpdated(siteId: String): Long? = cache.fetchedAt(siteId)
+        ?: prefs.getLong(KEY_UPDATED_PREFIX + siteId, 0L).takeIf { it > 0L }
 
     fun limits(): FeedLimits = FeedLimits(
         prefs.getInt(KEY_MAX_ARTICLES, FeedLimits.DEFAULT_MAX_ARTICLES)
@@ -206,6 +245,8 @@ class FeedRepository(context: Context) {
         itemsListeners -= listener
     }
 
+    fun notifyItemsChanged() = itemsChanged()
+
     private fun itemsChanged() {
         itemsListeners.forEach { it.onItemsChanged() }
     }
@@ -301,12 +342,50 @@ class FeedRepository(context: Context) {
 
     /** Blocking network load; call off the main thread. */
     @Throws(IOException::class)
-    fun headlines(site: FeedSite, force: Boolean = false): LoadedHeadlines = cache.load(site, limits(), force)
+    @Synchronized
+    fun headlines(site: FeedSite, force: Boolean = false): LoadedHeadlines {
+        val limits = limits()
+        seedCached(site, limits)
+        val loaded = try {
+            cache.load(site, limits, force)
+        } catch (error: IOException) {
+            Log.e(TAG, "Feed refresh failed site=${site.id}", error)
+            setRefreshError(site.id, "Feed refresh failed. Open this feed and tap Refresh to retry.")
+            throw error
+        }
+        setRefreshError(site.id, if (loaded.stale) loaded.notices.firstOrNull() else null)
+        ReadingStore(appContext).use { store ->
+            if (!loaded.stale) store.saveFeed(site, limits.maxArticles, loaded)
+        }
+        if (!loaded.stale && prefs.getLong(KEY_UPDATED_PREFIX + site.id, 0L) != loaded.fetchedAtMs) {
+            prefs.edit().putLong(KEY_UPDATED_PREFIX + site.id, loaded.fetchedAtMs).apply()
+        }
+        return loaded
+    }
+
+    fun setRefreshError(siteId: String, message: String?) {
+        prefs.edit().putString("feedRefreshError:$siteId", message).apply()
+    }
 
     fun cachedHeadlineRefreshNotice(siteId: String): String? = cache.refreshNotice(siteId)
+        ?: prefs.getString("feedRefreshError:$siteId", null)
 
     fun titleFor(url: String): String? = cache.titleFor(url)
 
     /** [siteId]'s last loaded titles (what the car just listed), without the network. */
-    fun cachedHeadlines(siteId: String): List<Headline>? = cache.peek(siteId)
+    /** Restores a successful snapshot without a network request, retaining any refresh warning. */
+    private fun seedCached(site: FeedSite, limits: FeedLimits) {
+        if (cache.peek(site.id) != null) return
+        ReadingStore(appContext).use { store ->
+            store.loadFeed(site, limits.maxArticles)?.let { loaded ->
+                val failure = prefs.getString("feedRefreshError:${site.id}", null)
+                cache.seed(site, limits, if (failure == null) loaded else loaded.copy(stale = true, notices = listOf(failure) + loaded.notices))
+            }
+        }
+    }
+
+    fun cachedHeadlines(siteId: String): List<Headline>? {
+        if (cache.peek(siteId) == null) site(siteId)?.let { seedCached(it, limits()) }
+        return cache.peek(siteId)
+    }
 }

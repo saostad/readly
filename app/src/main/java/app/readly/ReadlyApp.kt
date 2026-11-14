@@ -39,6 +39,19 @@ class ReadlyApp : Application() {
                 android.widget.Toast.makeText(this, R.string.pdf_state_failed, android.widget.Toast.LENGTH_LONG).show()
             }
         }
+        try {
+            val refreshPrefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
+            if (refreshPrefs.getString(app.readly.feeds.FeedRefreshScheduler.STATUS, null) == "Scheduled feed refresh is running…") {
+                Log.w("Readly", "fallback=true attempted=scheduled-feed-refresh reason=process-interrupted taken=next-periodic-run")
+                refreshPrefs.edit().putString(app.readly.feeds.FeedRefreshScheduler.STATUS, "The previous scheduled refresh was interrupted. Android will try again when conditions allow.").apply()
+            }
+            app.readly.feeds.FeedRefreshScheduler.ensure(this)
+        } catch (error: Exception) {
+            Log.e("Readly", "Couldn't restore the feed refresh schedule", error)
+            getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE).edit()
+                .putString(app.readly.feeds.FeedRefreshScheduler.STATUS, "Feed refresh could not be scheduled. Open Feeds settings and save the schedule again.").apply()
+            android.widget.Toast.makeText(this, "Feed refresh could not be scheduled. Check Feeds settings.", android.widget.Toast.LENGTH_LONG).show()
+        }
         // Before any activity or service touches the catalog.
         VoiceCatalog.ensureLoaded(this)
         // Initializes the shared rule store and runs one throttled automatic

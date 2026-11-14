@@ -64,6 +64,19 @@ class PdfImportStore(private val context: Context) : SQLiteOpenHelper(context, "
         null, null, null, null, "created DESC").use { cursor ->
         buildList { while (cursor.moveToNext()) add(Import(cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3).orEmpty(), cursor.getString(4))) }
     }
+    fun search(query: String): List<app.readly.library.LibraryResult> {
+        return readableDatabase.rawQuery("SELECT i.id,i.title,i.kind,p.text FROM imports i LEFT JOIN pages p ON p.import_id=i.id WHERE i.status='ready' ORDER BY i.created DESC,p.page ASC", null).use { c ->
+            val found = linkedMapOf<String, app.readly.library.LibraryResult>()
+            while (c.moveToNext()) {
+                if (app.readly.library.LibraryMatch.matches(query, c.getString(1), c.getString(3).orEmpty())) {
+                    val id = c.getString(0)
+                    found.putIfAbsent(id, app.readly.library.LibraryResult("document:$id", c.getString(1), "${c.getString(2)} · Saved document", documentId = id))
+                }
+            }
+            found.values.toList()
+        }
+    }
+
     fun textFile(id: String, limits: PdfLimits): File {
         valid(id); limits.validate()
         require(list().any { it.id == id && it.status == "ready" }) { "This document is not ready. Share the file again." }

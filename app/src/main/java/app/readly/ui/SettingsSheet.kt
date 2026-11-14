@@ -16,6 +16,7 @@ import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
+import app.readly.feeds.FeedTimes
 import app.readly.FeedsActivity
 import app.readly.PhoneVoiceSettings
 import app.readly.R
@@ -69,6 +70,19 @@ class SettingsSheet(
             activity.startActivity(Intent(activity, VoicesActivity::class.java))
             activity.overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
         }
+        val sections = listOf(
+            R.id.settingsPlaybackToggle to R.id.settingsPlaybackGroup,
+            R.id.settingsFeedsToggle to R.id.settingsFeedsGroup,
+            R.id.settingsVoicesToggle to R.id.settingsVoicesGroup,
+            R.id.settingsDocumentsToggle to R.id.settingsDocumentsGroup,
+        )
+        for ((button, group) in sections) dialog.findViewById<Button>(button).setOnClickListener {
+            val view = dialog.findViewById<View>(group)
+            val expand = view.visibility != View.VISIBLE
+            sections.forEach { (_, other) -> dialog.findViewById<View>(other).visibility = View.GONE }
+            view.visibility = if (expand) View.VISIBLE else View.GONE
+        }
+        RefreshSettings.fill(activity, dialog.findViewById(R.id.sheetRefreshSchedule))
         fillSpeakers(dialog, pack)
         fillSpeed(dialog)
         fillSwitch(
@@ -85,6 +99,7 @@ class SettingsSheet(
         fillSwitch(dialog, R.id.sheetRespellSwitch, ReaderService.KEY_RESPELL_NAMES, default = false)
         fillSwitch(dialog, R.id.sheetHiddenTextSwitch, ReaderService.KEY_READ_HIDDEN_TEXT, default = false)
         fillSwitch(dialog, R.id.sheetCompactWebsitesSwitch, WebsiteLayout.KEY_COMPACT, default = WebsiteLayout.DEFAULT_COMPACT)
+        fillTimeZone(dialog)
         fillDayFirstSwitch(dialog)
         fillPhoneRow(dialog)
         fillAutoSitesRow(dialog)
@@ -92,9 +107,56 @@ class SettingsSheet(
         fillSiteSection(dialog)
         fillPocketSection(dialog)
         fillPdfSection(dialog)
+        dialog.findViewById<LinearLayout>(R.id.sheetPdfBox).addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+            text = "Clear saved readings without bookmarks"
+            setOnClickListener {
+                android.app.AlertDialog.Builder(activity).setTitle("Clear saved readings?")
+                    .setMessage("Readly saves text locally for Search and Bookmarks. This removes saved readings without bookmarks. Imported documents, feed headlines and bookmarked readings stay available.")
+                    .setNegativeButton("Cancel", null).setPositiveButton("Clear") { _, _ ->
+                        isEnabled = false
+                        (activity.application as ReadlyApp).ioExecutor.execute {
+                            try {
+                                val count = app.readly.library.ReadingStore(activity).use { it.clearUnbookmarked(app.readly.playback.ReaderState.snapshot.readingId) }
+                                activity.runOnUiThread { if (!activity.isDestroyed) {
+                                    isEnabled = true
+                                    android.widget.Toast.makeText(activity, "$count saved readings cleared", android.widget.Toast.LENGTH_LONG).show()
+                                } }
+                            } catch (error: Exception) {
+                                android.util.Log.e("Readly", "Couldn't clear saved readings", error)
+                                activity.runOnUiThread { if (!activity.isDestroyed) {
+                                    isEnabled = true
+                                    android.widget.Toast.makeText(activity, "Couldn't clear saved readings. Reopen Settings and try again.", android.widget.Toast.LENGTH_LONG).show()
+                                } }
+                            }
+                        }
+                    }.show()
+            }
+        })
         dialog.setOnDismissListener { onDismiss() }
         dialog.show()
         Sheets.applyFullWidth(dialog)
+    }
+
+    private fun fillTimeZone(dialog: Dialog) {
+        val ids = listOf(FeedTimes.DEFAULT_TIME_ZONE, FeedTimes.DEVICE_TIME_ZONE) +
+            java.time.ZoneId.getAvailableZoneIds().sorted().filterNot { it == FeedTimes.DEFAULT_TIME_ZONE }
+        val labels = ids.map {
+            when (it) {
+                FeedTimes.DEFAULT_TIME_ZONE -> activity.getString(R.string.feed_time_zone_new_york)
+                FeedTimes.DEVICE_TIME_ZONE -> activity.getString(R.string.feed_time_zone_device, java.time.ZoneId.systemDefault().id)
+                else -> it.replace('_', ' ')
+            }
+        }
+        val spinner = dialog.findViewById<android.widget.Spinner>(R.id.sheetTimeZone)
+        spinner.adapter = android.widget.ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, labels)
+        val selected = prefs.getString(FeedTimes.KEY_TIME_ZONE, FeedTimes.DEFAULT_TIME_ZONE)
+        spinner.setSelection(ids.indexOf(selected))
+        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                prefs.edit().putString(FeedTimes.KEY_TIME_ZONE, ids[position]).apply()
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
     }
 
     private fun fillPdfSection(dialog: Dialog) {

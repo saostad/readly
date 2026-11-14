@@ -2,6 +2,7 @@ package app.readly.feeds
 
 import java.io.IOException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -90,6 +91,47 @@ class HeadlineCacheTest {
         onWarn = warnings::add,
         formatTime = { "T$it" },
     )
+
+    @Test
+    fun lastUpdatedTracksSuccessfulCompletionAndSurvivesFailedRefresh() {
+        val timedCache = HeadlineCache(
+            finder = { _, _ ->
+                failWith?.let { throw it }
+                now += 5_000L
+                HeadlineList("News", emptyList(), HeadlineSource.FEED, "https://news.example/rss", null)
+            },
+            clock = { now },
+            onWarn = warnings::add,
+            formatTime = { "T$it" },
+        )
+        assertNull(timedCache.fetchedAt(site.id))
+        val first = timedCache.load(site, limits)
+        assertEquals(1_005_000L, first.fetchedAtMs)
+        assertEquals(first.fetchedAtMs, timedCache.fetchedAt(site.id))
+        now += 60_000L
+        assertEquals(first.fetchedAtMs, timedCache.load(site, limits).fetchedAtMs)
+        failWith = IOException("HTTP 503")
+        assertTrue(timedCache.load(site, limits, force = true).stale)
+        assertEquals(first.fetchedAtMs, timedCache.fetchedAt(site.id))
+        timedCache.forget(site.id)
+        assertNull(timedCache.fetchedAt(site.id))
+    }
+
+    @Test
+    fun restoredSnapshotRetainsTimeAndRefreshWarningUntilSuccessfulRefresh() {
+        val loaded = cache.load(site, limits)
+        val restored = HeadlineCache(
+            finder = { _, _ -> throw IOException("offline") }, clock = { now },
+            onWarn = warnings::add, formatTime = { "T$it" },
+        )
+        restored.seed(site, limits, loaded.copy(stale = true, notices = listOf("Previous refresh failed")))
+        val result = restored.load(site, limits)
+        assertTrue(result.stale)
+        assertEquals(loaded.fetchedAtMs, result.fetchedAtMs)
+        assertEquals(loaded.list.headlines, result.list.headlines)
+        assertEquals("Previous refresh failed", result.notices.first())
+        assertTrue(warnings.single().contains("fallback=true"))
+    }
 
     @Test
     fun freshList_comesFromTheCache() {

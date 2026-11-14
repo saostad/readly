@@ -9,6 +9,7 @@ import android.os.Process
 import android.service.media.MediaBrowserService
 import android.util.Log
 import app.readly.feeds.CarEntry
+import app.readly.feeds.FeedTimes
 import app.readly.feeds.FeedRepository
 import app.readly.feeds.FeedSites
 import app.readly.feeds.HeadlineSource
@@ -85,7 +86,7 @@ class CarBrowser(
         fun isRetry(mediaId: String): Boolean = mediaId.startsWith(RETRY)
 
         /** True for an information row ("No websites yet", errors) that leads nowhere. */
-        fun isNotice(mediaId: String): Boolean = mediaId == NOTICE
+        fun isNotice(mediaId: String): Boolean = mediaId == NOTICE || mediaId.startsWith("notice:")
 
                 /** An article row's id: `article:<listId>|<url>` (list ids never contain `|`). */
         fun articleId(listId: String, url: String): String = "$ARTICLE$listId|$url"
@@ -134,6 +135,7 @@ class CarBrowser(
                 notifyChildrenChanged(LATEST)
             }
             FeedRepository.KEY_SAVED -> notifyChildrenChanged(SAVED)
+            FeedTimes.KEY_TIME_ZONE -> itemsListener.onItemsChanged()
         }
     }
 
@@ -343,9 +345,12 @@ class CarBrowser(
         sites.filter { feeds.cachedHeadlineRefreshNotice(it.id) != null }.forEach { unavailable += it.label() }
         val heard = feeds.history().associateBy { it.url }
         val hidden = hiddenOrNotice().first
-        val items = mutableListOf<MediaItem>()
-        if (unavailable.isNotEmpty()) items += browsable(RETRY + WEBSITES,
-            "Some websites couldn't refresh · tap to retry",
+        val items = mutableListOf(browsable(RETRY + WEBSITES, "Refresh feeds", "Fetch the latest headlines from all websites"))
+        feeds.prefs.getString(app.readly.feeds.FeedRefreshScheduler.STATUS, null)?.let {
+            items += browsable("notice:background", "Background refresh", it)
+        }
+        if (unavailable.isNotEmpty()) items[0] = browsable(RETRY + WEBSITES,
+            "Refresh feeds · some websites couldn't update",
             "${unavailable.joinToString(", ")}. Previous headlines are kept where available.")
         return sites.mapTo(items) { site ->
             // "3 new" when the titles are already loaded; never a network call per tile.
@@ -354,7 +359,8 @@ class CarBrowser(
             browsable(
                 SITE + site.id,
                 site.label(),
-                if (unheard != null) "$unheard new" else FeedSites.hostOf(site.url),
+                (if (unheard != null) "$unheard new" else FeedSites.hostOf(site.url)) + "\n" +
+                    (feeds.lastUpdated(site.id)?.let { "Last updated: ${feeds.updatedTime(it)}" } ?: "Not updated yet"),
                 ArtworkProvider.siteUri(site.label()),
                 // Inside a site: rows (a retry row is browsable too), never tiles.
                 childrenStyle = CONTENT_STYLE_LIST,
@@ -375,17 +381,19 @@ class CarBrowser(
         }
         val guessed = loaded.list.source == HeadlineSource.PAGE_LINKS && loaded.list.notice != null
         val (hidden, hiddenNotice) = hiddenOrNotice()
-        val entries = loaded.list.headlines.filterNot { it.url in hidden }.map { CarEntry(site.id, it, site.label()) }
+        val entries = feeds.filterArticles(loaded.list.headlines.filterNot { it.url in hidden }.map { CarEntry(site.id, it, site.label()) })
         listed[site.id] = entries
         val items = listOfNotNull(hiddenNotice).toMutableList<MediaItem>()
         if (loaded.stale) {
             // The stale-list notice is the first row, and tapping it retries.
-            items += browsable(RETRY + site.id, "Showing an older list · tap to refresh", loaded.notices.first())
+            items += browsable(RETRY + site.id, "Refresh feed · showing an older list", loaded.notices.first())
         }
+        if (!loaded.stale) items += browsable(RETRY + site.id, "Refresh feed", "Fetch the latest headlines for this website")
+        items += browsable("notice:update", "Last updated", feeds.updatedTime(loaded.fetchedAtMs))
         items += articleRows(site.id, entries) { entry ->
             listOfNotNull(
                 if (guessed) "Guessed from page links" else null,
-                entry.headline.published?.take(40),
+                feeds.publicationTime(entry.headline.published),
             ).joinToString(" · ").ifBlank { FeedSites.hostOf(entry.headline.url) }
         }
         return items
@@ -415,7 +423,7 @@ class CarBrowser(
                 null
             }
         }
-        val entries = LatestMix.interleave(lists, feeds.limits().maxArticles)
+        val entries = feeds.filterArticles(LatestMix.interleave(lists, feeds.limits().maxArticles))
         listed[LATEST] = entries
         val items = listOfNotNull(hiddenNotice).toMutableList<MediaItem>()
         if (failed.isNotEmpty() || stale.isNotEmpty()) {
@@ -423,9 +431,12 @@ class CarBrowser(
                 failed.takeIf { it.isNotEmpty() }?.let { "Couldn't load ${it.joinToString(", ")}" },
                 stale.takeIf { it.isNotEmpty() }?.let { "older list for ${it.joinToString(", ")}" },
             ).joinToString(" · ")
-            items += browsable(RETRY + LATEST, "Some websites are missing or old · tap to retry", subtitle)
+            items += browsable(RETRY + LATEST, "Refresh feeds · some websites are missing or old", subtitle)
         }
-        items += articleRows(LATEST, entries) { it.siteLabel }
+        if (failed.isEmpty() && stale.isEmpty()) items += browsable(RETRY + LATEST, "Refresh feeds", "Fetch the latest headlines from all websites")
+        val oldest = sites.mapNotNull { feeds.lastUpdated(it.id) }.minOrNull()
+        if (oldest != null) items += browsable("notice:update", "Oldest feed update", feeds.updatedTime(oldest))
+        items += articleRows(LATEST, entries) { listOfNotNull(it.siteLabel, feeds.publicationTime(it.headline.published)).joinToString(" · ") }
         return items
     }
 
@@ -447,8 +458,9 @@ class CarBrowser(
                 browsable(NOTICE, "Nothing saved yet", "On your phone, share a link and choose Read later"),
             )
         }
-        listed[SAVED] = entries
-        return articleRows(SAVED, entries) { it.siteLabel }
+        val selected = feeds.filterArticles(entries)
+        listed[SAVED] = selected
+        return articleRows(SAVED, selected) { it.siteLabel }
     }
 
     private fun recentEntries(): List<CarEntry> {
@@ -467,8 +479,9 @@ class CarBrowser(
         if (entries.isEmpty()) {
             return mutableListOf(browsable(NOTICE, "Nothing heard yet", "Articles you listen to in the car show up here"))
         }
-        listed[RECENTS] = entries
-        return articleRows(RECENTS, entries) { it.siteLabel.ifBlank { FeedSites.hostOf(it.headline.url) } }
+        val selected = feeds.filterArticles(entries)
+        listed[RECENTS] = selected
+        return articleRows(RECENTS, selected) { it.siteLabel.ifBlank { FeedSites.hostOf(it.headline.url) } }
     }
 
     /** "Continue listening": the newest half-finished article, playable from the car's start screen. */
@@ -488,7 +501,13 @@ class CarBrowser(
         subtitle: (CarEntry) -> String,
     ): MutableList<MediaItem> {
         val heard = feeds.history().associateBy { it.url }
+        val filter = feeds.filter()
+        val facts = feeds.articleFacts()
         val rows = mutableListOf<MediaItem>()
+        if (filter != app.readly.library.ArticleFilter()) rows += browsable("notice:filter", "Filters & sort",
+            "${if (filter.unheard) "Unheard only · " else ""}${filter.site.ifBlank { "All websites" }} · ${filter.sort.label}" +
+                (if (filter.language.isNotBlank()) " · ${filter.language}" else "") +
+                (filter.maxMinutes?.let { " · Up to $it min; unknown lengths excluded" } ?: ""))
         if (withShuffle && entries.size > 1) {
             rows += MediaItem(
                 MediaDescription.Builder().setMediaId(SHUFFLE + listId).setTitle("Shuffle")
@@ -508,7 +527,9 @@ class CarBrowser(
                 MediaDescription.Builder()
                     .setMediaId(articleId(listId, entry.headline.url))
                     .setTitle(entry.headline.title)
-                    .setSubtitle(listOfNotNull(mark, subtitle(entry).ifBlank { null }).joinToString(" · "))
+                    .setSubtitle(listOfNotNull(mark, subtitle(entry).ifBlank { null }, facts[entry.headline.url]?.let {
+                        "${it.language} · ~${(it.words.toLong() + filter.wordsPerMinute - 1) / filter.wordsPerMinute} min"
+                    }).joinToString(" · "))
                     .setExtras(
                         Bundle().apply {
                             putInt(PLAYBACK_STATUS, status)
@@ -520,6 +541,7 @@ class CarBrowser(
                 MediaItem.FLAG_PLAYABLE,
             )
         }
+        if (entries.isEmpty()) rows += browsable(NOTICE, "No matching articles", "Change Filters & sort on your phone, or refresh this feed.")
         return rows
     }
 
