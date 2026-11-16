@@ -4,6 +4,7 @@ import android.content.Context
 import app.readly.playback.ReaderService
 import java.io.File
 import java.io.InputStream
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CancellationException
 
@@ -38,8 +39,10 @@ object PdfFiles {
 
     fun newText(context: Context): File = File(directory(context), "${UUID.randomUUID()}.txt")
 
-    fun copy(input: InputStream, destination: File, limits: PdfLimits, cancelled: () -> Boolean) {
+    /** Copies [input] to [destination] up to [limits.maxFileBytes] and returns the lowercase SHA-256 hex digest. */
+    fun copy(input: InputStream, destination: File, limits: PdfLimits, cancelled: () -> Boolean): String {
         limits.validate()
+        val digest = MessageDigest.getInstance("SHA-256")
         destination.outputStream().use { out ->
             val buffer = ByteArray(8192)
             var total = 0L
@@ -51,10 +54,29 @@ object PdfFiles {
                 if (total > limits.maxFileBytes) {
                     throw PdfImportException("Shared file exceeds the ${limits.maxFileMb} MB file limit. Increase the document file limit in Voice & speed, or share a smaller file.")
                 }
+                digest.update(buffer, 0, count)
                 out.write(buffer, 0, count)
             }
         }
+        return toHex(digest.digest())
     }
+
+    /** Returns the lowercase SHA-256 hex digest of an existing [file]. */
+    fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return toHex(digest.digest())
+    }
+
+    private fun toHex(bytes: ByteArray): String =
+        bytes.joinToString("") { "%02x".format(it) }
 
     /** A private file id, never a caller-supplied path or a textbook-sized Intent extra. */
     fun read(context: Context, id: String): String {

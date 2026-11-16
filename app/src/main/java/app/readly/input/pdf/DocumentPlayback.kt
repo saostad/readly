@@ -11,20 +11,20 @@ import java.io.File
 
 /** Shared document replay for Library, settings, and other local clients. */
 object DocumentPlayback {
-    data class Prepared(val file: File, val title: String, val notice: String)
+    data class Prepared(val file: File, val title: String, val notice: String, val documentId: String = "")
 
     /** Validates state and current limits before producing a bounded, private text handoff. */
     fun prepare(context: Context, id: String): Prepared = PdfImportStore(context).use { store ->
-        val item = store.list().firstOrNull { it.id == id }
+        val item = store.find(id)
             ?: throw PdfImportException("This document is no longer available. Open the original file again.")
         if (item.status != "ready") throw PdfImportException("This document is not ready to read. Open the original file again.")
-        Prepared(store.textFile(id, PdfFiles.limits(context)), item.title, item.notice)
+        Prepared(store.textFile(id, PdfFiles.limits(context)), item.title, item.notice, id)
     }
 
     /** Starts playback without repeating OCR. The service consumes the private file. */
     fun start(context: Context, prepared: Prepared) {
         try {
-            ReaderService.readPdf(context, prepared.file.name, prepared.title, prepared.notice)
+            ReaderService.readPdf(context, prepared.file.name, prepared.title, prepared.notice, prepared.documentId)
         } catch (error: Exception) {
             Log.e("Readly", "Couldn't start saved document playback", error)
             if (prepared.file.exists() && !prepared.file.delete()) Log.w("Readly", "Couldn't remove failed document handoff")

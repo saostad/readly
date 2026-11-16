@@ -120,6 +120,8 @@ class ReaderService : MediaBrowserService() {
         const val ACTION_PREVIEW = "app.readly.PREVIEW"
 
         private const val EXTRA_PDF_ID = "pdfId"
+        private const val EXTRA_DOCUMENT_ID = "documentId"
+        private const val EXTRA_FROM_BOOKMARK = "fromBookmark"
         const val EXTRA_TEXT = "text"
         const val EXTRA_TITLE = "title"
         const val EXTRA_FORMAT = "format"
@@ -439,10 +441,13 @@ class ReaderService : MediaBrowserService() {
          * reading (the browser fallback's extraction/cleanup notices);
          * longer values are truncated to [MAX_READ_NOTICE_CHARS].
          */
-        fun readSaved(context: Context, readingId: String, sentence: Int) {
+        fun readSaved(context: Context, readingId: String, sentence: Int, fromBookmark: Boolean = false) {
             require(readingId.isNotBlank() && sentence >= 0)
             context.startForegroundService(Intent(context, ReaderService::class.java).setAction(ACTION_READ_SAVED)
-                .putExtra(EXTRA_CALLER, CALLER_TOKEN).putExtra(EXTRA_READING_ID, readingId).putExtra(EXTRA_INDEX, sentence))
+                .putExtra(EXTRA_CALLER, CALLER_TOKEN)
+                .putExtra(EXTRA_READING_ID, readingId)
+                .putExtra(EXTRA_INDEX, sentence)
+                .putExtra(EXTRA_FROM_BOOKMARK, fromBookmark))
         }
 
         fun read(
@@ -466,12 +471,13 @@ class ReaderService : MediaBrowserService() {
         }
 
         /** Starts a PDF through the same read pipeline, with a private file id instead of a large text extra. */
-        fun readPdf(context: Context, id: String, title: String, notice: String) {
+        fun readPdf(context: Context, id: String, title: String, notice: String, documentId: String = "") {
             context.startForegroundService(
                 Intent(context, ReaderService::class.java)
                     .setAction(ACTION_READ)
                     .putExtra(EXTRA_CALLER, CALLER_TOKEN)
                     .putExtra(EXTRA_PDF_ID, id)
+                    .putExtra(EXTRA_DOCUMENT_ID, documentId)
                     .putExtra(EXTRA_TITLE, title)
                     .putExtra(EXTRA_FORMAT, SourceFormat.PLAIN.name)
                     .putExtra(EXTRA_NOTICE, notice),
@@ -655,6 +661,10 @@ class ReaderService : MediaBrowserService() {
     private var currentHost: String = ""
     private var currentSourceUrl = ""
     private var currentReadingId = ""
+    @Volatile
+    private var currentDocumentId: String = ""
+    @Volatile
+    private var currentDocumentLocations: List<app.readly.input.pdf.PdfChunkLocation> = emptyList()
     /** Audio ms and chars synthesized so far in this document (producer writes). */
     @Volatile
     private var docAudioMs = 0.0
@@ -679,6 +689,7 @@ class ReaderService : MediaBrowserService() {
         val format: SourceFormat,
         val notice: String?,
         val recommendedId: String?,
+        val documentId: String = "",
     )
 
     @Volatile
@@ -1184,6 +1195,7 @@ class ReaderService : MediaBrowserService() {
                 pendingRequests.incrementAndGet()
                 val id = intent.getStringExtra(EXTRA_READING_ID).orEmpty()
                 val index = intent.getIntExtra(EXTRA_INDEX, 0)
+                val fromBookmark = intent.getBooleanExtra(EXTRA_FROM_BOOKMARK, false)
                 executeRead("READ_SAVED") {
                     val done = AtomicBoolean(false)
                     val finish = { if (done.compareAndSet(false, true)) pendingRequests.decrementAndGet(); Unit }
@@ -1194,6 +1206,13 @@ class ReaderService : MediaBrowserService() {
                         stopPipeline()
                         currentHost = saved.host
                         currentSourceUrl = saved.url
+                        val docId = saved.url.removePrefix("document:")
+                            .takeIf { saved.url.startsWith("document:") && it.isNotBlank() }
+                            .orEmpty()
+                        val resume = resolveDocumentResume(docId, chunks, shouldResolve = index == 0 && !fromBookmark)
+                        currentDocumentId = if (resume.exists) docId else ""
+                        currentDocumentLocations = resume.locations
+                        val startIndex = resume.startLocation?.chunkIndex ?: index
                         val choice = SmartVoice.pick(saved.language, installedPacks(), installedLangPack(saved.language),
                             rtfByPack(), isSmartOn(this), activePack(this), canAutoDownload = false)
                         val pack = when (choice) {
@@ -1204,7 +1223,14 @@ class ReaderService : MediaBrowserService() {
                                 return@executeRead
                             }
                         }
-                        startPipeline(chunks, saved.title, index, pack, saved.language, finish, savedReadingId = saved.id)
+                        startPipeline(chunks, saved.title, startIndex, pack, saved.language, finish, savedReadingId = saved.id)
+                        val resumeNotice = resume.startLocation?.let {
+                            formatDocumentResumeNotice(resume.kind, it.page, startIndex, chunks.size)
+                        }
+                        if (!resumeNotice.isNullOrBlank()) {
+                            ReaderState.update { it.copy(notice = resumeNotice) }
+                            mainHandler.post { Toast.makeText(this, resumeNotice, Toast.LENGTH_LONG).show() }
+                        }
                     } catch (error: Exception) {
                         Log.e("Readly", "Couldn't replay saved reading id=$id", error)
                         postError(IOException("Couldn't open the saved reading. Reopen your library and try again.", error))
@@ -1222,6 +1248,7 @@ class ReaderService : MediaBrowserService() {
                     intent.getStringExtra(EXTRA_NOTICE),
                     intent.getStringExtra(EXTRA_PDF_ID),
                     intent.getStringExtra(EXTRA_URL).orEmpty(),
+                    intent.getStringExtra(EXTRA_DOCUMENT_ID).orEmpty(),
                 )
             }
             ACTION_READ_URL -> {
@@ -1314,9 +1341,17 @@ class ReaderService : MediaBrowserService() {
         }
     }
 
-    private fun handleRead(text: String, title: String, formatName: String, notice: String?, pdfId: String? = null, sourceUrl: String = "") {
+    private fun handleRead(
+        text: String,
+        title: String,
+        formatName: String,
+        notice: String?,
+        pdfId: String? = null,
+        sourceUrl: String = "",
+        documentId: String = "",
+    ) {
         executeRead("READ") {
-            currentSourceUrl = sourceUrl
+            currentSourceUrl = if (documentId.isNotBlank() && sourceUrl.isBlank()) "document:$documentId" else sourceUrl
             currentHost = if (sourceUrl.isBlank()) "" else FeedSites.hostOf(sourceUrl)
             val finished = AtomicBoolean(false)
             fun finish() {
@@ -1331,7 +1366,7 @@ class ReaderService : MediaBrowserService() {
                     return@executeRead
                 }
                 val content = if (pdfId == null) text else PdfFiles.read(this, pdfId)
-                startReading(title, content, format, notice = notice, onRequestDone = ::finish)
+                startReading(title, content, format, notice = notice, onRequestDone = ::finish, documentId = documentId)
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 finish()
@@ -1356,6 +1391,8 @@ class ReaderService : MediaBrowserService() {
             }
             try {
                 stopPipeline()
+                currentDocumentId = ""
+                currentDocumentLocations = emptyList()
                 val host = try {
                     URI(url).host ?: url
                 } catch (_: Exception) {
@@ -1475,9 +1512,12 @@ class ReaderService : MediaBrowserService() {
         onRequestDone: () -> Unit,
         forceMain: Boolean = false,
         approvedDownloadId: String? = null,
+        documentId: String = "",
     ) {
         stopPipeline()
         pendingAsk = null
+        currentDocumentId = ""
+        currentDocumentLocations = emptyList()
         // A car reading (from startCarRead) brings its resume point and intro; any
         // other reading is a phone reading with no car history.
         val carStart = pendingCarStart.getAndSet(null)
@@ -1500,7 +1540,7 @@ class ReaderService : MediaBrowserService() {
                 showMissingMain(title, lang, mainPack, onRequestDone)
                 return
             }
-            startWithPack(title, clean, lang, mainPack, notice, onRequestDone, carStart)
+            startWithPack(title, clean, lang, mainPack, notice, onRequestDone, carStart, documentId)
             return
         }
         val approved = approvedDownloadId?.let { VoiceCatalog.byId(it) }
@@ -1509,9 +1549,9 @@ class ReaderService : MediaBrowserService() {
                 Log.i("Readly", "Smart voice: lang=$lang → approved download ${approved.id}")
                 if (VoiceModelStore(approved, voicesDir(), VoiceModelStore::httpUrlOpener).isInstalled()) {
                     setSmartLine(lang, approved)
-                    startWithPack(title, clean, lang, approved, notice, onRequestDone, carStart)
+                    startWithPack(title, clean, lang, approved, notice, onRequestDone, carStart, documentId)
                 } else {
-                    autoDownloadAndRead(title, text, clean, lang, format, notice, approved, onRequestDone)
+                    autoDownloadAndRead(title, text, clean, lang, format, notice, approved, onRequestDone, documentId)
                 }
                 return
             }
@@ -1540,7 +1580,7 @@ class ReaderService : MediaBrowserService() {
         when (choice) {
             is SmartVoice.Choice.Use -> {
                 setSmartLine(lang, choice.pack)
-                startWithPack(title, clean, lang, choice.pack, notice, onRequestDone, carStart)
+                startWithPack(title, clean, lang, choice.pack, notice, onRequestDone, carStart, documentId)
             }
             SmartVoice.Choice.MainVoice -> {
                 val langNotice = if (!smartOn && (lang == "fa" || lang == "ar") && explicit == null) {
@@ -1556,12 +1596,13 @@ class ReaderService : MediaBrowserService() {
                     listOfNotNull(notice, langNotice).joinToString(" ").takeIf { it.isNotBlank() },
                     onRequestDone,
                     carStart,
+                    documentId,
                 )
             }
             is SmartVoice.Choice.AutoDownload ->
-                autoDownloadAndRead(title, text, clean, lang, format, notice, choice.pack, onRequestDone)
+                autoDownloadAndRead(title, text, clean, lang, format, notice, choice.pack, onRequestDone, documentId)
             is SmartVoice.Choice.Ask ->
-                showAsk(title, text, format, notice, lang, choice.pack, onRequestDone)
+                showAsk(title, text, format, notice, lang, choice.pack, onRequestDone, documentId)
         }
     }
 
@@ -1574,17 +1615,31 @@ class ReaderService : MediaBrowserService() {
         notice: String?,
         onRequestDone: () -> Unit,
         carStart: CarStart? = null,
+        documentId: String = "",
     ) {
         val body = SentenceChunker.chunk(clean, lang)
         if (body.isEmpty()) {
             showEmpty(title, clean.length, onRequestDone)
             return
         }
-        // A half-heard car article picks up at the sentence it stopped on; an article
-        // that changed since (now shorter than that point) starts over.
+        // A half-heard car article or previously started PDF picks up at the statement
+        // it stopped on; content that changed starts over.
         var startIndex = 0
         var resumeNotice: String? = null
-        if (carStart != null && carStart.resumeOffsetChars > 0) {
+        var activeDocumentId = ""
+        var docLocations: List<app.readly.input.pdf.PdfChunkLocation> = emptyList()
+        if (documentId.isNotBlank()) {
+            val resume = resolveDocumentResume(documentId, body)
+            if (resume.exists) {
+                activeDocumentId = documentId
+                docLocations = resume.locations
+                val resumed = resume.startLocation
+                if (resumed != null) {
+                    startIndex = resumed.chunkIndex
+                    resumeNotice = formatDocumentResumeNotice(resume.kind, resumed.page, startIndex, body.size)
+                }
+            }
+        } else if (carStart != null && carStart.resumeOffsetChars > 0) {
             val lengths = body.map { it.text.length }
             if (carStart.resumeOffsetChars < lengths.sum()) {
                 startIndex = ReadingProgress.indexAt(lengths, carStart.resumeOffsetChars.toLong(), 1.0)
@@ -1606,15 +1661,55 @@ class ReaderService : MediaBrowserService() {
         }
         if (carStart != null) { currentSourceUrl = carStart.url; currentHost = FeedSites.hostOf(carStart.url) }
         currentCarStart = carStart?.copy(introChunks = intro.size)
+        currentDocumentId = activeDocumentId
+        currentDocumentLocations = docLocations
         startPipeline(intro + body, title, startIndex, docPack, lang, onRequestDone)
-        val notice = listOfNotNull(notice, resumeNotice).joinToString(" ").ifBlank { null }
-        if (!notice.isNullOrBlank()) {
-            ReaderState.update { it.copy(notice = notice) }
+        val combinedNotice = listOfNotNull(notice, resumeNotice).joinToString(" ").ifBlank { null }
+        if (!combinedNotice.isNullOrBlank()) {
+            ReaderState.update { it.copy(notice = combinedNotice) }
             mainHandler.post {
-                Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
+                Toast.makeText(this, combinedNotice, Toast.LENGTH_LONG).show()
             }
         }
     }
+
+    private data class DocumentResume(
+        val exists: Boolean = false,
+        val locations: List<app.readly.input.pdf.PdfChunkLocation> = emptyList(),
+        val startLocation: app.readly.input.pdf.PdfChunkLocation? = null,
+        val kind: String = "pdf",
+    )
+
+    private fun resolveDocumentResume(
+        docId: String,
+        chunks: List<Chunk>,
+        shouldResolve: Boolean = true,
+    ): DocumentResume {
+        if (docId.isBlank()) return DocumentResume()
+        return try {
+            val (pages, item) = app.readly.input.pdf.PdfImportStore(this).use { store ->
+                store.pages(docId) to store.find(docId)
+            }
+            if (item == null) return DocumentResume()
+            val locations = app.readly.input.pdf.PdfText.locateChunks(pages, chunks, isHiddenTextOn(this))
+            val resumed = if (shouldResolve) {
+                app.readly.input.pdf.PdfText.resolveResume(item.progress, locations, chunks)
+            } else {
+                null
+            }
+            DocumentResume(exists = true, locations = locations, startLocation = resumed, kind = item.kind)
+        } catch (e: Exception) {
+            Log.e("Readly", "Couldn't load saved PDF reading progress for $docId", e)
+            DocumentResume()
+        }
+    }
+
+    private fun formatDocumentResumeNotice(kind: String, page: Int, startIndex: Int, total: Int): String =
+        if (kind == "image") {
+            "Picking up where you left off (sentence ${startIndex + 1} of $total)."
+        } else {
+            "Picking up where you left off (page $page, sentence ${startIndex + 1} of $total)."
+        }
 
     /**
      * "From Forbes. Can you trust AI? About 6 minutes." The length uses [docPack]'s pace
@@ -1729,6 +1824,7 @@ class ReaderService : MediaBrowserService() {
         notice: String?,
         pack: VoicePack,
         onRequestDone: () -> Unit,
+        documentId: String = "",
     ) {
         val chunks = SentenceChunker.chunk(clean, lang)
         if (chunks.isEmpty()) {
@@ -1763,17 +1859,11 @@ class ReaderService : MediaBrowserService() {
             val message = "Voice download failed: ${error.javaClass.name}: ${error.message}"
             Log.e("Readly", "$message (${pack.id})", error)
             mainHandler.post { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
-            showAsk(title, text, format, notice, lang, pack, onRequestDone)
+            showAsk(title, text, format, notice, lang, pack, onRequestDone, documentId)
             return
         }
         setSmartLine(lang, pack)
-        startPipeline(chunks, title, 0, pack, lang, onRequestDone)
-        if (!notice.isNullOrBlank()) {
-            ReaderState.update { it.copy(notice = notice) }
-            mainHandler.post {
-                Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
-            }
-        }
+        startWithPack(title, clean, lang, pack, notice, onRequestDone, documentId = documentId)
     }
 
     /**
@@ -1863,8 +1953,9 @@ class ReaderService : MediaBrowserService() {
         lang: String,
         recommended: VoicePack?,
         onRequestDone: () -> Unit,
+        documentId: String = "",
     ) {
-        pendingAsk = PendingAsk(title, text, format, notice, recommended?.id)
+        pendingAsk = PendingAsk(title, text, format, notice, recommended?.id, documentId)
         val display = languageName(lang)
         val ask = if (recommended != null) {
             "This text is in $display. Download a $display voice (${recommended.sizeMb} MB)?"
@@ -1929,9 +2020,14 @@ class ReaderService : MediaBrowserService() {
                     if (finished.compareAndSet(false, true)) pendingRequests.decrementAndGet()
                 }
                 try {
+                    if (held.documentId.isNotBlank()) {
+                        currentSourceUrl = "document:${held.documentId}"
+                        currentHost = ""
+                    }
                     startReading(
                         held.title, held.text, held.format, held.notice, ::finish,
                         approvedDownloadId = packId,
+                        documentId = held.documentId,
                     )
                 } finally {
                     finish()
@@ -1959,7 +2055,15 @@ class ReaderService : MediaBrowserService() {
                     if (finished.compareAndSet(false, true)) pendingRequests.decrementAndGet()
                 }
                 try {
-                    startReading(held.title, held.text, held.format, held.notice, ::finish, forceMain = true)
+                    if (held.documentId.isNotBlank()) {
+                        currentSourceUrl = "document:${held.documentId}"
+                        currentHost = ""
+                    }
+                    startReading(
+                        held.title, held.text, held.format, held.notice, ::finish,
+                        forceMain = true,
+                        documentId = held.documentId,
+                    )
                 } finally {
                     finish()
                 }
@@ -2381,6 +2485,8 @@ class ReaderService : MediaBrowserService() {
         executeRead("STOP") {
             try {
                 stopPipeline()
+                currentDocumentId = ""
+                currentDocumentLocations = emptyList()
                 synchronized(pipelineLock) {
                     currentChunks = emptyList()
                     currentTitle = ""
@@ -2498,6 +2604,8 @@ class ReaderService : MediaBrowserService() {
             postError(IOException("Couldn't save this reading. Free some storage and try again.", error))
             return
         }
+        val docId = currentDocumentId
+        val docLocations = currentDocumentLocations
         // No ensureForeground(): onStartCommand entered the foreground on the main
         // thread for this command already. A worker-side startForeground here could
         // throw ForegroundServiceStartNotAllowedException after a goIdle() detach.
@@ -2532,6 +2640,7 @@ class ReaderService : MediaBrowserService() {
                     )
                 }
                 currentCarStart?.let { car -> recordCarProgress(car, chunks, index) }
+                if (docId.isNotBlank()) recordDocumentProgress(docId, docLocations, chunks, index)
                 val snap = ReaderState.snapshot
                 if (snap.playedChunks >= 2 && snap.msPerChar > 0 && snap.packId.isNotBlank()) {
                     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
@@ -2547,6 +2656,7 @@ class ReaderService : MediaBrowserService() {
                 setNoisyRegistered(false)
                 ReaderState.update { it.copy(status = ReaderStatus.FINISHED) }
                 updateNotification()
+                if (docId.isNotBlank()) markDocumentFinished(docId)
                 currentCarStart?.let { car ->
                     (application as ReadlyApp).feeds.markFinished(car.url)
                     // Heard marks and Recents change in the car's lists.
@@ -2610,11 +2720,47 @@ class ReaderService : MediaBrowserService() {
                 totalChars = chunks.sumOf { chunk -> chunk.text.length },
             )
         }
+        if (docId.isNotBlank()) recordDocumentProgress(docId, docLocations, chunks, startIndex)
         requestFocus()
         setNoisyRegistered(true)
         updateNotification()
         mine.start()
         onRequestDone?.invoke()
+    }
+
+    private fun recordDocumentProgress(
+        docId: String,
+        locations: List<app.readly.input.pdf.PdfChunkLocation>,
+        chunks: List<Chunk>,
+        index: Int,
+    ) {
+        if (docId.isBlank() || chunks.isEmpty()) return
+        val safeIndex = index.coerceIn(0, chunks.lastIndex)
+        val loc = locations.getOrNull(safeIndex)
+            ?: app.readly.input.pdf.PdfChunkLocation(
+                chunkIndex = safeIndex,
+                page = 1,
+                pageSentenceIndex = safeIndex,
+                offsetChars = chunks.take(safeIndex).sumOf { it.text.length },
+            )
+        try {
+            app.readly.input.pdf.PdfImportStore(this).use { store ->
+                store.recordProgress(docId, loc, chunks.size)
+            }
+        } catch (e: Exception) {
+            Log.e("Readly", "Saving document reading progress failed for $docId", e)
+        }
+    }
+
+    private fun markDocumentFinished(docId: String) {
+        if (docId.isBlank()) return
+        try {
+            app.readly.input.pdf.PdfImportStore(this).use { store ->
+                store.markFinished(docId)
+            }
+        } catch (e: Exception) {
+            Log.e("Readly", "Marking document finished failed for $docId", e)
+        }
     }
 
     private fun stopPipeline() {

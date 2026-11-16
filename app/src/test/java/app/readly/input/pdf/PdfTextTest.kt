@@ -1,7 +1,11 @@
 package app.readly.input.pdf
 
+import app.readly.text.Chunk
+import java.io.ByteArrayInputStream
 import java.io.StringWriter
 import java.io.Writer
+import java.nio.file.Files
+import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 import org.junit.Assert.*
 import org.junit.Test
@@ -132,5 +136,144 @@ class PdfTextTest {
         assertEquals("fas", auto.languageForDraft("خروج 1234567890"))
         assertEquals("eng+fas", PdfOcrOptions(languages = "eng+fas").languageForDraft("خواندن کتاب"))
         assertEquals("fas", PdfOcrOptions(languages = "fas").languageForDraft("An English word"))
+    }
+
+    @Test fun locateChunksTracksOneBasedPagesBlankSkipsAndDuplicates() {
+        val pages = listOf(
+            PdfPageText(0, "First page intro. Repeated sentence."),
+            PdfPageText(1, "   \n\t "),
+            PdfPageText(2, "Third page opening. Repeated sentence. Closing remark.")
+        )
+        val joined = "First page intro. Repeated sentence.\n\nThird page opening. Repeated sentence. Closing remark."
+        val s0 = "First page intro."
+        val s1 = "Repeated sentence."
+        val s2 = "Third page opening."
+        val s3 = "Repeated sentence."
+        val s4 = "Closing remark."
+        var cursor = 0
+        val chunks = listOf(s0, s1, s2, s3, s4).map { sentence ->
+            val start = joined.indexOf(sentence, cursor)
+            cursor = start + sentence.length
+            Chunk(sentence, start, cursor)
+        }
+
+        val locations = PdfText.locateChunks(pages, chunks)
+        assertEquals(5, locations.size)
+        assertEquals(listOf(1, 1, 3, 3, 3), locations.map { it.page })
+        assertEquals(listOf(0, 1, 0, 1, 2), locations.map { it.pageSentenceIndex })
+        for (i in 1 until locations.size) {
+            assertTrue("offsetChars should advance for chunk $i", locations[i].offsetChars > locations[i - 1].offsetChars)
+        }
+    }
+
+    @Test fun locateChunksHandlesZeroBasedReadingStoreChunksWithDuplicatePages() {
+        val pages = listOf(
+            PdfPageText(0, "Alpha line. Shared line."),
+            PdfPageText(1, "Shared line. Beta line.")
+        )
+        val chunks = listOf("Alpha line.", "Shared line.", "Shared line.", "Beta line.")
+            .map { Chunk(it, 0, it.length) }
+
+        val locations = PdfText.locateChunks(pages, chunks)
+        assertEquals(4, locations.size)
+        assertEquals(listOf(1, 1, 2, 2), locations.map { it.page })
+        assertEquals(listOf(0, 1, 0, 1), locations.map { it.pageSentenceIndex })
+        for (i in 1 until locations.size) {
+            assertTrue(locations[i].offsetChars > locations[i - 1].offsetChars)
+        }
+    }
+
+    @Test fun resolveResumeContinuesFromSavedStatementOrFallsBackByPage() {
+        val pages = listOf(
+            PdfPageText(0, "Page one first. Page one second."),
+            PdfPageText(1, "Page two first. Page two second. Page two third.")
+        )
+        val chunks = listOf(
+            "Page one first.",
+            "Page one second.",
+            "Page two first.",
+            "Page two second.",
+            "Page two third."
+        ).map { Chunk(it, 0, it.length) }
+        val locations = PdfText.locateChunks(pages, chunks)
+
+        val exact = PdfText.resolveResume(
+            PdfReadingProgress(
+                lastPage = 2,
+                lastSentence = 3,
+                lastPageSentence = 1,
+                lastOffsetChars = locations[3].offsetChars,
+                totalSentences = locations.size,
+                finished = false
+            ),
+            locations,
+            chunks
+        )
+        assertNotNull(exact)
+        assertEquals(3, exact!!.chunkIndex)
+        assertEquals(2, exact.page)
+        assertEquals(1, exact.pageSentenceIndex)
+
+        val rechunked = PdfText.resolveResume(
+            PdfReadingProgress(
+                lastPage = 2,
+                lastSentence = 12,
+                lastPageSentence = 1,
+                lastOffsetChars = locations[3].offsetChars,
+                totalSentences = 20,
+                finished = false
+            ),
+            locations,
+            chunks
+        )
+        assertNotNull(rechunked)
+        assertEquals(2, rechunked!!.page)
+        assertEquals(3, rechunked.chunkIndex)
+    }
+
+    @Test fun resolveResumeReturnsNullWhenFinishedOrAtStart() {
+        val pages = listOf(PdfPageText(0, "Start sentence. Second sentence."))
+        val chunks = listOf("Start sentence.", "Second sentence.").map { Chunk(it, 0, it.length) }
+        val locations = PdfText.locateChunks(pages, chunks)
+
+        assertNull(
+            PdfText.resolveResume(
+                PdfReadingProgress(
+                    lastPage = 1,
+                    lastSentence = 1,
+                    lastPageSentence = 1,
+                    lastOffsetChars = locations[1].offsetChars,
+                    totalSentences = locations.size,
+                    finished = true
+                ),
+                locations,
+                chunks
+            )
+        )
+        assertNull(PdfText.resolveResume(PdfReadingProgress(), locations, chunks))
+        assertNull(
+            PdfText.resolveResume(
+                PdfReadingProgress(lastPage = 1, lastSentence = 0, lastPageSentence = 0, lastOffsetChars = 0, totalSentences = 2),
+                locations,
+                chunks
+            )
+        )
+    }
+
+    @Test fun pdfFilesCopyReturnsLowercaseSha256HexDigest() {
+        val data = "%PDF-1.4\nSample PDF content for resume hashing.\n".toByteArray(Charsets.UTF_8)
+        val expected = MessageDigest.getInstance("SHA-256")
+            .digest(data)
+            .joinToString("") { "%02x".format(it) }
+        val tempFile = Files.createTempFile("readly-pdf-copy-test", ".pdf").toFile()
+        try {
+            val digest = PdfFiles.copy(ByteArrayInputStream(data), tempFile, PdfLimits()) { false }
+            assertEquals(64, digest.length)
+            assertEquals(expected, digest)
+            assertArrayEquals(data, tempFile.readBytes())
+            assertEquals(expected, PdfFiles.sha256(tempFile))
+        } finally {
+            tempFile.delete()
+        }
     }
 }

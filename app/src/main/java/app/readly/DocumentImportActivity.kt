@@ -68,54 +68,75 @@ class DocumentImportActivity : Activity() {
             val ocr = PdfFiles.ocrOptions(this)
             val title = intent.getStringExtra(Intent.EXTRA_TITLE)?.substringBeforeLast('.')?.ifBlank { null }
                 ?: getString(if (image) R.string.image_default_title else R.string.pdf_default_title)
+            val kind = if (image) "image" else "pdf"
             text = PdfFiles.newText(this)
             val id = text.name.removeSuffix(".txt")
             importId = id
             val store = PdfImportStore(this)
             storage = store
-            store.create(id, title, if (image) "image" else "pdf")
-            source = store.sourceFile(id, if (image) "image" else "pdf")
+            store.create(id, title, kind)
+            source = store.sourceFile(id, kind)
             stage = "copying"
-            contentResolver.openInputStream(uri)?.use { input ->
+            val sha256 = contentResolver.openInputStream(uri)?.use { input ->
                 PdfFiles.copy(input, source, limits) { cancelled.get() || Thread.currentThread().isInterrupted }
             } ?: throw PdfImportException("Couldn't open the shared file. Share it again from the original app.")
             copied = true
-            stage = "extracting"
-            store.status(id, "extracting")
-            val summary = text.bufferedWriter().use { output ->
-                val isCancelled = { cancelled.get() || Thread.currentThread().isInterrupted }
-                val pages: PdfPages = if (image) {
-                    SharedImagePages(this, source, ocr, isCancelled,
-                        { store.status(id, "recognizing")
-                            runOnUiThread { if (!isFinishing) status.setText(R.string.image_recognizing) } },
-                        { draft -> store.savePage(id, draft, limits) })
-                } else {
-                    PdfOcrPages(this, source, limits, ocr, isCancelled,
-                        { page, count -> store.status(id, "recognizing")
-                            runOnUiThread { if (!isFinishing) status.text = getString(R.string.pdf_recognizing, page, count) } },
-                        { draft -> store.savePage(id, draft, limits) })
-                }
-                pages.use { document ->
-                    PdfText.extract(document, limits, output, { cancelled.get() || Thread.currentThread().isInterrupted }) { page, count ->
-                        store.status(id, "extracting")
-                        runOnUiThread {
-                            if (!isFinishing) {
-                                status.text = getString(R.string.pdf_extracting, page, count)
-                                progress.isIndeterminate = false
-                                progress.max = count
-                                progress.progress = page
+            val existing = store.findReadyBySha256(sha256, kind, source.length())
+            var handoffTitle = title
+            var handoffNotice = ""
+            var handoffDocumentId = id
+            if (existing != null) {
+                if (cancelled.get()) throw CancellationException("Document import cancelled")
+                store.discardImport(id, kind)
+                importId = null
+                source = null
+                copied = false
+                store.writeText(existing.id, limits, text)
+                handoffTitle = existing.title
+                handoffNotice = existing.notice
+                handoffDocumentId = existing.id
+                Log.i("Readly", "Reusing ready document import id=${existing.id} kind=$kind")
+            } else {
+                store.setSha256(id, sha256)
+                stage = "extracting"
+                store.status(id, "extracting")
+                val srcFile = source
+                val summary = text.bufferedWriter().use { output ->
+                    val isCancelled = { cancelled.get() || Thread.currentThread().isInterrupted }
+                    val pages: PdfPages = if (image) {
+                        SharedImagePages(this, srcFile, ocr, isCancelled,
+                            { store.status(id, "recognizing")
+                                runOnUiThread { if (!isFinishing) status.setText(R.string.image_recognizing) } },
+                            { draft -> store.savePage(id, draft, limits) })
+                    } else {
+                        PdfOcrPages(this, srcFile, limits, ocr, isCancelled,
+                            { page, count -> store.status(id, "recognizing")
+                                runOnUiThread { if (!isFinishing) status.text = getString(R.string.pdf_recognizing, page, count) } },
+                            { draft -> store.savePage(id, draft, limits) })
+                    }
+                    pages.use { document ->
+                        PdfText.extract(document, limits, output, { cancelled.get() || Thread.currentThread().isInterrupted }) { page, count ->
+                            store.status(id, "extracting")
+                            runOnUiThread {
+                                if (!isFinishing) {
+                                    status.text = getString(R.string.pdf_extracting, page, count)
+                                    progress.isIndeterminate = false
+                                    progress.max = count
+                                    progress.progress = page
+                                }
                             }
                         }
                     }
                 }
+                if (cancelled.get()) throw CancellationException("Document import cancelled")
+                if (summary.emptyPages > 0) {
+                    Log.w("Readly", "fallback=true attempted=pdf_page_text reason=no_extractable_text taken=skip_empty_pages pages=${summary.pages} emptyPages=${summary.emptyPages}")
+                }
+                val notice = if (image) "Image text recognized on this phone (${summary.ocrLabel}). OCR can make mistakes; check the original picture." else summary.notice
+                store.status(id, "ready", notice = notice)
+                handoffNotice = notice
+                Log.i("Readly", "Document import ready image=$image pages=${summary.pages} characters=${summary.characters} emptyPages=${summary.emptyPages} ocrPages=${summary.ocrPages}")
             }
-            if (cancelled.get()) throw CancellationException("Document import cancelled")
-            if (summary.emptyPages > 0) {
-                Log.w("Readly", "fallback=true attempted=pdf_page_text reason=no_extractable_text taken=skip_empty_pages pages=${summary.pages} emptyPages=${summary.emptyPages}")
-            }
-            val notice = if (image) "Image text recognized on this phone (${summary.ocrLabel}). OCR can make mistakes; check the original picture." else summary.notice
-            store.status(id, "ready", notice = notice)
-            Log.i("Readly", "Document import ready image=$image pages=${summary.pages} characters=${summary.characters} emptyPages=${summary.emptyPages} ocrPages=${summary.ocrPages}")
             stage = "starting playback"
             // Both the text and the service start are local; large books never enter the Binder payload.
             val textId = text.name
@@ -124,7 +145,7 @@ class DocumentImportActivity : Activity() {
                     if (!File(cacheDir, "pdf-imports/$textId").delete()) Log.w("Readly", "Couldn't remove cancelled PDF text import")
                 } else {
                     try {
-                        ReaderService.readPdf(this, textId, title, notice)
+                        ReaderService.readPdf(this, textId, handoffTitle, handoffNotice, handoffDocumentId)
                         startActivity(Intent(this, MainActivity::class.java)
                             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
                         finish()

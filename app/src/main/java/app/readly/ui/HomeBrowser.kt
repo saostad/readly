@@ -440,7 +440,9 @@ class HomeBrowser(
             else -> R.string.library_processing
         })
         val kind = activity.getString(if (item.kind == "image") R.string.library_picture else R.string.library_pdf)
-        labels.addView(text("$kind · $state", 12f, if (item.status == "failed") R.color.error else R.color.text2, lines = 1))
+        val progress = item.progressLabel()
+        val subtitle = if (progress != null) "$kind · $progress" else "$kind · $state"
+        labels.addView(text(subtitle, 12f, if (item.status == "failed") R.color.error else R.color.text2, lines = 1))
         addView(labels, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         setOnClickListener { DocumentPlayback.read(activity, item.id) }
     }

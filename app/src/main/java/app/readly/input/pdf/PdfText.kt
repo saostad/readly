@@ -1,5 +1,8 @@
 package app.readly.input.pdf
 
+import app.readly.playback.ReadingProgress
+import app.readly.text.Chunk
+import app.readly.text.TextSanitizer
 import java.io.Writer
 import java.util.concurrent.CancellationException
 
@@ -48,11 +51,37 @@ internal class PdfPageWriter(private val limit: Int, private val cancelled: () -
     override fun toString(): String = text.toString()
 }
 
+/** One saved page from [PdfImportStore], where [page] is the 0-based PDF page index. */
+data class PdfPageText(val page: Int, val text: String)
+
+/** Where a [Chunk] sits in a PDF: 1-based [page], 0-based [pageSentenceIndex] within that page, and cumulative [offsetChars]. */
+data class PdfChunkLocation(
+    val chunkIndex: Int,
+    val page: Int,
+    val pageSentenceIndex: Int,
+    val offsetChars: Int,
+)
+
+/** Saved reading position for an imported document. [lastPage] is 1-based (0 when never started). */
+data class PdfReadingProgress(
+    val lastPage: Int = 0,
+    val lastSentence: Int = 0,
+    val lastPageSentence: Int = 0,
+    val lastOffsetChars: Int = 0,
+    val totalSentences: Int = 0,
+    val finished: Boolean = false,
+) {
+    val hasResumePoint: Boolean
+        get() = !finished && (lastSentence > 0 || lastPageSentence > 0 || lastOffsetChars > 0 || lastPage > 1)
+}
+
 /** One extraction service for UI and other clients; page boundaries remain paragraph breaks. */
 object PdfText {
     fun isPdf(type: String?, name: String?, mime: String?): Boolean =
         listOf(type, mime).any { it?.substringBefore(';')?.trim()?.lowercase() in setOf("application/pdf", "application/x-pdf") } ||
             name?.endsWith(".pdf", true) == true
+
+    fun hasReadableText(normalizedPage: String): Boolean = normalizedPage.any { it.isLetterOrDigit() }
 
     fun extract(
         pages: PdfPages,
@@ -71,7 +100,7 @@ object PdfText {
             pages.writePage(page, writer)
             if (cancelled()) throw CancellationException("PDF import cancelled")
             val text = normalizePage(writer.toString())
-            if (text.none { it.isLetterOrDigit() }) {
+            if (!hasReadableText(text)) {
                 empty++
             } else {
                 val separator = if (characters == 0) "" else "\n\n"
@@ -88,6 +117,107 @@ object PdfText {
             throw PdfImportException("No readable text was found. Check the OCR language and settings in Voice & speed, or try a clearer picture or scan.")
         }
         return PdfSummary(pages.count, empty, characters, pages.ocrPages, pages.ocrLabel)
+    }
+
+    /**
+     * Maps each chunk in [chunks] to its 1-based PDF page number and 0-based statement
+     * index within that page. Blank/unreadable pages are skipped, preserving the true
+     * 1-based PDF page numbers of the remaining pages.
+     */
+    fun locateChunks(
+        pages: List<PdfPageText>,
+        chunks: List<Chunk>,
+        readHiddenText: Boolean = false,
+    ): List<PdfChunkLocation> {
+        if (chunks.isEmpty()) return emptyList()
+        val readable = pages.sortedBy { it.page }.filter { hasReadableText(it.text) }
+        val joinedRaw = readable.joinToString("\n\n") { it.text }
+        val persian = TextSanitizer.isPersianText(joinedRaw)
+        data class PageSpan(val pageNumber: Int, val start: Int, val end: Int)
+        val spans = mutableListOf<PageSpan>()
+        val joinedClean = StringBuilder()
+        for (p in readable) {
+            val cleanPage = TextSanitizer.sanitizePlain(p.text, readHiddenText, persian)
+            if (cleanPage.isEmpty()) continue
+            if (joinedClean.isNotEmpty()) joinedClean.append("\n\n")
+            val start = joinedClean.length
+            joinedClean.append(cleanPage)
+            spans.add(PageSpan(p.page + 1, start, joinedClean.length))
+        }
+        val fullClean = joinedClean.toString()
+        var searchCursor = 0
+        var offsetChars = 0
+        val pageCounts = mutableMapOf<Int, Int>()
+        return chunks.mapIndexed { index, chunk ->
+            val found = if (fullClean.isNotEmpty() && chunk.text.isNotEmpty()) {
+                fullClean.indexOf(chunk.text, searchCursor).takeIf { it >= 0 }
+            } else {
+                null
+            }
+            val pos = found ?: chunk.start.coerceAtLeast(searchCursor)
+            if (found != null) searchCursor = found + chunk.text.length
+            val span = spans.lastOrNull { it.start <= pos } ?: spans.firstOrNull()
+            val pageNumber = span?.pageNumber ?: 1
+            val sentenceInPage = pageCounts.getOrDefault(pageNumber, 0)
+            pageCounts[pageNumber] = sentenceInPage + 1
+            val location = PdfChunkLocation(
+                chunkIndex = index,
+                page = pageNumber,
+                pageSentenceIndex = sentenceInPage,
+                offsetChars = offsetChars,
+            )
+            offsetChars += chunk.text.length
+            location
+        }
+    }
+
+    /**
+     * Resolves the statement [PdfChunkLocation] to continue from for [progress], or null
+     * when the document has not been started, was finished, or resolves to statement 0.
+     */
+    fun resolveResume(
+        progress: PdfReadingProgress,
+        locations: List<PdfChunkLocation>,
+        chunks: List<Chunk>,
+    ): PdfChunkLocation? {
+        if (!progress.hasResumePoint || chunks.isEmpty() || locations.size != chunks.size) return null
+        val candidate: PdfChunkLocation = when {
+            progress.totalSentences == chunks.size &&
+                progress.lastSentence in locations.indices &&
+                (progress.lastPage <= 0 || locations[progress.lastSentence].page == progress.lastPage) ->
+                locations[progress.lastSentence]
+            progress.lastPage > 0 -> {
+                val onPage = locations.filter { it.page == progress.lastPage }
+                when {
+                    onPage.isNotEmpty() -> onPage[progress.lastPageSentence.coerceIn(0, onPage.lastIndex)]
+                    else -> {
+                        val afterPage = locations.firstOrNull { it.page > progress.lastPage }
+                        if (afterPage != null) {
+                            afterPage
+                        } else if (progress.lastOffsetChars > 0) {
+                            val idx = ReadingProgress.indexAt(
+                                chunks.map { it.text.length },
+                                progress.lastOffsetChars.toLong(),
+                                1.0,
+                            )
+                            locations[idx.coerceIn(0, locations.lastIndex)]
+                        } else {
+                            locations[progress.lastSentence.coerceIn(0, locations.lastIndex)]
+                        }
+                    }
+                }
+            }
+            progress.lastOffsetChars > 0 -> {
+                val idx = ReadingProgress.indexAt(
+                    chunks.map { it.text.length },
+                    progress.lastOffsetChars.toLong(),
+                    1.0,
+                )
+                locations[idx.coerceIn(0, locations.lastIndex)]
+            }
+            else -> locations[progress.lastSentence.coerceIn(0, locations.lastIndex)]
+        }
+        return candidate.takeIf { it.chunkIndex > 0 }
     }
 
     internal fun normalizePage(raw: String): String = raw.replace("\r\n", "\n").replace('\r', '\n')

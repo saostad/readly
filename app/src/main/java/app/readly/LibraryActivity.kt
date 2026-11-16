@@ -80,11 +80,11 @@ class LibraryActivity : Activity() {
         box.addView(button("Read") { open(item) })
         results.addView(box)
     }
-    private fun open(item: LibraryResult) {
+    private fun open(item: LibraryResult, fromBookmark: Boolean = false) {
         try {
             when {
                 item.readingId != null -> {
-                    ReaderService.readSaved(this, item.readingId, item.sentence)
+                    ReaderService.readSaved(this, item.readingId, item.sentence, fromBookmark)
                     startActivity(Intent(this, NowPlayingActivity::class.java))
                 }
                 item.documentId != null -> DocumentPlayback.read(this, item.documentId)
@@ -100,7 +100,7 @@ class LibraryActivity : Activity() {
         box.addView(TextView(this).apply { text = "${mark.title} · Sentence ${mark.sentence + 1}"; textSize = 17f; setTextColor(getColor(R.color.text)) })
         box.addView(TextView(this).apply { text = mark.quote; setTextColor(getColor(R.color.text2)) })
         if (mark.note.isNotBlank()) box.addView(TextView(this).apply { text = mark.note; setTextColor(getColor(R.color.accent)) })
-        box.addView(button("Read from here") { open(LibraryResult(mark.id, mark.title, "", readingId = mark.readingId, sentence = mark.sentence)) })
+        box.addView(button("Read from here") { open(LibraryResult(mark.id, mark.title, "", readingId = mark.readingId, sentence = mark.sentence), fromBookmark = true) })
         box.addView(button("Edit note") { BookmarkDialogs.edit(this, mark, ::load) })
         box.addView(button("Delete bookmark") {
             AlertDialog.Builder(this).setTitle("Delete bookmark?").setMessage("The saved reading will remain in your library.")

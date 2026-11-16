@@ -277,7 +277,10 @@ class SettingsSheet(
                         android.widget.Toast.makeText(activity, R.string.pdf_imports_empty, android.widget.Toast.LENGTH_SHORT).show()
                     } else {
                         android.app.AlertDialog.Builder(activity).setTitle(R.string.pdf_imports_history)
-                            .setItems(imports.map { "${it.title} · ${it.status}" }.toTypedArray()) { _, index ->
+                            .setItems(imports.map {
+                                val detail = it.progressLabel() ?: it.status
+                                "${it.title} · $detail"
+                            }.toTypedArray()) { _, index ->
                                 val item = imports[index]
                                 if (item.status != "ready") {
                                     android.widget.Toast.makeText(activity, R.string.pdf_imports_unready, android.widget.Toast.LENGTH_LONG).show()

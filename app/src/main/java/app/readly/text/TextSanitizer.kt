@@ -35,13 +35,23 @@ object TextSanitizer {
         // markup never votes. Callers detect the language afterwards, so
         // there is no language to pass in.
         val persian = isPersianText(input)
-        val paras = when (format) {
+        return when (format) {
             SourceFormat.HTML -> htmlParagraphs(input, readHiddenText, persian)
+                .mapNotNull { cleanup(it) }
+                .joinToString("\n\n")
             SourceFormat.PLAIN, SourceFormat.MARKDOWN ->
-                markdownParagraphs(if (readHiddenText) input else dropMarkdownImages(input), persian)
+                sanitizePlain(input, readHiddenText, persian)
         }
-        return paras.mapNotNull { cleanup(it) }.joinToString("\n\n")
     }
+
+    /** Sanitizes plain or Markdown [input] using [persian] for code-block notices. */
+    fun sanitizePlain(
+        input: String,
+        readHiddenText: Boolean = false,
+        persian: Boolean = isPersianText(input),
+    ): String = markdownParagraphs(if (readHiddenText) input else dropMarkdownImages(input), persian)
+        .mapNotNull { cleanup(it) }
+        .joinToString("\n\n")
 
     private val htmlTag = Regex("""<[^>]*>""")
 
