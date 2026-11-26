@@ -66,6 +66,12 @@ data class ReaderSnapshot(
     val stepSinceMs: Long = 0L,
     /** Immutable saved text behind Search and Bookmarks. */
     val readingId: String = "",
+    /** Imported document id when reading a saved PDF/image ("" otherwise). */
+    val documentId: String = "",
+    /** Current 1-based PDF page number (0 when not reading a PDF). */
+    val currentPage: Int = 0,
+    /** Total pages in the current PDF (0 when not reading a PDF). */
+    val totalPages: Int = 0,
 )
 
 /**

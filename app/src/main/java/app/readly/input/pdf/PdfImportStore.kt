@@ -109,6 +109,7 @@ class PdfImportStore(private val context: Context) : SQLiteOpenHelper(context, "
         val lastOffsetChars: Int = 0,
         val totalSentences: Int = 0,
         val finished: Boolean = false,
+        val pageCount: Int = 0,
     ) {
         val progress: PdfReadingProgress
             get() = PdfReadingProgress(lastPage, lastSentence, lastPageSentence, lastOffsetChars, totalSentences, finished)
@@ -118,8 +119,12 @@ class PdfImportStore(private val context: Context) : SQLiteOpenHelper(context, "
             finished -> "Finished"
             (lastSentence > 0 || lastOffsetChars > 0) && totalSentences > 0 ->
                 if (kind == "image") "Sentence ${lastSentence + 1} of $totalSentences"
+                else if (pageCount > 0) "Page $lastPage of $pageCount · Sentence ${lastSentence + 1} of $totalSentences"
                 else "Page $lastPage · Sentence ${lastSentence + 1} of $totalSentences"
-            (lastSentence > 0 || lastOffsetChars > 0) && lastPage > 0 && kind != "image" -> "Page $lastPage"
+            (lastSentence > 0 || lastOffsetChars > 0) && lastPage > 0 && kind != "image" ->
+                if (pageCount > 0) "Page $lastPage of $pageCount" else "Page $lastPage"
+            kind == "pdf" && pageCount > 0 ->
+                if (pageCount == 1) "1 page" else "$pageCount pages"
             else -> null
         }
     }
@@ -136,6 +141,7 @@ class PdfImportStore(private val context: Context) : SQLiteOpenHelper(context, "
         lastOffsetChars = cursor.getInt(8),
         totalSentences = cursor.getInt(9),
         finished = cursor.getInt(10) != 0,
+        pageCount = cursor.getInt(11),
     )
 
     fun list(): List<Import> = readableDatabase.query(
@@ -320,6 +326,7 @@ class PdfImportStore(private val context: Context) : SQLiteOpenHelper(context, "
         val IMPORT_COLUMNS = arrayOf(
             "id", "title", "status", "notice", "kind",
             "last_page", "last_sentence", "last_page_sentence", "last_offset", "total_sentences", "finished",
+            "COALESCE((SELECT MAX(p.page) + 1 FROM pages p WHERE p.import_id = imports.id), 0)",
         )
     }
 }

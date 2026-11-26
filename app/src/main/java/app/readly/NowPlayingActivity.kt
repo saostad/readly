@@ -49,6 +49,7 @@ class NowPlayingActivity : Activity() {
     private lateinit var loadingTitle: TextView
     private lateinit var loadingDetail: TextView
     private lateinit var loadingHint: TextView
+    private lateinit var goToPageButton: Button
 
     /** Ticks the loading step's elapsed time once a second while a step is running. */
     private val stepTicker = Runnable { renderLoading(ReaderState.snapshot) }
@@ -98,6 +99,18 @@ class NowPlayingActivity : Activity() {
         loadingTitle = findViewById(R.id.npLoadingTitle)
         loadingDetail = findViewById(R.id.npLoadingDetail)
         loadingHint = findViewById(R.id.npLoadingHint)
+        goToPageButton = findViewById(R.id.npGoToPage)
+        goToPageButton.setOnClickListener {
+            val snap = ReaderState.snapshot
+            if (snap.documentId.isNotBlank()) {
+                app.readly.input.pdf.DocumentPlayback.showPagePickerDialog(
+                    this,
+                    snap.title,
+                    snap.totalPages,
+                    snap.currentPage.coerceAtLeast(1),
+                ) { page -> ReaderService.seekToPage(this, page) }
+            }
+        }
         askDownload.setOnClickListener { sendAction(ReaderService.ACTION_DOWNLOAD_VOICE) }
         findViewById<Button>(R.id.npAskReadAnyway).setOnClickListener {
             sendAction(ReaderService.ACTION_READ_ANYWAY)
@@ -170,8 +183,13 @@ class NowPlayingActivity : Activity() {
         } else {
             hasStarted = true
         }
-        findViewById<Button>(R.id.npBookmark).isEnabled = snap.readingId.isNotBlank() &&
-            snap.status in listOf(ReaderStatus.READING, ReaderStatus.PAUSED, ReaderStatus.FINISHED)
+        val activeOrDone = snap.status in listOf(ReaderStatus.READING, ReaderStatus.PAUSED, ReaderStatus.FINISHED)
+        findViewById<Button>(R.id.npBookmark).isEnabled = snap.readingId.isNotBlank() && activeOrDone
+        goToPageButton.visibility = if (snap.documentId.isNotBlank() && snap.totalPages > 1 && activeOrDone) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
         renderArt(snap)
         renderBrowserRow(snap)
         renderAskRow(snap)
@@ -325,8 +343,13 @@ class NowPlayingActivity : Activity() {
         } else {
             null
         }
+        val pagePrefix = if (snap.currentPage > 0 && snap.totalPages > 0) {
+            "Page ${snap.currentPage} of ${snap.totalPages} · "
+        } else {
+            ""
+        }
         if (estimate == null) {
-            sentenceLabel.text = getString(R.string.sentence_format, shown + 1, snap.total)
+            sentenceLabel.text = pagePrefix + getString(R.string.sentence_format, shown + 1, snap.total)
             timeLeft.visibility = View.GONE
             return
         }
@@ -336,7 +359,7 @@ class NowPlayingActivity : Activity() {
         } else {
             estimate.durationMs * shown / snap.total
         }
-        sentenceLabel.text = getString(
+        sentenceLabel.text = pagePrefix + getString(
             R.string.elapsed_format, ReadingProgress.clock(positionMs), shown + 1, snap.total,
         )
         timeLeft.visibility = View.VISIBLE

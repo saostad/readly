@@ -276,4 +276,69 @@ class PdfTextTest {
             tempFile.delete()
         }
     }
+
+    @Test fun resolveStartPageFindsPageSkipsBlankClampsAndHandlesEmpty() {
+        val pages = listOf(
+            PdfPageText(0, "Page one text."),
+            PdfPageText(1, "   "),
+            PdfPageText(2, "Page three first. Page three second."),
+            PdfPageText(3, "Page four text."),
+        )
+        val chunks = listOf(
+            "Page one text.",
+            "Page three first.",
+            "Page three second.",
+            "Page four text.",
+        ).map { Chunk(it, 0, it.length) }
+        val locations = PdfText.locateChunks(pages, chunks)
+
+        assertNull(PdfText.resolveStartPage(0, locations))
+        assertNull(PdfText.resolveStartPage(-1, locations))
+        assertNull(PdfText.resolveStartPage(1, emptyList()))
+
+        val exact = PdfText.resolveStartPage(3, locations)
+        assertNotNull(exact)
+        assertEquals(1, exact!!.chunkIndex)
+        assertEquals(3, exact.page)
+        assertEquals(0, exact.pageSentenceIndex)
+
+        val skippedBlank = PdfText.resolveStartPage(2, locations)
+        assertNotNull(skippedBlank)
+        assertEquals(3, skippedBlank!!.page)
+        assertEquals(1, skippedBlank.chunkIndex)
+
+        val beyondEnd = PdfText.resolveStartPage(99, locations)
+        assertNotNull(beyondEnd)
+        assertEquals(4, beyondEnd!!.page)
+        assertEquals(3, beyondEnd.chunkIndex)
+    }
+
+    @Test fun extractFromStartPageSkipsEarlierPagesAndValidatesBounds() {
+        val output = StringWriter()
+        val progress = mutableListOf<Int>()
+        val summary = PdfText.extract(
+            pages("Index page.", "Introduction.", "Section two starts here.", "Conclusion."),
+            PdfLimits(),
+            output,
+            progress = { page, _ -> progress += page },
+            startPage = 3,
+        )
+        assertEquals("Section two starts here.\n\nConclusion.", output.toString())
+        assertEquals(listOf(3, 4), progress)
+        assertEquals(4, summary.pages)
+        assertEquals(0, summary.emptyPages)
+
+        try {
+            PdfText.extract(pages("One.", "Two."), PdfLimits(), StringWriter(), startPage = 0)
+            fail("Expected PdfImportException for startPage = 0")
+        } catch (expected: PdfImportException) {
+            assertTrue(expected.message!!.contains("between 1 and 2"))
+        }
+        try {
+            PdfText.extract(pages("One.", "Two."), PdfLimits(), StringWriter(), startPage = 3)
+            fail("Expected PdfImportException for startPage > count")
+        } catch (expected: PdfImportException) {
+            assertTrue(expected.message!!.contains("between 1 and 2"))
+        }
+    }
 }

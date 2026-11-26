@@ -444,6 +444,16 @@ class HomeBrowser(
         val subtitle = if (progress != null) "$kind · $progress" else "$kind · $state"
         labels.addView(text(subtitle, 12f, if (item.status == "failed") R.color.error else R.color.text2, lines = 1))
         addView(labels, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (item.status == "ready" && item.kind == "pdf") {
+            addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+                setText(R.string.pdf_start_from_page_short)
+                setOnClickListener { DocumentPlayback.promptStartPage(activity, item.id) }
+            })
+            setOnLongClickListener {
+                DocumentPlayback.promptStartPage(activity, item.id)
+                true
+            }
+        }
         setOnClickListener { DocumentPlayback.read(activity, item.id) }
     }
 

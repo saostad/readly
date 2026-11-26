@@ -89,12 +89,14 @@ object PdfText {
         output: Writer,
         cancelled: () -> Boolean = { false },
         progress: (Int, Int) -> Unit = { _, _ -> },
+        startPage: Int = 1,
     ): PdfSummary {
         limits.validate()
         if (pages.count <= 0) throw PdfImportException("This PDF has no pages to read.")
+        if (startPage !in 1..pages.count) throw PdfImportException("Starting page must be between 1 and ${pages.count}.")
         var characters = 0
         var empty = 0
-        for (page in 0 until pages.count) {
+        for (page in (startPage - 1) until pages.count) {
             if (cancelled()) throw CancellationException("PDF import cancelled")
             val writer = PdfPageWriter(limits.maxTextChars - characters, cancelled)
             pages.writePage(page, writer)
@@ -218,6 +220,22 @@ object PdfText {
             else -> locations[progress.lastSentence.coerceIn(0, locations.lastIndex)]
         }
         return candidate.takeIf { it.chunkIndex > 0 }
+    }
+
+    /**
+     * Resolves the first [PdfChunkLocation] on 1-based [startPage]. If [startPage] has
+     * no readable text, advances to the first readable page after [startPage] (or falls
+     * back to the first statement of the last readable page when [startPage] exceeds it).
+     */
+    fun resolveStartPage(
+        startPage: Int,
+        locations: List<PdfChunkLocation>,
+    ): PdfChunkLocation? {
+        if (startPage <= 0 || locations.isEmpty()) return null
+        locations.firstOrNull { it.page == startPage }?.let { return it }
+        locations.firstOrNull { it.page > startPage }?.let { return it }
+        val lastReadablePage = locations.maxOf { it.page }
+        return locations.firstOrNull { it.page == lastReadablePage }
     }
 
     internal fun normalizePage(raw: String): String = raw.replace("\r\n", "\n").replace('\r', '\n')

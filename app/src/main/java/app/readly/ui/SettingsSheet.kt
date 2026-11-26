@@ -284,6 +284,22 @@ class SettingsSheet(
                                 val item = imports[index]
                                 if (item.status != "ready") {
                                     android.widget.Toast.makeText(activity, R.string.pdf_imports_unready, android.widget.Toast.LENGTH_LONG).show()
+                                } else if (item.kind == "pdf") {
+                                    val continueLabel = if (item.progress.hasResumePoint) {
+                                        activity.getString(R.string.pdf_continue_reading_format, item.progressLabel() ?: "Page ${item.lastPage}")
+                                    } else {
+                                        activity.getString(R.string.pdf_start_reading)
+                                    }
+                                    android.app.AlertDialog.Builder(activity)
+                                        .setTitle(item.title)
+                                        .setPositiveButton(continueLabel) { _, _ ->
+                                            app.readly.input.pdf.DocumentPlayback.read(activity, item.id)
+                                        }
+                                        .setNeutralButton(R.string.pdf_start_from_page_title) { _, _ ->
+                                            app.readly.input.pdf.DocumentPlayback.promptStartPage(activity, item.id)
+                                        }
+                                        .setNegativeButton(android.R.string.cancel, null)
+                                        .show()
                                 } else {
                                     app.readly.input.pdf.DocumentPlayback.read(activity, item.id)
                                 }

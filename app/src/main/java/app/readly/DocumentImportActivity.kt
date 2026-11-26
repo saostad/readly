@@ -3,12 +3,16 @@ package app.readly
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.text.InputType
 import android.util.Log
+import android.view.View
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import app.readly.input.pdf.PdfBoxPages
 import app.readly.input.pdf.PdfOcrPages
 import app.readly.input.pdf.SharedImagePages
 import app.readly.input.pdf.PdfPages
@@ -19,8 +23,10 @@ import app.readly.input.pdf.PdfText
 import app.readly.playback.ReaderService
 import java.io.File
 import java.util.concurrent.CancellationException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Keeps the URI grant alive while a shared document/image is imported off the UI thread. */
 class DocumentImportActivity : Activity() {
@@ -28,6 +34,9 @@ class DocumentImportActivity : Activity() {
     private val cancelled = AtomicBoolean(false)
     private lateinit var status: TextView
     private lateinit var progress: ProgressBar
+    private lateinit var pagePanel: LinearLayout
+    @Volatile
+    private var pendingStartChoice: CountDownLatch? = null
     private var stage = "opening"
     private val image: Boolean get() = intent.getBooleanExtra("sharedImage", false)
 
@@ -42,10 +51,16 @@ class DocumentImportActivity : Activity() {
         box.addView(status)
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate = true }
         box.addView(progress)
+        pagePanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        box.addView(pagePanel)
         box.addView(Button(this).apply {
             setText(android.R.string.cancel)
             setOnClickListener {
                 cancelled.set(true)
+                pendingStartChoice?.countDown()
                 Toast.makeText(this@DocumentImportActivity, R.string.pdf_cancelled, Toast.LENGTH_SHORT).show()
                 finish()
             }
@@ -82,6 +97,13 @@ class DocumentImportActivity : Activity() {
             } ?: throw PdfImportException("Couldn't open the shared file. Share it again from the original app.")
             copied = true
             val existing = store.findReadyBySha256(sha256, kind, source.length())
+            val chosenStartPage = if (!image) {
+                val totalPages = if (existing != null && existing.pageCount > 0) existing.pageCount
+                else PdfBoxPages(this, source).use { it.count }
+                if (totalPages > 1) promptStartPage(totalPages, existing) else 0
+            } else {
+                0
+            }
             var handoffTitle = title
             var handoffNotice = ""
             var handoffDocumentId = id
@@ -112,20 +134,27 @@ class DocumentImportActivity : Activity() {
                         PdfOcrPages(this, srcFile, limits, ocr, isCancelled,
                             { page, count -> store.status(id, "recognizing")
                                 runOnUiThread { if (!isFinishing) status.text = getString(R.string.pdf_recognizing, page, count) } },
-                            { draft -> store.savePage(id, draft, limits) })
+                            { draft -> store.savePage(id, draft, limits) },
+                            ocrStartPage = chosenStartPage.coerceAtLeast(1))
                     }
                     pages.use { document ->
-                        PdfText.extract(document, limits, output, { cancelled.get() || Thread.currentThread().isInterrupted }) { page, count ->
-                            store.status(id, "extracting")
-                            runOnUiThread {
-                                if (!isFinishing) {
-                                    status.text = getString(R.string.pdf_extracting, page, count)
-                                    progress.isIndeterminate = false
-                                    progress.max = count
-                                    progress.progress = page
+                        PdfText.extract(
+                            document,
+                            limits,
+                            output,
+                            { cancelled.get() || Thread.currentThread().isInterrupted },
+                            progress = { page, count ->
+                                store.status(id, "extracting")
+                                runOnUiThread {
+                                    if (!isFinishing) {
+                                        status.text = getString(R.string.pdf_extracting, page, count)
+                                        progress.isIndeterminate = false
+                                        progress.max = count
+                                        progress.progress = page
+                                    }
                                 }
-                            }
-                        }
+                            },
+                        )
                     }
                 }
                 if (cancelled.get()) throw CancellationException("Document import cancelled")
@@ -145,7 +174,7 @@ class DocumentImportActivity : Activity() {
                     if (!File(cacheDir, "pdf-imports/$textId").delete()) Log.w("Readly", "Couldn't remove cancelled PDF text import")
                 } else {
                     try {
-                        ReaderService.readPdf(this, textId, handoffTitle, handoffNotice, handoffDocumentId)
+                        ReaderService.readPdf(this, textId, handoffTitle, handoffNotice, handoffDocumentId, chosenStartPage)
                         startActivity(Intent(this, MainActivity::class.java)
                             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
                         finish()
@@ -187,8 +216,102 @@ class DocumentImportActivity : Activity() {
         }
     }
 
+    private fun promptStartPage(totalPages: Int, existing: PdfImportStore.Import?): Int {
+        if (cancelled.get()) throw CancellationException("PDF import cancelled")
+        val latch = CountDownLatch(1)
+        val choice = AtomicInteger(0)
+        pendingStartChoice = latch
+        runOnUiThread {
+            if (isFinishing || isDestroyed || cancelled.get()) {
+                latch.countDown()
+                return@runOnUiThread
+            }
+            val density = resources.displayMetrics.density
+            val marginTop = (12 * density).toInt()
+            val docTitle = existing?.title
+                ?: intent.getStringExtra(Intent.EXTRA_TITLE)?.substringBeforeLast('.')?.ifBlank { null }
+                ?: getString(R.string.pdf_default_title)
+            status.text = getString(R.string.pdf_start_from_page_range, docTitle, totalPages)
+            progress.visibility = View.GONE
+            pagePanel.removeAllViews()
+            pagePanel.addView(TextView(this, null, 0, R.style.Body).apply {
+                text = getString(R.string.pdf_start_from_page_input_label, totalPages)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = marginTop }
+            })
+            val defaultPage = (existing?.lastPage?.takeIf { it > 0 } ?: 1).coerceIn(1, totalPages)
+            val input = EditText(this, null, 0, R.style.BoxEdit).apply {
+                inputType = InputType.TYPE_CLASS_NUMBER
+                setText(defaultPage.toString())
+                setSelectAllOnFocus(true)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = (8 * density).toInt() }
+            }
+            pagePanel.addView(input)
+            fun confirmEnteredPage() {
+                val entered = input.text.toString().trim().toIntOrNull()
+                if (entered == null || entered !in 1..totalPages) {
+                    Toast.makeText(this, getString(R.string.pdf_start_from_page_invalid, totalPages), Toast.LENGTH_SHORT).show()
+                    return
+                }
+                choice.set(entered)
+                pagePanel.visibility = View.GONE
+                pagePanel.removeAllViews()
+                progress.visibility = View.VISIBLE
+                latch.countDown()
+            }
+            if (existing != null && existing.progress.hasResumePoint) {
+                val resumeLabel = existing.progressLabel() ?: "Page ${existing.lastPage}"
+                pagePanel.addView(Button(this, null, 0, R.style.Btn_Primary).apply {
+                    text = getString(R.string.pdf_continue_reading_format, resumeLabel)
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = marginTop }
+                    setOnClickListener {
+                        choice.set(0)
+                        pagePanel.visibility = View.GONE
+                        pagePanel.removeAllViews()
+                        progress.visibility = View.VISIBLE
+                        latch.countDown()
+                    }
+                })
+                pagePanel.addView(Button(this, null, 0, R.style.Btn_Ghost).apply {
+                    setText(R.string.pdf_start_at_selected_page)
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = (8 * density).toInt() }
+                    setOnClickListener { confirmEnteredPage() }
+                })
+            } else {
+                pagePanel.addView(Button(this, null, 0, R.style.Btn_Primary).apply {
+                    setText(R.string.pdf_start_reading)
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = marginTop }
+                    setOnClickListener { confirmEnteredPage() }
+                })
+            }
+            pagePanel.visibility = View.VISIBLE
+        }
+        try {
+            latch.await()
+        } finally {
+            if (pendingStartChoice === latch) pendingStartChoice = null
+        }
+        if (cancelled.get()) throw CancellationException("PDF import cancelled")
+        return choice.get()
+    }
+
     override fun onDestroy() {
         cancelled.set(true)
+        pendingStartChoice?.countDown()
         executor.shutdownNow()
         super.onDestroy()
     }

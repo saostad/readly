@@ -20,6 +20,7 @@ class PdfOcrPages(
     private val cancelled: () -> Boolean,
     private val onOcr: (Int, Int) -> Unit,
     private val save: (PdfPageDraft) -> Unit,
+    private val ocrStartPage: Int = 1,
 ) : PdfPages {
     init { limits.validate(); options.validate() }
     private val text = PdfBoxPages(context, file)
@@ -38,7 +39,7 @@ class PdfOcrPages(
         val writer = PdfPageWriter(limits.maxTextChars, cancelled)
         text.writePage(index, writer)
         val extracted = writer.toString()
-        if (extracted.any { it.isLetterOrDigit() } || !options.enabled) {
+        if (extracted.any { it.isLetterOrDigit() } || !options.enabled || index < ocrStartPage - 1) {
             output.write(extracted)
             save(PdfPageDraft(index, extracted, PdfPageSource.TEXT_LAYER, null, null))
             return

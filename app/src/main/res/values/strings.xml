@@ -363,4 +363,13 @@
     <string name="settings_feeds">Feeds &amp; time zone</string>
     <string name="settings_voices">Voices</string>
     <string name="settings_documents">Documents &amp; OCR</string>
+    <string name="pdf_start_from_page_short">Page…</string>
+    <string name="pdf_go_to_page">Go to page…</string>
+    <string name="pdf_start_from_page_title">Start from page</string>
+    <string name="pdf_start_from_page_range">%1$s (pages 1–%2$d)</string>
+    <string name="pdf_start_from_page_input_label">Start from page (1–%1$d)</string>
+    <string name="pdf_start_from_page_invalid">Enter a page number between 1 and %1$d.</string>
+    <string name="pdf_start_reading">Start reading</string>
+    <string name="pdf_continue_reading_format">Continue (%1$s)</string>
+    <string name="pdf_start_at_selected_page">Start from entered page</string>
 </resources>
