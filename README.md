@@ -376,6 +376,8 @@ the [OCR model license](app/src/main/assets/ocr/LICENSE),
 [PDFBox notices](app/src/main/assets/pdfbox/NOTICE.txt), and the
 [Phonon documentation](tools/phonon/README.md) for included notices and
 licensing information; other voice models remain subject to their providers' terms.
+The default Persian voice is powered by [tiny-ava](https://huggingface.co/mehdi-hf/tiny-ava)
+(Mehdi Allahyari / OncillaAI, CC BY 4.0).
 
 ### Browse, search, and bookmarks
 

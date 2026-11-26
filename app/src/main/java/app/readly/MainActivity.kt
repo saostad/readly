@@ -678,7 +678,7 @@ class MainActivity : Activity(), InstallTask.Listener {
             // A Persian-only setup reads Persian right away, Smart voice or
             // not: the explicit fa pick covers MainVoice mode too.
             ReaderService.setPackIdForLang(this, "fa", POCKET_PACK_ID)
-            Log.i("Readly", "Persian voice set to Pocket Farsi after setup install")
+            Log.i("Readly", "Persian voice set to Tiny Ava after setup install")
         }
         installingPackId = null
         task = null
@@ -898,6 +898,6 @@ class MainActivity : Activity(), InstallTask.Listener {
         const val EXTRA_NEED_VOICE = "needVoice"
 
         /** The Persian-only setup alternative to the main voice. */
-        const val POCKET_PACK_ID = "pocket-farsi-v2"
+        const val POCKET_PACK_ID = "tiny-ava"
     }
 }

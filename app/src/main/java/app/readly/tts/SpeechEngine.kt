@@ -8,6 +8,7 @@ import app.readly.tts.phonon.PhononEngine
 import app.readly.tts.pocket.G2p
 import app.readly.tts.pocket.PocketEngine
 import app.readly.tts.pocket.PocketTuning
+import app.readly.tts.tinyava.TinyAvaEngine
 import com.k2fsa.sherpa.onnx.GenerationConfig
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
@@ -41,6 +42,7 @@ class SpeechEngine(
     private val pack = store.pack
     private val dir = store.modelDir.absolutePath
     private val tts: OfflineTts?
+    private val tinyAva: TinyAvaEngine?
     private val pocket: PocketEngine?
     private val phonon: PhononEngine?
 
@@ -48,6 +50,18 @@ class SpeechEngine(
         if (!store.isInstalled()) throw IllegalStateException("Voice model is not installed")
         val startMs = SystemClock.elapsedRealtime()
         when (pack.family) {
+            VoiceFamily.TINY_AVA -> {
+                tinyAva = try {
+                    TinyAvaEngine(File(store.modelDir, pack.modelFile), g2pProvider)
+                } catch (e: Exception) {
+                    throw IOException(loadError(dir, e), e)
+                } catch (e: LinkageError) {
+                    throw IOException(loadError(dir, e), e)
+                }
+                tts = null
+                pocket = null
+                phonon = null
+            }
             VoiceFamily.POCKET -> {
                 pocket = try {
                     PocketEngine(File(store.modelDir, pack.modelFile), g2pProvider, pocketTuning)
@@ -59,6 +73,7 @@ class SpeechEngine(
                     throw IOException(loadError(dir, e), e)
                 }
                 tts = null
+                tinyAva = null
                 phonon = null
             }
             VoiceFamily.PHONON -> {
@@ -72,6 +87,7 @@ class SpeechEngine(
                     throw IOException(loadError(dir, e), e)
                 }
                 tts = null
+                tinyAva = null
                 pocket = null
             }
             else -> {
@@ -83,6 +99,7 @@ class SpeechEngine(
                     // Missing native libs surface as UnsatisfiedLinkError, not Exception.
                     throw IOException(loadError(dir, e), e)
                 }
+                tinyAva = null
                 pocket = null
                 phonon = null
             }
@@ -92,7 +109,7 @@ class SpeechEngine(
 
     /** Sample rate of [synthesize] output. */
     val sampleRate: Int
-        get() = phonon?.sampleRate ?: pocket?.sampleRate ?: tts!!.sampleRate()
+        get() = phonon?.sampleRate ?: tinyAva?.sampleRate ?: pocket?.sampleRate ?: tts!!.sampleRate()
 
     /**
      * Synthesizes [text] to mono float PCM. Generation stops early (returning audio so far)
@@ -114,6 +131,8 @@ class SpeechEngine(
                 "(0..${speakers.size - 1})"
         }
         if (text.isBlank()) return FloatArray(0)
+        // Tiny Ava ignores lang (Persian only) and logs its own synthesize line.
+        tinyAva?.let { return it.synthesize(text, speed, isStopped, onChunk) }
         // Pocket ignores lang (Persian only) and logs its own synthesize line.
         pocket?.let { return it.synthesize(text, speed, isStopped, onChunk) }
         // Phonon ignores lang too (English only) and logs its own synthesize line.
@@ -172,6 +191,8 @@ class SpeechEngine(
     override fun close() {
         if (phonon != null) {
             phonon.close()
+        } else if (tinyAva != null) {
+            tinyAva.close()
         } else if (pocket != null) {
             pocket.close()
         } else {
@@ -232,6 +253,7 @@ class SpeechEngine(
                 debug = false,
                 provider = "cpu",
             )
+            VoiceFamily.TINY_AVA -> error("Tiny Ava is not a sherpa-onnx voice")
             VoiceFamily.POCKET -> error("Pocket is not a sherpa-onnx voice")
             VoiceFamily.PHONON -> error("Phonon is not a sherpa-onnx voice")
         }

@@ -12,6 +12,7 @@ enum class VoiceFamily {
     PIPER,
     SUPERTONIC,
     KITTEN,
+    TINY_AVA,
     POCKET,
     PHONON,
 }
@@ -95,6 +96,7 @@ data class VoicePack(
             if (code == "fa_en") return setOf("fa", "en")
             return setOf(code.substringBefore("_"))
         }
+        if (family == VoiceFamily.TINY_AVA) return setOf("fa")
         if (family == VoiceFamily.POCKET) return setOf("fa")
         if (family == VoiceFamily.PHONON) return setOf("en")
         if (id == "supertonic-3") return VoiceCatalog.SUPERTONIC3_LANGS
@@ -227,6 +229,23 @@ object VoiceCatalog {
             speakers = numberedVoices(8),
             rtfNote = "About 2× faster",
             sampleRes = R.raw.sample_kitten_mini,
+        ),
+        VoicePack(
+            id = "tiny-ava",
+            displayName = "Tiny Ava",
+            variant = "Parisa",
+            voiceName = null,
+            family = VoiceFamily.TINY_AVA,
+            archive = "",
+            sizeBytes = 21_361_734L,
+            sha256 = "90418714f60c1095beb2249993725c5eb63bfb0a0aaaf43d6c0a32613602f45e",
+            topDir = "tiny-ava",
+            modelFile = "tiny-ava-parisa.onnx",
+            speakers = listOf("Parisa"),
+            rtfNote = "Very fast, lightweight Persian",
+            sampleRes = R.raw.sample_tiny_ava,
+            lang = "fa",
+            fileUrl = "https://huggingface.co/mehdi-hf/tiny-ava/resolve/main/onnx/tiny-ava-parisa.onnx",
         ),
         VoicePack(
             id = "pocket-farsi-v1",
@@ -439,6 +458,7 @@ object VoiceCatalog {
             VoiceFamilyInfo(VoiceFamily.KOKORO, "Kokoro", "Most natural · 11 voices"),
             VoiceFamilyInfo(VoiceFamily.PIPER, "Piper", piperTagline()),
             VoiceFamilyInfo(VoiceFamily.KITTEN, "Kitten", "Compact · 8 voices"),
+            VoiceFamilyInfo(VoiceFamily.TINY_AVA, "Tiny Ava", "Fast, lightweight Persian · 1 voice"),
             VoiceFamilyInfo(VoiceFamily.POCKET, "Pocket", "Natural Persian · 2 voices"),
             VoiceFamilyInfo(VoiceFamily.PHONON, "Phonon", "Natural English, experimental · 8 voices"),
         )
@@ -545,7 +565,7 @@ object VoiceCatalog {
     fun shortName(pack: VoicePack): String {
         val title = familyInfo(pack.family).title
         return when (pack.family) {
-            VoiceFamily.SUPERTONIC, VoiceFamily.KITTEN, VoiceFamily.POCKET, VoiceFamily.PHONON ->
+            VoiceFamily.SUPERTONIC, VoiceFamily.KITTEN, VoiceFamily.TINY_AVA, VoiceFamily.POCKET, VoiceFamily.PHONON ->
                 "$title ${pack.variant}"
             VoiceFamily.KOKORO -> "$title (${pack.variant})"
             VoiceFamily.PIPER -> {

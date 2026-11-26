@@ -27,13 +27,15 @@ object SmartVoice {
     const val MAX_AUTO_DOWNLOAD_BYTES = 70L * 1_000_000
 
     /**
-     * Quality rank for [pack] (higher is better): Pocket Farsi v2 > v1 > Kokoro
-     * Full > Supertonic 3 > Kokoro Compact > Supertonic 2 > Piper HD > Standard >
-     * Low > Tiny > Piper Compact (any int8) > Kitten. Pocket only reads
-     * Persian, so its top ranks just make it the preferred Persian voice.
+     * Quality rank for [pack] (higher is better): Tiny Ava > Pocket Farsi v2 >
+     * v1 > Kokoro Full > Supertonic 3 > Kokoro Compact > Supertonic 2 >
+     * Piper HD > Standard > Low > Tiny > Piper Compact (any int8) > Kitten.
+     * Tiny Ava and Pocket only read Persian, so their top ranks just make
+     * them the preferred Persian voices (with Tiny Ava as default).
      */
     fun rank(pack: VoicePack): Int {
         when (pack.id) {
+            "tiny-ava" -> return 12
             "pocket-farsi-v2" -> return 11
             "pocket-farsi-v1" -> return 10
             "kokoro-en" -> return 9
@@ -56,17 +58,18 @@ object SmartVoice {
     }
 
     /**
-     * Recommended download for 2-letter [lang]: Pocket Farsi v2 for Persian
-     * (v1 when v2 isn't listed), else the first Piper voice A–Z for that
-     * language, as Compact when it has one, else Standard, else its smallest
-     * pack (so Ask can show a size). When no Piper voice covers [lang] but
-     * Supertonic 3 does, recommends Supertonic 3. Null when nothing covers
-     * [lang].
+     * Recommended download for 2-letter [lang]: Tiny Ava for Persian
+     * (falling back to Pocket Farsi v2 / v1 when unlisted), else the first
+     * Piper voice A–Z for that language, as Compact when it has one, else
+     * Standard, else its smallest pack (so Ask can show a size). When no
+     * Piper voice covers [lang] but Supertonic 3 does, recommends Supertonic 3.
+     * Null when nothing covers [lang].
      */
     fun recommendedPack(lang: String, all: List<VoicePack> = VoiceCatalog.ALL): VoicePack? {
         // A pack with no download host is never a download recommendation.
         val downloadable = all.filter { it.downloadable }
         if (lang == "fa") {
+            downloadable.find { it.id == "tiny-ava" }?.let { return it }
             downloadable.find { it.id == "pocket-farsi-v2" }?.let { return it }
             downloadable.find { it.id == "pocket-farsi-v1" }?.let { return it }
         }
@@ -140,10 +143,13 @@ object SmartVoice {
                 (choice is Choice.Use && choice.pack.id == mainPack.id)
             )
 
-    /** Only a small Piper Compact or Standard is ever auto-downloaded. */
+    /** Only a small Piper Compact or Standard or Tiny Ava is ever auto-downloaded. */
     private fun isAutoDownloadable(pack: VoicePack): Boolean {
         // A pack with no download host can never auto-download.
         if (!pack.downloadable) return false
+        if (pack.family == VoiceFamily.TINY_AVA) {
+            return pack.sizeBytes <= MAX_AUTO_DOWNLOAD_BYTES
+        }
         if (pack.family != VoiceFamily.PIPER) return false
         if (pack.variant != "Compact" && pack.variant != "Standard") return false
         return pack.sizeBytes <= MAX_AUTO_DOWNLOAD_BYTES

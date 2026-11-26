@@ -76,6 +76,7 @@ class VoiceCatalogTest {
             VoiceFamily.PIPER to 1,
             VoiceFamily.SUPERTONIC to 10,
             VoiceFamily.KITTEN to 8,
+            VoiceFamily.TINY_AVA to 1,
             VoiceFamily.POCKET to 1,
             VoiceFamily.PHONON to 8,
         )
@@ -134,7 +135,7 @@ class VoiceCatalogTest {
         for (family in VoiceFamily.values()) {
             assertTrue("$family has no packs", VoiceCatalog.packsFor(family).isNotEmpty())
         }
-        assertEquals(6, VoiceCatalog.FAMILIES.size)
+        assertEquals(7, VoiceCatalog.FAMILIES.size)
     }
 
     @Test
@@ -348,6 +349,30 @@ class VoiceCatalogTest {
         assertEquals("Full · 67 MB", VoiceCatalog.sizeLabel(false, 67))
         assertEquals("Compact · 21 MB", VoiceCatalog.sizeLabel(true, 21))
         assertEquals("Download · 21 MB", VoiceCatalog.downloadLabel(21))
+    }
+
+    @Test
+    fun tinyAvaPack_hasExpectedFields() {
+        val tinyAva = VoiceCatalog.byId("tiny-ava")!!
+        assertEquals(VoiceFamily.TINY_AVA, tinyAva.family)
+        assertEquals("Tiny Ava", tinyAva.displayName)
+        assertEquals("Parisa", tinyAva.variant)
+        assertEquals(setOf("fa"), tinyAva.languages())
+        assertEquals(listOf("Parisa"), tinyAva.speakers)
+        assertEquals("tiny-ava", tinyAva.topDir)
+        assertEquals("tiny-ava-parisa.onnx", tinyAva.modelFile)
+        assertEquals(21_361_734L, tinyAva.sizeBytes)
+        assertEquals(21, tinyAva.sizeMb)
+        assertEquals(
+            "90418714f60c1095beb2249993725c5eb63bfb0a0aaaf43d6c0a32613602f45e",
+            tinyAva.sha256,
+        )
+        assertTrue(tinyAva.downloadable)
+        assertEquals(
+            "https://huggingface.co/mehdi-hf/tiny-ava/resolve/main/onnx/tiny-ava-parisa.onnx",
+            tinyAva.url,
+        )
+        assertEquals(app.readly.R.raw.sample_tiny_ava, tinyAva.sampleRes)
     }
 
     @Test

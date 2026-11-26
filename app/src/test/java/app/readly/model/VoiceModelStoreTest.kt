@@ -72,6 +72,19 @@ class VoiceModelStoreTest {
     }
 
     @Test
+    fun isInstalled_tinyAvaPack_needsOnlyOnnxAndMarker() {
+        val tinyAva = VoiceCatalog.byId("tiny-ava")!!
+        val base = temp.newFolder("voices")
+        touch(base, "tiny-ava/tiny-ava-parisa.onnx")
+        val store = VoiceModelStore(tinyAva, base, { _, _ -> error("must not download") })
+
+        assertFalse(store.isInstalled())
+        touch(base, "tiny-ava/.complete")
+        assertTrue(store.isInstalled())
+        assertEquals(File(base, "tiny-ava"), store.modelDir)
+    }
+
+    @Test
     fun isInstalled_pocketPack_needsOnlyOnnxAndMarker() {
         val pocket = VoiceCatalog.byId("pocket-farsi-v1")!!
         val base = temp.newFolder("voices")

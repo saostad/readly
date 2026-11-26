@@ -20,6 +20,9 @@ object PocketAudio {
     /** Silence kept at each end when trimming a chunk (outer ends always keep this). */
     const val TRIM_KEEP_MS = 120L
 
+    /** Gentle silence kept at outer/sentence ends for Tiny Ava. */
+    const val GENTLE_TRIM_KEEP_MS = 100L
+
     /** Silence kept at the cut side of a clause boundary (`،`, `؛`, …). */
     const val TRIM_KEEP_CLAUSE_MS = 60L
 
@@ -29,11 +32,21 @@ object PocketAudio {
     /** Pause after a sentence-final piece; mid-sentence cuts get no pause. */
     const val PAUSE_SENTENCE_MS = 150L
 
+    /** Gentle pause after a sentence-final piece for Tiny Ava. */
+    const val GENTLE_PAUSE_SENTENCE_MS = 140L
+
     /** Pause after a clause-final piece. */
     const val PAUSE_CLAUSE_MS = 60L
 
     /** Samples at or below this magnitude count as silence. */
     const val TRIM_THRESHOLD = 0.01f
+    private const val GENTLE_TRIM_MIN_THRESHOLD = 0.002f
+    private const val GENTLE_TRIM_PEAK_RATIO = 0.015f
+
+    /** Gentle mastering target RMS for Tiny Ava (70 Hz HPF + clamped gain + limiter). */
+    const val GENTLE_TARGET_RMS = 0.145
+    private const val GENTLE_GAIN_MIN_DB = -12.0
+    private const val GENTLE_GAIN_MAX_DB = 12.0
 
     /** Mastered chunk target: about −10 LUFS after compression and limiting. */
     const val TARGET_LUFS = -10.0
@@ -206,18 +219,41 @@ object PocketAudio {
         else -> PieceEnd.MID
     }
 
-    /** Silence kept where a piece meets a boundary of [end] (outer ends keep [TRIM_KEEP_MS]). */
-    fun trimKeepMs(end: PieceEnd): Long = when (end) {
-        PieceEnd.SENTENCE -> TRIM_KEEP_MS
+    private fun trimKeepMsWith(end: PieceEnd, outerKeepMs: Long): Long = when (end) {
+        PieceEnd.SENTENCE -> outerKeepMs
         PieceEnd.CLAUSE -> TRIM_KEEP_CLAUSE_MS
         PieceEnd.MID -> TRIM_KEEP_MID_MS
     }
 
-    /** Pause after a piece ending with [end] (mid-sentence cuts get none). */
-    fun pauseAfterMs(end: PieceEnd): Long = when (end) {
-        PieceEnd.SENTENCE -> PAUSE_SENTENCE_MS
+    /** Silence kept where a piece meets a boundary of [end] (outer ends keep [TRIM_KEEP_MS]). */
+    fun trimKeepMs(end: PieceEnd): Long = trimKeepMsWith(end, TRIM_KEEP_MS)
+
+    private fun pauseAfterMsWith(end: PieceEnd, sentencePauseMs: Long): Long = when (end) {
+        PieceEnd.SENTENCE -> sentencePauseMs
         PieceEnd.CLAUSE -> PAUSE_CLAUSE_MS
         PieceEnd.MID -> 0L
+    }
+
+    /** Pause after a piece ending with [end] (mid-sentence cuts get none). */
+    fun pauseAfterMs(end: PieceEnd): Long = pauseAfterMsWith(end, PAUSE_SENTENCE_MS)
+
+    private fun trimSilenceWithThreshold(
+        samples: FloatArray,
+        sampleRate: Int,
+        keepStartMs: Long,
+        keepEndMs: Long,
+        threshold: Float,
+    ): FloatArray {
+        val keepStart = (keepStartMs / 1000.0 * sampleRate).roundToInt()
+        val keepEnd = (keepEndMs / 1000.0 * sampleRate).roundToInt()
+        val first = samples.indexOfFirst { abs(it) > threshold }
+        val last = samples.indexOfLast { abs(it) > threshold }
+        if (first < 0 || last < 0) {
+            return samples.copyOfRange(0, minOf(keepStart + keepEnd, samples.size))
+        }
+        val start = maxOf(0, first - keepStart)
+        val end = minOf(last + 1 + keepEnd, samples.size)
+        return samples.copyOfRange(start, end)
     }
 
     /**
@@ -231,17 +267,22 @@ object PocketAudio {
         sampleRate: Int,
         keepStartMs: Long = TRIM_KEEP_MS,
         keepEndMs: Long = TRIM_KEEP_MS,
+    ): FloatArray = trimSilenceWithThreshold(samples, sampleRate, keepStartMs, keepEndMs, TRIM_THRESHOLD)
+
+    /** Relative silence trim for low-RMS source-filter voices (Tiny Ava). */
+    fun trimSilenceRelative(
+        samples: FloatArray,
+        sampleRate: Int,
+        keepStartMs: Long = GENTLE_TRIM_KEEP_MS,
+        keepEndMs: Long = GENTLE_TRIM_KEEP_MS,
     ): FloatArray {
-        val keepStart = (keepStartMs / 1000.0 * sampleRate).roundToInt()
-        val keepEnd = (keepEndMs / 1000.0 * sampleRate).roundToInt()
-        val first = samples.indexOfFirst { abs(it) > TRIM_THRESHOLD }
-        val last = samples.indexOfLast { abs(it) > TRIM_THRESHOLD }
-        if (first < 0 || last < 0) {
-            return samples.copyOfRange(0, minOf(keepStart + keepEnd, samples.size))
+        var peak = 0f
+        for (s in samples) {
+            val a = abs(s)
+            if (a > peak) peak = a
         }
-        val start = maxOf(0, first - keepStart)
-        val end = minOf(last + 1 + keepEnd, samples.size)
-        return samples.copyOfRange(start, end)
+        val threshold = maxOf(GENTLE_TRIM_MIN_THRESHOLD, peak * GENTLE_TRIM_PEAK_RATIO)
+        return trimSilenceWithThreshold(samples, sampleRate, keepStartMs, keepEndMs, threshold)
     }
 
     /** Resample by linear interpolation so playback lasts `1/speed` as long. */
@@ -351,6 +392,27 @@ object PocketAudio {
     }
 
     /**
+     * Gentle distortion-free mastering for source-filter voices like Tiny Ava:
+     * 70 Hz high-pass, clamped linear gain toward [GENTLE_TARGET_RMS], and
+     * look-ahead peak limiting at [PEAK_CEILING] with no 6:1 compressor or
+     * −10 LUFS overdrive.
+     */
+    fun masterChunkGentle(samples: FloatArray, sampleRate: Int): FloatArray {
+        if (samples.isEmpty()) return FloatArray(0)
+        if (samples.all { it == 0f }) return samples.copyOf()
+        val out = applyHighPass(samples, sampleRate)
+        var sumSq = 0.0
+        for (s in out) {
+            val d = s.toDouble()
+            sumSq += d * d
+        }
+        val rms = sqrt(sumSq / out.size)
+        if (rms <= 1e-6) return out
+        val gainDb = (20.0 * log10(GENTLE_TARGET_RMS / rms)).coerceIn(GENTLE_GAIN_MIN_DB, GENTLE_GAIN_MAX_DB)
+        return applyLimiter(applyGainDb(out, gainDb), sampleRate)
+    }
+
+    /**
      * Length cap for one chunk's audio, in seconds: the token count at [tokensPerSecond]
      * plus [paddingSeconds], rounded up to whole frames at [frameRate], times [ratio]. A
      * generation longer than this share of its cap never said EOS (see `generate_chunk`
@@ -401,6 +463,27 @@ object PocketAudio {
      * piece is skipped once [isStopped] is true. [clockMs] times the
      * mastering.
      */
+    private data class FinishChain(
+        val trimKeepMs: Long,
+        val pauseSentenceMs: Long,
+        val relativeTrim: Boolean,
+        val gentleMaster: Boolean,
+    )
+
+    private val STANDARD_CHAIN = FinishChain(
+        trimKeepMs = TRIM_KEEP_MS,
+        pauseSentenceMs = PAUSE_SENTENCE_MS,
+        relativeTrim = false,
+        gentleMaster = false,
+    )
+
+    private val GENTLE_CHAIN = FinishChain(
+        trimKeepMs = GENTLE_TRIM_KEEP_MS,
+        pauseSentenceMs = GENTLE_PAUSE_SENTENCE_MS,
+        relativeTrim = true,
+        gentleMaster = true,
+    )
+
     fun finishSpeech(
         pieces: Sequence<RawPiece>,
         sampleRate: Int,
@@ -408,9 +491,29 @@ object PocketAudio {
         isStopped: () -> Boolean,
         onChunk: ((FloatArray) -> Unit)? = null,
         clockMs: () -> Long = { System.nanoTime() / 1_000_000 },
+    ): FinishedSpeech = finishSpeechWith(pieces, sampleRate, speed, isStopped, onChunk, clockMs, STANDARD_CHAIN)
+
+    /** Gentle variant of [finishSpeech] for Tiny Ava (relative silence trim + uncompressed mastering). */
+    fun finishSpeechGentle(
+        pieces: Sequence<RawPiece>,
+        sampleRate: Int,
+        speed: Float,
+        isStopped: () -> Boolean,
+        onChunk: ((FloatArray) -> Unit)? = null,
+        clockMs: () -> Long = { System.nanoTime() / 1_000_000 },
+    ): FinishedSpeech = finishSpeechWith(pieces, sampleRate, speed, isStopped, onChunk, clockMs, GENTLE_CHAIN)
+
+    private fun finishSpeechWith(
+        pieces: Sequence<RawPiece>,
+        sampleRate: Int,
+        speed: Float,
+        isStopped: () -> Boolean,
+        onChunk: ((FloatArray) -> Unit)?,
+        clockMs: () -> Long,
+        chain: FinishChain,
     ): FinishedSpeech {
         val pauses = mapOf(
-            PieceEnd.SENTENCE to FloatArray((PAUSE_SENTENCE_MS / 1000.0 * sampleRate).toInt()),
+            PieceEnd.SENTENCE to FloatArray((chain.pauseSentenceMs / 1000.0 * sampleRate).toInt()),
             PieceEnd.CLAUSE to FloatArray((PAUSE_CLAUSE_MS / 1000.0 * sampleRate).toInt()),
         )
         val out = ArrayList<FloatArray>()
@@ -439,16 +542,24 @@ object PocketAudio {
                 pendingPause = null
                 break
             }
-            val keepStart = if (prevEnd == null) TRIM_KEEP_MS else trimKeepMs(prevEnd)
+            val keepStart = if (prevEnd == null) chain.trimKeepMs else trimKeepMsWith(prevEnd, chain.trimKeepMs)
             val keepEnd = if (nextRaw == null) {
-                if (current.end == PieceEnd.CLAUSE) TRIM_KEEP_CLAUSE_MS else TRIM_KEEP_MS
+                if (current.end == PieceEnd.CLAUSE) TRIM_KEEP_CLAUSE_MS else chain.trimKeepMs
             } else {
-                trimKeepMs(current.end)
+                trimKeepMsWith(current.end, chain.trimKeepMs)
             }
-            var piece = trimSilence(current.audio, sampleRate, keepStart, keepEnd)
+            var piece = if (chain.relativeTrim) {
+                trimSilenceRelative(current.audio, sampleRate, keepStart, keepEnd)
+            } else {
+                trimSilence(current.audio, sampleRate, keepStart, keepEnd)
+            }
             piece = applySpeed(piece, speed)
             val t0 = clockMs()
-            piece = masterChunk(piece, sampleRate)
+            piece = if (chain.gentleMaster) {
+                masterChunkGentle(piece, sampleRate)
+            } else {
+                masterChunk(piece, sampleRate)
+            }
             masterMs += clockMs() - t0
             if (heldTail == null && current.end == PieceEnd.MID && nextRaw != null && isStopped()) {
                 emit(piece)

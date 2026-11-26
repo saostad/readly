@@ -371,6 +371,7 @@ class ReaderService : MediaBrowserService() {
          * for everything else (those are main-voice packs).
          */
         fun bucketForPack(pack: VoicePack): String? = when {
+            pack.family == VoiceFamily.TINY_AVA -> if (pack.lang == "fa") "fa" else null
             pack.family == VoiceFamily.POCKET -> if (pack.lang == "fa") "fa" else null
             pack.family != VoiceFamily.PIPER || pack.lang == null -> null
             pack.lang.startsWith("fa") -> "fa"
@@ -2935,7 +2936,7 @@ class ReaderService : MediaBrowserService() {
         val spoken = spokenResult.text
         val begin = SystemClock.elapsedRealtime()
         val audio = when (pack.family) {
-            VoiceFamily.POCKET, VoiceFamily.PHONON ->
+            VoiceFamily.TINY_AVA, VoiceFamily.POCKET, VoiceFamily.PHONON ->
                 engines.synthesize(pack.id, spoken, speakerId, speed, lang, isStopped, onChunk = emit)
             else -> engines.synthesize(pack.id, spoken, speakerId, speed, lang, isStopped).also { emit(it) }
         }
