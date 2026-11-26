@@ -33,6 +33,9 @@ import android.widget.TextView
 import android.widget.Toast
 import app.readly.input.pdf.DocumentPlayback
 import app.readly.input.pdf.PdfImportStore
+import app.readly.library.Bookmark
+import app.readly.library.ReadingStore
+import app.readly.NowPlayingActivity
 import app.readly.R
 import app.readly.ReadlyApp
 import app.readly.playback.BrowseRefreshRequests
@@ -42,7 +45,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * The phone's compact browser: fixed navigation, website rows and a document Library.
+ * The phone's compact browser: fixed navigation, website rows and a document/bookmark Library.
  * Article lists, heard marks and Shuffle actions are shared with the car.
  * It is a [MediaBrowser] client of [ReaderService], so the lists come from the very
  * [CarBrowser] the car uses and a tap plays through the same `playFromMediaId`.
@@ -56,13 +59,26 @@ class HomeBrowser(
     private val content: LinearLayout,
     private val onNavigate: () -> Unit = {},
     private val onRefreshingChanged: (Boolean) -> Unit = {},
+    private val onTabTitleChanged: (String) -> Unit = {},
     private val onManageWebsites: () -> Unit,
 ) {
+    private enum class LibraryTab(val key: String) {
+        DOCUMENTS("documents"),
+        ARTICLES("articles"),
+        BOOKMARKS("bookmarks"),
+        ;
+
+        companion object {
+            fun fromKey(key: String?): LibraryTab? = entries.firstOrNull { it.key == key }
+        }
+    }
+
     private companion object {
         const val TAG = "Readly"
         const val PREFS = "home_ui"
         const val KEY_TAB = "tab"
         const val KEY_LIBRARY_DOCUMENTS = "libraryDocuments"
+        const val KEY_LIBRARY_TAB = "libraryTab"
 
         // Android Auto's own extras on each row (the same keys CarBrowser sets).
         const val PLAYBACK_STATUS = "android.media.extra.PLAYBACK_STATUS"
@@ -99,7 +115,8 @@ class HomeBrowser(
     private val stack = mutableListOf<Level>()
     private var subscribed: String? = null
     private var lastItems: List<MediaItem> = emptyList()
-    private var libraryDocuments = prefs.getBoolean(KEY_LIBRARY_DOCUMENTS, true)
+    private var libraryTab = LibraryTab.fromKey(prefs.getString(KEY_LIBRARY_TAB, null))
+        ?: if (prefs.getBoolean(KEY_LIBRARY_DOCUMENTS, true)) LibraryTab.DOCUMENTS else LibraryTab.ARTICLES
     private var renderGeneration = 0
     private var artworkNoticeShown = false
     private var activeRequestAt: Long? = null
@@ -127,7 +144,7 @@ class HomeBrowser(
         if (parentId == browser?.root) showTabs(children)
         else if (parentId == subscribed && requestedAt == activeRequestAt) {
             render(parentId, children)
-            if (parentId != CarBrowser.SAVED || !libraryDocuments) finishRefresh()
+            if (parentId != CarBrowser.SAVED || libraryTab == LibraryTab.ARTICLES) finishRefresh()
         }
     }
 
@@ -156,7 +173,7 @@ class HomeBrowser(
         }
         refreshing = true
         onRefreshingChanged(true)
-        if (parent == CarBrowser.SAVED && libraryDocuments) render(parent, lastItems)
+        if (parent == CarBrowser.SAVED && libraryTab != LibraryTab.ARTICLES) render(parent, lastItems)
         else {
             browser?.unsubscribe(parent)
             subscribe(parent, force = true)
@@ -236,6 +253,10 @@ class HomeBrowser(
 
     // ------------------------------------------------------------ tabs ---
 
+    private fun tabLabel(tab: MediaItem): String =
+        if (tab.mediaId == CarBrowser.SAVED) activity.getString(R.string.library_title)
+        else tab.description.title?.toString().orEmpty()
+
     private fun showTabs(items: List<MediaItem>) {
         val firstTime = tabs.isEmpty()
         tabs = items
@@ -244,6 +265,7 @@ class HomeBrowser(
             currentTab = items.firstOrNull { it.mediaId == saved }?.mediaId ?: items.firstOrNull()?.mediaId
         }
         drawTabs()
+        tabs.firstOrNull { it.mediaId == currentTab }?.let { onTabTitleChanged(tabLabel(it)) }
         if (firstTime || subscribed == null) open(stack.lastOrNull()?.id ?: currentTab ?: return)
     }
 
@@ -251,7 +273,7 @@ class HomeBrowser(
         tabRow.removeAllViews()
         for (tab in tabs) {
             val selected = tab.mediaId == currentTab
-            val label = if (tab.mediaId == CarBrowser.SAVED) activity.getString(R.string.library_title) else tab.description.title
+            val label = tabLabel(tab)
             val icon = when (tab.mediaId) {
                 CarBrowser.WEBSITES -> R.drawable.ic_globe
                 CarBrowser.LATEST -> R.drawable.ic_latest
@@ -293,6 +315,7 @@ class HomeBrowser(
         onNavigate()
         stack.clear()
         prefs.edit().putString(KEY_TAB, id).apply()
+        tabs.firstOrNull { it.mediaId == id }?.let { onTabTitleChanged(tabLabel(it)) }
         drawTabs()
         open(id)
     }
@@ -324,27 +347,47 @@ class HomeBrowser(
         val generation = ++renderGeneration
         lastItems = items
         content.removeAllViews()
-        val tools = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-        fun tool(label: String, action: () -> Unit) {
-            tools.addView(Button(activity, null, 0, R.style.Btn_Text).apply { text = label; setOnClickListener { action() } },
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        }
-        tool("Search") { activity.startActivity(Intent(activity, app.readly.LibraryActivity::class.java)) }
-        tool("Bookmarks") { activity.startActivity(Intent(activity, app.readly.LibraryActivity::class.java).putExtra("bookmarks", true)) }
-        if (parentId != CarBrowser.WEBSITES && !(parentId == CarBrowser.SAVED && libraryDocuments)) {
-            tool("Filters & sort") { ArticleFilterDialog.show(activity) { refreshLayout() } }
+        content.setPadding(0, 0, 0, dp(76))
+        if (parentId != CarBrowser.WEBSITES && !(parentId == CarBrowser.SAVED && libraryTab != LibraryTab.ARTICLES)) {
             val filter = feeds.filter()
-            content.addView(text("${if (filter.unheard) "Unheard · " else ""}${filter.site.ifBlank { "All websites" }} · ${filter.sort.label}" +
+            val summary = "${if (filter.unheard) "Unheard · " else ""}${filter.site.ifBlank { "All websites" }} · ${filter.sort.label}" +
                 (if (filter.language.isNotBlank()) " · ${filter.language}" else "") +
-                (filter.maxMinutes?.let { " · Up to $it min" } ?: ""), 12f, R.color.text2, lines = 3))
+                (filter.maxMinutes?.let { " · Up to $it min" } ?: "")
+            content.addView(
+                LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .apply { bottomMargin = dp(8) }
+                    addView(
+                        text(summary, 12f, R.color.text2, lines = 2),
+                        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(8) },
+                    )
+                    addView(
+                        Button(activity, null, 0, R.style.Chip).apply {
+                            setText(R.string.filter_chip)
+                            setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_filter, 0, 0, 0)
+                            compoundDrawablePadding = dp(5)
+                            compoundDrawableTintList = activity.getColorStateList(R.color.accent)
+                            setOnClickListener { ArticleFilterDialog.show(activity) { refreshLayout() } }
+                        },
+                    )
+                },
+            )
         }
-        content.addView(tools)
         undo?.takeIf { it.listId == parentId }?.let { content.addView(undoBar(it)) }
         if (parentId == CarBrowser.SAVED) {
             libraryFilters()
-            if (libraryDocuments) {
-                renderDocuments(generation)
-                return
+            when (libraryTab) {
+                LibraryTab.DOCUMENTS -> {
+                    renderDocuments(generation)
+                    return
+                }
+                LibraryTab.BOOKMARKS -> {
+                    renderBookmarks(generation)
+                    return
+                }
+                LibraryTab.ARTICLES -> Unit
             }
         }
         if (parentId == CarBrowser.WEBSITES) {
@@ -369,25 +412,122 @@ class HomeBrowser(
     }
 
     private fun libraryFilters() {
-        content.addView(text(activity.getString(R.string.library_title), 18f, R.color.text, bold = true, lines = 1)
-            .apply { setPadding(0, dp(4), 0, dp(8)) })
-        val filters = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-        for ((documents, label) in listOf(true to R.string.library_documents, false to R.string.library_articles)) {
-            filters.addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+        val track = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundResource(R.drawable.segmented_track)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(10) }
+        }
+        val choices = listOf(
+            LibraryTab.DOCUMENTS to R.string.library_documents,
+            LibraryTab.ARTICLES to R.string.library_articles,
+            LibraryTab.BOOKMARKS to R.string.library_bookmarks,
+        )
+        for ((tab, label) in choices) {
+            val active = libraryTab == tab
+            track.addView(Button(activity, null, 0, R.style.Segment).apply {
                 setText(label)
-                minimumHeight = dp(48)
-                isSelected = libraryDocuments == documents
-                setTextColor(activity.getColor(if (isSelected) R.color.accent else R.color.text2))
+                minimumHeight = dp(38)
+                isSelected = active
+                setTextColor(activity.getColor(if (active) R.color.accent else R.color.text2))
+                setBackgroundResource(if (active) R.drawable.chip_selected_background else 0)
                 setOnClickListener {
                     finishRefresh()
-                    libraryDocuments = documents
-                    prefs.edit().putBoolean(KEY_LIBRARY_DOCUMENTS, documents).apply()
+                    libraryTab = tab
+                    prefs.edit().putString(KEY_LIBRARY_TAB, tab.key).apply()
                     onNavigate()
                     subscribed?.let { render(it, lastItems) }
                 }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
-        content.addView(filters)
+        content.addView(track)
+    }
+
+    private fun renderBookmarks(generation: Int) {
+        val loading = text(activity.getString(R.string.library_loading), 13f, R.color.text2, lines = 2)
+        content.addView(loading)
+        (activity.application as ReadlyApp).ioExecutor.execute {
+            try {
+                val marks = ReadingStore(activity).use { it.bookmarks() }
+                main.post {
+                    if (generation == renderGeneration && !activity.isDestroyed && !activity.isFinishing) {
+                        content.removeView(loading)
+                        if (marks.isEmpty()) {
+                            content.addView(text(activity.getString(R.string.library_bookmarks_empty), 13.5f, R.color.text2, lines = 4)
+                                .apply { setPadding(0, dp(16), 0, dp(16)) })
+                        } else {
+                            marks.forEach { content.addView(bookmarkRow(it)) }
+                        }
+                        finishRefresh()
+                    }
+                }
+            } catch (error: Exception) {
+                Log.e(TAG, "Couldn't load bookmarks", error)
+                main.post {
+                    if (generation == renderGeneration && !activity.isDestroyed && !activity.isFinishing) {
+                        loading.text = activity.getString(R.string.document_operation_failed)
+                        loading.setTextColor(activity.getColor(R.color.error))
+                        finishRefresh()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun bookmarkRow(mark: Bookmark): View = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL
+        setBackgroundResource(R.drawable.card_background)
+        setPadding(dp(14), dp(12), dp(14), dp(8))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            .apply { bottomMargin = dp(10) }
+        addView(text("${mark.title} · Sentence ${mark.sentence + 1}", 14.5f, R.color.text, bold = true, lines = 2))
+        addView(text(mark.quote, 12.5f, R.color.text2, lines = 4).apply { setPadding(0, dp(4), 0, dp(4)) })
+        if (mark.note.isNotBlank()) {
+            addView(text(mark.note, 12f, R.color.accent, lines = 3).apply { setPadding(0, 0, 0, dp(4)) })
+        }
+        val actions = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        actions.addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+            text = "Read"
+            setOnClickListener {
+                try {
+                    ReaderService.readSaved(activity, mark.readingId, mark.sentence, fromBookmark = true)
+                    activity.startActivity(Intent(activity, NowPlayingActivity::class.java))
+                    activity.overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+                } catch (error: Exception) {
+                    Log.e(TAG, "Couldn't open bookmark reading=${mark.readingId}", error)
+                    Toast.makeText(activity, R.string.item_failed, Toast.LENGTH_LONG).show()
+                }
+            }
+        })
+        actions.addView(Button(activity, null, 0, R.style.Btn_Text).apply {
+            text = "Edit note"
+            setOnClickListener { BookmarkDialogs.edit(activity, mark) { refreshLayout() } }
+        })
+        actions.addView(Button(activity, null, 0, R.style.Btn_TextError).apply {
+            text = "Delete"
+            setOnClickListener {
+                android.app.AlertDialog.Builder(activity)
+                    .setTitle("Delete bookmark?")
+                    .setMessage("The saved reading will remain in your library.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Delete") { _, _ ->
+                        (activity.application as ReadlyApp).ioExecutor.execute {
+                            try {
+                                ReadingStore(activity).use { it.deleteBookmark(mark.id, mark.version) }
+                                main.post { if (!activity.isDestroyed && !activity.isFinishing) refreshLayout() }
+                            } catch (error: Exception) {
+                                Log.e(TAG, "Couldn't delete bookmark id=${mark.id}", error)
+                                main.post {
+                                    if (!activity.isDestroyed && !activity.isFinishing) {
+                                        Toast.makeText(activity, R.string.item_failed, Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }
+                        }
+                    }.show()
+            }
+        })
+        addView(actions)
     }
 
     private fun renderDocuments(generation: Int) {

@@ -56,6 +56,11 @@
             android:label="@string/auto_sites_title" />
 
         <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="@string/sheet_title" />
+
+        <activity
             android:name=".ArticleActivity"
             android:exported="false"
             android:label="@string/article_title" />

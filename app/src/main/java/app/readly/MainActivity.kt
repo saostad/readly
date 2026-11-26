@@ -3,18 +3,14 @@ package app.readly
 import android.Manifest
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import android.app.Activity
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.content.res.ColorStateList
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.widget.Button
-import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -30,21 +26,17 @@ import app.readly.playback.ReaderSnapshot
 import app.readly.playback.ReaderState
 import app.readly.playback.ReaderStatus
 import app.readly.text.SourceFormat
+import app.readly.ui.AddContentSheets
 import app.readly.ui.HomeBrowser
-import app.readly.ui.SettingsSheet
 import java.io.File
-import java.util.Locale
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
  * First-run voice download, then Home: the Android Auto layout (Websites, Latest,
- * Saved and Recents tabs, see [HomeBrowser]); the top bar's text button opens a card
- * to read pasted text, and Open file uses Android's document picker. Playback state arrives from [ReaderState],
- * so rotation never loses it; voice and speed live in the settings sheet.
- * Setup shows only when nothing is installed, and offers Persian-only readers
- * Pocket Farsi as an alternative to the main voice.
+ * Library and Recents tabs, see [HomeBrowser]) with a clean top bar (Search,
+ * Refresh, Settings) and a floating `+` menu for files, pasted text, and adding
+ * websites. Playback state arrives from [ReaderState], so rotation never loses it;
+ * all preferences live in [SettingsActivity].
  */
 class MainActivity : Activity(), InstallTask.Listener {
 
@@ -79,11 +71,11 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var notifRow: LinearLayout
     private lateinit var notifNote: TextView
     private lateinit var allowButton: Button
+    private lateinit var headerTitle: TextView
+    private lateinit var searchButton: ImageButton
+    private lateinit var refreshButton: ImageButton
     private lateinit var settingsButton: ImageButton
-    private lateinit var inputEdit: EditText
-    private lateinit var pasteButton: Button
-    private lateinit var readButton: Button
-    private lateinit var inputError: TextView
+    private lateinit var homeFab: ImageButton
     private lateinit var noticeCard: LinearLayout
     private lateinit var noticeText: TextView
     private lateinit var dismissNotice: ImageButton
@@ -91,13 +83,6 @@ class MainActivity : Activity(), InstallTask.Listener {
     private lateinit var errorMessage: TextView
     private lateinit var openPageButton: Button
     private lateinit var openPageHelp: TextView
-    private lateinit var chipRow: LinearLayout
-    private lateinit var voiceChip: Button
-    private lateinit var speedChip: Button
-    private lateinit var autoChip: Button
-    private lateinit var tipSection: TextView
-    private lateinit var tipCard: LinearLayout
-    private lateinit var tipSetup: Button
     private lateinit var needVoiceBanner: TextView
     private lateinit var miniBar: LinearLayout
     private lateinit var miniText: TextView
@@ -111,13 +96,11 @@ class MainActivity : Activity(), InstallTask.Listener {
             updateMiniBar(ReaderState.snapshot)
         }
     }
-    private lateinit var pastePanel: LinearLayout
-    private lateinit var pasteToggle: Button
     private lateinit var homeRefresh: SwipeRefreshLayout
-    private lateinit var refreshButton: ImageButton
     private lateinit var homeHeader: LinearLayout
     private lateinit var homeTabs: LinearLayout
     private lateinit var home: HomeBrowser
+    private var returningFromSettings = false
 
     private val readerListener = ReaderState.Listener { render(it) }
 
@@ -147,11 +130,11 @@ class MainActivity : Activity(), InstallTask.Listener {
         notifRow = findViewById(R.id.notifRow)
         notifNote = findViewById(R.id.notifNote)
         allowButton = findViewById(R.id.allowButton)
+        headerTitle = findViewById(R.id.headerTitle)
+        searchButton = findViewById(R.id.searchButton)
+        refreshButton = findViewById(R.id.refreshButton)
         settingsButton = findViewById(R.id.settingsButton)
-        inputEdit = findViewById(R.id.inputEdit)
-        pasteButton = findViewById(R.id.pasteButton)
-        readButton = findViewById(R.id.readButton)
-        inputError = findViewById(R.id.inputError)
+        homeFab = findViewById(R.id.homeFab)
         noticeCard = findViewById(R.id.noticeCard)
         noticeText = findViewById(R.id.noticeText)
         dismissNotice = findViewById(R.id.dismissNotice)
@@ -159,47 +142,37 @@ class MainActivity : Activity(), InstallTask.Listener {
         errorMessage = findViewById(R.id.errorMessage)
         openPageButton = findViewById(R.id.openPageButton)
         openPageHelp = findViewById(R.id.openPageHelp)
-        chipRow = findViewById(R.id.chipRow)
-        voiceChip = findViewById(R.id.voiceChip)
-        speedChip = findViewById(R.id.speedChip)
-        autoChip = findViewById(R.id.autoChip)
-        tipSection = findViewById(R.id.tipSection)
-        tipCard = findViewById(R.id.tipCard)
-        tipSetup = findViewById(R.id.tipSetup)
         miniBar = findViewById(R.id.miniBar)
         miniText = findViewById(R.id.miniText)
         miniToggle = findViewById(R.id.miniToggle)
         miniDetail = findViewById(R.id.miniDetail)
         miniProgress = findViewById(R.id.miniBarProgress)
         needVoiceBanner = findViewById(R.id.needVoiceBanner)
-        pastePanel = findViewById(R.id.pastePanel)
         homeRefresh = findViewById(R.id.homeRefresh)
-        refreshButton = findViewById(R.id.refreshButton)
         homeRefresh.setColorSchemeColors(getColor(R.color.accent))
         homeRefresh.setProgressBackgroundColorSchemeColor(getColor(R.color.surface2))
         homeRefresh.setOnRefreshListener { home.refresh() }
         refreshButton.setOnClickListener { home.refresh() }
         homeHeader = findViewById(R.id.readerHeader)
         homeTabs = findViewById(R.id.tabRow)
-        pasteToggle = findViewById(R.id.pasteToggle)
-        pasteToggle.setOnClickListener { setPastePanelOpen(pastePanel.visibility != View.VISIBLE) }
-        findViewById<Button>(R.id.openFileButton).setOnClickListener { openFile() }
         home = HomeBrowser(
             this,
             tabRow = homeTabs,
             onNavigate = { findViewById<ScrollView>(R.id.homeScroll).scrollTo(0, 0) },
             onRefreshingChanged = { refreshing ->
                 homeRefresh.isRefreshing = refreshing
-                refreshButton.isEnabled = !refreshing && pastePanel.visibility != View.VISIBLE
+                refreshButton.isEnabled = !refreshing && readerContainer.visibility == View.VISIBLE
                 if (refreshing) homeRefresh.announceForAccessibility(getString(R.string.feed_refreshing))
+            },
+            onTabTitleChanged = { tabTitle ->
+                if (tabTitle.isNotBlank()) headerTitle.text = tabTitle
             },
             header = findViewById(R.id.browseHeader),
             back = findViewById(R.id.browseBack),
             headerTitle = findViewById(R.id.browseTitle),
             content = findViewById(R.id.browseContent),
         ) {
-            startActivity(Intent(this, FeedsActivity::class.java))
-            overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+            openManageWebsites()
         }
         if (intent?.getBooleanExtra(EXTRA_NEED_VOICE, false) == true) {
             needVoiceBanner.visibility = View.VISIBLE
@@ -228,8 +201,6 @@ class MainActivity : Activity(), InstallTask.Listener {
         }
         cancelButton.setOnClickListener { task?.cancel() }
 
-        readButton.setOnClickListener { readInputAloud() }
-        pasteButton.setOnClickListener { pasteFromClipboard() }
         allowButton.setOnClickListener {
             if (Build.VERSION.SDK_INT >= 33) {
                 requestPermissions(
@@ -238,10 +209,22 @@ class MainActivity : Activity(), InstallTask.Listener {
                 )
             }
         }
-        settingsButton.setOnClickListener { openSheet() }
-        voiceChip.setOnClickListener { openSheet() }
-        speedChip.setOnClickListener { openSheet() }
-        autoChip.setOnClickListener { toggleSmartVoice() }
+        searchButton.setOnClickListener {
+            startActivity(Intent(this, LibraryActivity::class.java))
+            overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+        }
+        settingsButton.setOnClickListener {
+            returningFromSettings = true
+            SettingsActivity.open(this)
+        }
+        homeFab.setOnClickListener {
+            AddContentSheets.showAddMenu(
+                this,
+                onOpenFile = ::openFile,
+                onPasteText = ::openPasteSheet,
+                onAddWebsite = ::openManageWebsites,
+            )
+        }
         dismissNotice.setOnClickListener {
             ReaderState.update { it.copy(notice = null) }
         }
@@ -254,20 +237,11 @@ class MainActivity : Activity(), InstallTask.Listener {
                 overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
             }
         }
-        tipSetup.setOnClickListener {
-            PhoneVoiceSettings.open(
-                this,
-                getString(R.string.phone_voice_toast),
-                getString(R.string.phone_voice_fallback_toast),
-            )
-        }
         miniBar.setOnClickListener {
             startActivity(Intent(this, NowPlayingActivity::class.java))
             overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
         }
         miniToggle.setOnClickListener { sendAction(ReaderService.ACTION_TOGGLE) }
-        refreshChips()
-
         if (VoiceModelStore.anyInstalled(voicesDir())) {
             showReader()
         } else {
@@ -296,20 +270,19 @@ class MainActivity : Activity(), InstallTask.Listener {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        when {
-            pastePanel.visibility == View.VISIBLE -> setPastePanelOpen(false)
-            home.onBack() -> Unit
-            else -> super.onBackPressed()
+        if (!home.onBack()) {
+            super.onBackPressed()
         }
     }
 
-    /** Shows or hides the paste-and-read card (and its voice chips and tip). */
-    private fun setPastePanelOpen(open: Boolean) {
-        pastePanel.visibility = if (open) View.VISIBLE else View.GONE
-        pasteToggle.compoundDrawableTintList = getColorStateList(if (open) R.color.accent else R.color.text2)
-        homeRefresh.isEnabled = !open && readerContainer.visibility == View.VISIBLE
-        refreshButton.isEnabled = homeRefresh.isEnabled && !homeRefresh.isRefreshing
-        if (open) inputEdit.requestFocus()
+    private fun openManageWebsites() {
+        returningFromSettings = true
+        startActivity(Intent(this, FeedsActivity::class.java))
+        overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+    }
+
+    private fun openPasteSheet() {
+        AddContentSheets.showPasteDialog(this) { text -> routePastedText(text) }
     }
 
     @Suppress("DEPRECATION")
@@ -379,26 +352,16 @@ class MainActivity : Activity(), InstallTask.Listener {
             updateSetupEstimate(pack.sizeMb)
         }
         repaintSetupSampleButton()
-        refreshChips()
-        updateTip()
         syncSetupState()
+        if (returningFromSettings) {
+            returningFromSettings = false
+            home.refreshLayout()
+        }
         // Warm the engine while the user pastes so the first READ starts instantly.
         if (store.isInstalled() && ReaderState.snapshot.status == ReaderStatus.IDLE) {
             ReaderService.preload(this)
         }
         updateNotifRow()
-    }
-
-    /**
-     * Shows the phone-voice tip card unless Readly is already the default. The
-     * section label hides with the card, so it never stands alone. The views
-     * live in the reader container, so setup never shows them.
-     */
-    private fun updateTip() {
-        val visibility =
-            if (PhoneVoiceSettings.status(this).isOurs) View.GONE else View.VISIBLE
-        tipSection.visibility = visibility
-        tipCard.visibility = visibility
     }
 
     /**
@@ -462,109 +425,26 @@ class MainActivity : Activity(), InstallTask.Listener {
     // Home
     // ------------------------------------------------------------------
 
-    private fun readInputAloud() {
-        val text = inputEdit.text.toString()
-        if (text.isBlank()) {
-            inputError.visibility = View.VISIBLE
-            return
-        }
-        inputError.visibility = View.GONE
-        // Pasted links open in the automatic article engine (same URL/headline
-        // classification as shares); real prose is read directly. No transient
-        // Now Playing over the article browser while it loads.
-        when (val route = app.readly.article.ArticleRoute.routeInput(text)) {
+    private fun routePastedText(text: String): Boolean {
+        if (text.isBlank()) return false
+        return when (val route = app.readly.article.ArticleRoute.routeInput(text)) {
             is app.readly.article.ArticleRoute.Decision.Article -> {
-                setPastePanelOpen(false)
                 startActivity(ArticleActivity.intent(this, route.url))
                 overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+                true
             }
             is app.readly.article.ArticleRoute.Decision.Prose -> {
-                setPastePanelOpen(false)
                 ReaderService.read(this, route.text, route.title, SourceFormat.PLAIN)
                 startActivity(Intent(this, NowPlayingActivity::class.java))
                 overridePendingTransition(R.anim.screen_slide_in, R.anim.screen_slide_out)
+                true
             }
-            null -> {
-                inputError.visibility = View.VISIBLE
-            }
+            null -> false
         }
     }
 
     private fun sendAction(action: String) {
         startService(Intent(this, ReaderService::class.java).setAction(action))
-    }
-
-    private fun pasteFromClipboard() {
-        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = manager.primaryClip
-            ?.takeIf { it.itemCount > 0 }
-            ?.getItemAt(0)
-            ?.coerceToText(this)
-            ?.toString()
-            .orEmpty()
-        if (clip.isBlank()) {
-            Toast.makeText(this, R.string.nothing_to_paste, Toast.LENGTH_SHORT).show()
-            return
-        }
-        val start = min(inputEdit.selectionStart, inputEdit.selectionEnd).coerceAtLeast(0)
-        val end = max(inputEdit.selectionStart, inputEdit.selectionEnd).coerceAtLeast(0)
-        inputEdit.text.replace(start, end, clip)
-    }
-
-    private fun openSheet() {
-        SettingsSheet(this) {
-            refreshChips()
-            updateTip()
-            home.refreshLayout()
-        }.show()
-    }
-
-    private fun toggleSmartVoice() {
-        val on = !prefs.getBoolean(ReaderService.KEY_SMART_VOICE, true)
-        prefs.edit().putBoolean(ReaderService.KEY_SMART_VOICE, on).apply()
-        Toast.makeText(
-            this,
-            if (on) R.string.smart_voice_on else R.string.smart_voice_off,
-            Toast.LENGTH_SHORT,
-        ).show()
-        refreshChips()
-    }
-
-    /** Repaints the voice/speed/Auto chips from the current settings. */
-    private fun refreshChips() {
-        val pack = ReaderService.activePack(this)
-        val family = VoiceCatalog.familyInfo(pack.family).title
-        val sid = ReaderService.speakerIdFor(this, pack.id).coerceIn(pack.speakers.indices)
-        val speaker = if (pack.speakers.size == 1) {
-            pack.voiceName?.substringBefore(" (") ?: ReaderService.speakerShortName(pack, sid)
-        } else {
-            ReaderService.speakerShortName(pack, sid)
-        }
-        voiceChip.text = "$family · $speaker"
-        // The chips must fit on one line; the speaker part goes first when narrow
-        // (the style keeps the chip itself to one line either way).
-        chipRow.post {
-            val layout = voiceChip.layout
-            if (layout != null && layout.lineCount > 0 && layout.getEllipsisCount(0) > 0) {
-                voiceChip.text = family
-            }
-        }
-        val speed = prefs.getFloat(ReaderService.KEY_SPEED, 1.0f)
-        speedChip.text = getString(
-            R.string.speed_value_format,
-            String.format(Locale.US, "%.1f", speed),
-        )
-        val smartOn = prefs.getBoolean(ReaderService.KEY_SMART_VOICE, true)
-        if (smartOn) {
-            // Drawable and tint are both set here: the XML tint alone left the
-            // icon invisible on the device (round 21).
-            autoChip.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_check, 0, 0, 0)
-            autoChip.compoundDrawableTintList = ColorStateList.valueOf(getColor(R.color.accent))
-            autoChip.setTextColor(getColorStateList(R.color.chip_text))
-        } else {
-            autoChip.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0)
-            autoChip.setTextColor(getColor(R.color.text3))
-        }
     }
 
     /** The reading notices render as one dismissible card above the voice chips. */
@@ -814,6 +694,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         refreshButton.isEnabled = false
         homeHeader.visibility = View.GONE
         homeTabs.visibility = View.GONE
+        homeFab.visibility = View.GONE
         setSetupVisible(true)
         setProgressVisible(false)
         setErrorVisible(false)
@@ -827,6 +708,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         refreshButton.isEnabled = false
         homeHeader.visibility = View.GONE
         homeTabs.visibility = View.GONE
+        homeFab.visibility = View.GONE
         setSetupVisible(true)
         downloadButton.visibility = View.GONE
         downloadHelp.visibility = View.GONE
@@ -844,6 +726,7 @@ class MainActivity : Activity(), InstallTask.Listener {
         refreshButton.isEnabled = false
         homeHeader.visibility = View.GONE
         homeTabs.visibility = View.GONE
+        homeFab.visibility = View.GONE
         setSetupVisible(true)
         downloadButton.visibility = View.GONE
         downloadHelp.visibility = View.GONE
@@ -857,10 +740,11 @@ class MainActivity : Activity(), InstallTask.Listener {
     private fun showReader() {
         setupContainer.visibility = View.GONE
         readerContainer.visibility = View.VISIBLE
-        homeRefresh.isEnabled = pastePanel.visibility != View.VISIBLE
-        refreshButton.isEnabled = homeRefresh.isEnabled && !homeRefresh.isRefreshing
+        homeRefresh.isEnabled = true
+        refreshButton.isEnabled = !homeRefresh.isRefreshing
         homeHeader.visibility = View.VISIBLE
         homeTabs.visibility = View.VISIBLE
+        homeFab.visibility = View.VISIBLE
         updateNotifRow()
         updateMiniBar(ReaderState.snapshot)
     }

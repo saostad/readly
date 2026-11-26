@@ -9,15 +9,15 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingHorizontal="16dp"
-        android:paddingVertical="6dp"
         android:visibility="gone">
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="4dp"
             android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:minHeight="54dp"
+            android:orientation="horizontal"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="4dp">
 
             <TextView
                 android:layout_width="26dp"
@@ -30,19 +30,31 @@
                 android:textStyle="bold" />
 
             <TextView
+                android:id="@+id/headerTitle"
                 style="@style/Title"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
+                android:layout_marginStart="10dp"
                 android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
                 android:text="@string/app_name" />
+
+            <ImageButton
+                android:id="@+id/searchButton"
+                style="@style/IconButton"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginEnd="2dp"
+                android:contentDescription="@string/search_desc"
+                android:src="@drawable/ic_search" />
 
             <ImageButton
                 android:id="@+id/refreshButton"
                 style="@style/IconButton"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
-                android:layout_marginEnd="4dp"
+                android:layout_marginEnd="2dp"
                 android:contentDescription="@string/feed_refresh_action"
                 android:src="@drawable/ic_refresh" />
 
@@ -52,569 +64,372 @@
                 android:layout_width="48dp"
                 android:layout_height="48dp"
                 android:contentDescription="@string/settings_desc"
-                android:src="@drawable/ic_settings" />
+                android:src="@drawable/ic_settings"
+                android:tint="@color/accent" />
         </LinearLayout>
-        <LinearLayout
+        <View
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-            <Button
-                android:id="@+id/openFileButton"
-                style="@style/Btn.Ghost"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginEnd="8dp"
-                android:minHeight="48dp"
-                android:drawableStart="@drawable/ic_folder_open"
-                android:drawablePadding="6dp"
-                android:drawableTint="@color/accent"
-                android:text="@string/open_file_button" />
-            <Button
-                android:id="@+id/pasteToggle"
-                style="@style/Btn.Ghost"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:minHeight="48dp"
-                android:drawableStart="@drawable/ic_text"
-                android:drawablePadding="6dp"
-                android:drawableTint="@color/text2"
-                android:text="@string/paste_text_button"
-                android:contentDescription="@string/paste_toggle_desc" />
-        </LinearLayout>
+            android:layout_height="1dp"
+            android:background="@color/line" />
     </LinearLayout>
 
-    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-        android:id="@+id/homeRefresh"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
-    <ScrollView
-        android:id="@+id/homeScroll"
-        android:fillViewport="true"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent">
 
-        <LinearLayout
+        <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+            android:id="@+id/homeRefresh"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
+            android:layout_height="match_parent">
 
-            <TextView
-                android:id="@+id/needVoiceBanner"
+            <ScrollView
+                android:id="@+id/homeScroll"
+                android:fillViewport="true"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                android:text="@string/need_voice_banner"
-                android:textStyle="bold"
-                android:visibility="gone" />
-
-            <LinearLayout
-                android:id="@+id/setupContainer"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical">
+                android:layout_height="match_parent">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="14dp"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:layout_width="26dp"
-                        android:layout_height="26dp"
-                        android:background="@drawable/logo_background"
-                        android:gravity="center"
-                        android:text="R"
-                        android:textColor="#FFFFFF"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        style="@style/Title"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:text="@string/app_name" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/card_background"
                     android:orientation="vertical"
-                    android:padding="14dp">
+                    android:padding="16dp">
 
                     <TextView
-                        android:id="@+id/title"
-                        style="@style/CardTitle"
+                        android:id="@+id/needVoiceBanner"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="@string/setup_title" />
-
-                    <TextView
-                        android:id="@+id/body"
-                        style="@style/Body"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp" />
-
-                    <TextView
-                        android:id="@+id/setupEstimate"
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp" />
-
-                    <Button
-                        style="@style/Btn.Ghost"
-                        android:id="@+id/setupSampleButton"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="16dp"
-                        android:text="@string/play_sample_button" />
-
-                    <TextView
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/setup_sample_help" />
-
-                    <Button
-                        style="@style/Btn.Primary"
-                        android:id="@+id/downloadButton"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="16dp" />
-
-                    <TextView
-                        android:id="@+id/downloadHelp"
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/download_help" />
-
-                    <Button
-                        style="@style/Btn.Ghost"
-                        android:id="@+id/pocketButton"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:maxLines="2" />
-
-                    <TextView
-                        android:id="@+id/pocketHelp"
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/persian_only_help" />
-
-                    <Button
-                        style="@style/Btn.Ghost"
-                        android:id="@+id/chooseVoiceButton"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/choose_voice_button" />
-
-                    <TextView
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/choose_voice_help" />
-
-                    <ProgressBar
-                        android:id="@+id/progressBar"
-                        style="?android:attr/progressBarStyleHorizontal"
-                        android:layout_width="match_parent"
-                        android:layout_height="4dp"
-                        android:layout_marginTop="16dp"
-                        android:contentDescription="@string/progress_desc"
-                        android:max="100"
-                        android:progressDrawable="@drawable/seekbar_progress"
-                        android:visibility="gone" />
-
-                    <TextView
-                        android:id="@+id/progressLabel"
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:visibility="gone" />
-
-                    <Button
-                        style="@style/Btn.Ghost"
-                        android:id="@+id/cancelButton"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/cancel_button"
-                        android:visibility="gone" />
-
-                    <TextView
-                        android:id="@+id/cancelHelp"
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/cancel_help"
-                        android:visibility="gone" />
-
-                    <TextView
-                        android:id="@+id/errorText"
-                        style="@style/Body"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="16dp"
-                        android:textColor="@color/error"
-                        android:visibility="gone" />
-
-                    <Button
-                        style="@style/Btn.Primary"
-                        android:id="@+id/retryButton"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/try_again"
-                        android:visibility="gone" />
-
-                    <TextView
-                        android:id="@+id/retryHelp"
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/retry_help"
-                        android:visibility="gone" />
-                </LinearLayout>
-            </LinearLayout>
-
-            <LinearLayout
-                android:id="@+id/readerContainer"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <LinearLayout
-                    android:id="@+id/notifRow"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="12dp"
-                    android:orientation="vertical"
-                    android:visibility="gone">
-
-                    <TextView
-                        android:id="@+id/notifNote"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/notif_note" />
-
-                    <Button
-                        style="@style/Btn.Ghost"
-                        android:id="@+id/allowButton"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="@string/allow_button" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:id="@+id/pastePanel"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="14dp"
-                    android:orientation="vertical"
-                    android:visibility="gone">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/card_background"
-                    android:orientation="vertical"
-                    android:padding="14dp">
-
-                    <TextView
-                        style="@style/CardTitle"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/home_card_title" />
-
-                    <TextView
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="@string/home_card_subtitle" />
-
-                    <EditText
-                        android:id="@+id/inputEdit"
-                        style="@style/BoxEdit"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:gravity="top"
-                        android:hint="@string/input_hint"
-                        android:inputType="textMultiLine"
-                        android:minLines="4" />
-
-                    <TextView
-                        android:id="@+id/inputError"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="@string/input_error"
-                        android:textColor="@color/error"
+                        android:layout_marginBottom="16dp"
+                        android:text="@string/need_voice_banner"
+                        android:textStyle="bold"
                         android:visibility="gone" />
 
                     <LinearLayout
+                        android:id="@+id/setupContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:orientation="horizontal">
-
-                        <Button
-                            style="@style/Btn.Ghost"
-                            android:id="@+id/pasteButton"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="@string/paste_button" />
-
-                        <Button
-                            style="@style/Btn.Primary"
-                            android:id="@+id/readButton"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="8dp"
-                            android:layout_weight="1.4"
-                            android:drawablePadding="8dp"
-                            android:drawableStart="@drawable/ic_play"
-                            android:drawableTint="@color/onAccent"
-                            android:text="@string/read_button" />
-                    </LinearLayout>
-                </LinearLayout>
-
-                <TextView
-                    style="@style/SectionLabel"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="8dp"
-                    android:layout_marginTop="16dp"
-                    android:text="@string/voice_section" />
-
-                <LinearLayout
-                    android:id="@+id/chipRow"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal">
-
-                    <Button
-                        style="@style/Chip"
-                        android:id="@+id/voiceChip"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:drawablePadding="6dp"
-                        android:drawableStart="@drawable/ic_mic"
-                        android:drawableTint="@color/accent" />
-
-                    <Button
-                        style="@style/Chip"
-                        android:id="@+id/speedChip"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp" />
-
-                    <Button
-                        style="@style/Chip"
-                        android:id="@+id/autoChip"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:drawablePadding="6dp"
-                        android:drawableTint="@color/accent"
-                        android:text="@string/chip_auto" />
-                </LinearLayout>
-
-                <TextView
-                    style="@style/SectionLabel"
-                    android:id="@+id/tipSection"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="8dp"
-                    android:layout_marginTop="16dp"
-                    android:text="@string/tip_section" />
-
-                <LinearLayout
-                    android:id="@+id/tipCard"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/tip_background"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:padding="12dp"
-                    android:visibility="gone">
-
-                    <ImageView
-                        android:layout_width="30dp"
-                        android:layout_height="30dp"
-                        android:background="@drawable/tip_icon_background"
-                        android:scaleType="center"
-                        android:src="@drawable/ic_check"
-                        android:tint="@color/accent" />
-
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="10dp"
-                        android:layout_weight="1"
                         android:orientation="vertical">
 
-                        <TextView
+                        <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="@string/tip_title"
-                            android:textColor="@color/text"
-                            android:textSize="13sp"
-                            android:textStyle="bold" />
+                            android:layout_marginBottom="14dp"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
 
-                        <TextView
-                            style="@style/Small"
+                            <TextView
+                                android:layout_width="26dp"
+                                android:layout_height="26dp"
+                                android:background="@drawable/logo_background"
+                                android:gravity="center"
+                                android:text="R"
+                                android:textColor="#FFFFFF"
+                                android:textSize="14sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                style="@style/Title"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:text="@string/app_name" />
+                        </LinearLayout>
+
+                        <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="@string/tip_sub" />
+                            android:background="@drawable/card_background"
+                            android:orientation="vertical"
+                            android:padding="14dp">
+
+                            <TextView
+                                android:id="@+id/title"
+                                style="@style/CardTitle"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/setup_title" />
+
+                            <TextView
+                                android:id="@+id/body"
+                                style="@style/Body"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp" />
+
+                            <TextView
+                                android:id="@+id/setupEstimate"
+                                style="@style/Small"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp" />
+
+                            <Button
+                                style="@style/Btn.Ghost"
+                                android:id="@+id/setupSampleButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="16dp"
+                                android:text="@string/play_sample_button" />
+
+                            <TextView
+                                style="@style/Small"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/setup_sample_help" />
+
+                            <Button
+                                style="@style/Btn.Primary"
+                                android:id="@+id/downloadButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="16dp" />
+
+                            <TextView
+                                android:id="@+id/downloadHelp"
+                                style="@style/Small"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/download_help" />
+
+                            <Button
+                                style="@style/Btn.Ghost"
+                                android:id="@+id/pocketButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:maxLines="2" />
+
+                            <TextView
+                                android:id="@+id/pocketHelp"
+                                style="@style/Small"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/persian_only_help" />
+
+                            <Button
+                                style="@style/Btn.Ghost"
+                                android:id="@+id/chooseVoiceButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:text="@string/choose_voice_button" />
+
+                            <TextView
+                                style="@style/Small"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/choose_voice_help" />
+
+                            <ProgressBar
+                                android:id="@+id/progressBar"
+                                style="?android:attr/progressBarStyleHorizontal"
+                                android:layout_width="match_parent"
+                                android:layout_height="4dp"
+                                android:layout_marginTop="16dp"
+                                android:contentDescription="@string/progress_desc"
+                                android:max="100"
+                                android:progressDrawable="@drawable/seekbar_progress"
+                                android:visibility="gone" />
+
+                            <TextView
+                                android:id="@+id/progressLabel"
+                                style="@style/Small"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="6dp"
+                                android:visibility="gone" />
+
+                            <Button
+                                style="@style/Btn.Ghost"
+                                android:id="@+id/cancelButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:text="@string/cancel_button"
+                                android:visibility="gone" />
+
+                            <TextView
+                                android:id="@+id/cancelHelp"
+                                style="@style/Small"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/cancel_help"
+                                android:visibility="gone" />
+
+                            <TextView
+                                android:id="@+id/errorText"
+                                style="@style/Body"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="16dp"
+                                android:textColor="@color/error"
+                                android:visibility="gone" />
+
+                            <Button
+                                style="@style/Btn.Primary"
+                                android:id="@+id/retryButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:text="@string/try_again"
+                                android:visibility="gone" />
+
+                            <TextView
+                                android:id="@+id/retryHelp"
+                                style="@style/Small"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/retry_help"
+                                android:visibility="gone" />
+                        </LinearLayout>
                     </LinearLayout>
 
-                    <Button
-                        style="@style/Btn.Text"
-                        android:id="@+id/tipSetup"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:text="@string/setup_button" />
-                </LinearLayout>
-
-                <TextView
-                    style="@style/Small"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="8dp"
-                    android:layout_marginTop="16dp"
-                    android:gravity="center"
-                    android:text="@string/footer_hint" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:id="@+id/noticeCard"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="@drawable/card_background"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:padding="14dp"
-                    android:visibility="gone">
-
-                    <TextView
-                        android:id="@+id/noticeText"
-                        style="@style/Body"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1" />
-
-                    <ImageButton
-                        style="@style/IconButton"
-                        android:id="@+id/dismissNotice"
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:layout_marginStart="4dp"
-                        android:contentDescription="@string/dismiss_desc"
-                        android:src="@drawable/ic_close" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:id="@+id/errorCard"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:background="@drawable/card_background"
-                    android:orientation="vertical"
-                    android:padding="14dp"
-                    android:visibility="gone">
-
-                    <TextView
-                        android:id="@+id/errorMessage"
-                        style="@style/Body"
+                    <LinearLayout
+                        android:id="@+id/readerContainer"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:textColor="@color/error" />
+                        android:orientation="vertical"
+                        android:visibility="gone">
 
-                    <Button
-                        style="@style/Btn.Primary"
-                        android:id="@+id/openPageButton"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:text="@string/nyt_open_page"
-                        android:visibility="gone" />
+                        <LinearLayout
+                            android:id="@+id/notifRow"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginBottom="12dp"
+                            android:orientation="vertical"
+                            android:visibility="gone">
 
-                    <TextView
-                        android:id="@+id/openPageHelp"
-                        style="@style/Small"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:text="@string/nyt_open_page_help"
-                        android:visibility="gone" />
+                            <TextView
+                                android:id="@+id/notifNote"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/notif_note" />
+
+                            <Button
+                                style="@style/Btn.Ghost"
+                                android:id="@+id/allowButton"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="8dp"
+                                android:text="@string/allow_button" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/noticeCard"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginBottom="10dp"
+                            android:background="@drawable/card_background"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:padding="14dp"
+                            android:visibility="gone">
+
+                            <TextView
+                                android:id="@+id/noticeText"
+                                style="@style/Body"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1" />
+
+                            <ImageButton
+                                style="@style/IconButton"
+                                android:id="@+id/dismissNotice"
+                                android:layout_width="48dp"
+                                android:layout_height="48dp"
+                                android:layout_marginStart="4dp"
+                                android:contentDescription="@string/dismiss_desc"
+                                android:src="@drawable/ic_close" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/errorCard"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginBottom="10dp"
+                            android:background="@drawable/card_background"
+                            android:orientation="vertical"
+                            android:padding="14dp"
+                            android:visibility="gone">
+
+                            <TextView
+                                android:id="@+id/errorMessage"
+                                style="@style/Body"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:textColor="@color/error" />
+
+                            <Button
+                                style="@style/Btn.Primary"
+                                android:id="@+id/openPageButton"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="10dp"
+                                android:text="@string/nyt_open_page"
+                                android:visibility="gone" />
+
+                            <TextView
+                                android:id="@+id/openPageHelp"
+                                style="@style/Small"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="6dp"
+                                android:text="@string/nyt_open_page_help"
+                                android:visibility="gone" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/browseHeader"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginBottom="8dp"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:visibility="gone">
+
+                            <ImageButton
+                                android:id="@+id/browseBack"
+                                style="@style/IconButton"
+                                android:layout_width="42dp"
+                                android:layout_height="42dp"
+                                android:contentDescription="@string/back_desc"
+                                android:src="@drawable/ic_back" />
+
+                            <TextView
+                                android:id="@+id/browseTitle"
+                                style="@style/CardTitle"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:layout_weight="1"
+                                android:ellipsize="end"
+                                android:maxLines="1" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/browseContent"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+                    </LinearLayout>
                 </LinearLayout>
+            </ScrollView>
+        </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
-                <View
-                    android:layout_width="match_parent"
-                    android:layout_height="1dp"
-                    android:background="@color/line" />
-
-                <LinearLayout
-                    android:id="@+id/browseHeader"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:visibility="gone">
-
-                    <ImageButton
-                        android:id="@+id/browseBack"
-                        style="@style/IconButton"
-                        android:layout_width="34dp"
-                        android:layout_height="34dp"
-                        android:contentDescription="@string/back_desc"
-                        android:src="@drawable/ic_back" />
-
-                    <TextView
-                        android:id="@+id/browseTitle"
-                        style="@style/CardTitle"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="10dp"
-                        android:layout_weight="1"
-                        android:ellipsize="end"
-                        android:maxLines="1" />
-                </LinearLayout>
-
-                <LinearLayout
-                    android:id="@+id/browseContent"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:paddingBottom="8dp"
-                    android:orientation="vertical" />
-            </LinearLayout>
-        </LinearLayout>
-    </ScrollView>
-    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+        <ImageButton
+            android:id="@+id/homeFab"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="16dp"
+            android:background="@drawable/fab_background"
+            android:contentDescription="@string/add_content_desc"
+            android:elevation="6dp"
+            android:scaleType="center"
+            android:src="@drawable/ic_add"
+            android:tint="@color/onAccent"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <LinearLayout
         android:id="@+id/miniBar"

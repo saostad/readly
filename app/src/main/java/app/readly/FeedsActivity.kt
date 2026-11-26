@@ -8,26 +8,24 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import app.readly.feeds.FeedLimits
 import app.readly.feeds.FeedRepository
 import app.readly.feeds.FeedSite
 import app.readly.feeds.FindMode
 import app.readly.feeds.HeadlineSource
 import app.readly.feeds.LoadedHeadlines
-import app.readly.playback.ReaderService
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * Settings → Android Auto websites: add and remove the sites shown in the car, choose
- * how each one's articles are found, preview the titles the car will show (tap one to
- * read it on the phone), and set the list limits.
+ * Manage website sources shown on Home and Android Auto: add or remove sites,
+ * switch feed-vs-links discovery mode, and preview extracted headlines.
+ * Feed limits, refresh schedule, and Android Auto playback options live in
+ * [SettingsActivity].
  */
 class FeedsActivity : Activity() {
 
@@ -55,89 +53,19 @@ class FeedsActivity : Activity() {
                 urlEdit.text.clear()
                 nameEdit.text.clear()
                 addError.visibility = View.GONE
-                // Show the new site's titles right away, so a site without articles is obvious.
                 openPreviews += site.id
                 renderSites()
             } catch (e: IllegalArgumentException) {
                 showAddError(e.message ?: "That website couldn't be added.")
             } catch (e: java.io.IOException) {
-                Log.e("Readly", "Adding an Android Auto website failed", e)
+                Log.e("Readly", "Adding a website source failed", e)
                 showAddError(e.message ?: "That website couldn't be added.")
             }
         }
-        setupLimits()
+        findViewById<Button>(R.id.feedsSettingsLink).setOnClickListener {
+            SettingsActivity.open(this, SettingsActivity.Section.WEBSITES)
+        }
         renderSites()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // Links shared to Read later while this screen was in the background.
-        renderSaved()
-    }
-
-    private fun bindCheck(id: Int, key: String, default: Boolean) {
-        val prefs = getSharedPreferences(ReaderService.PREFS_NAME, MODE_PRIVATE)
-        findViewById<CheckBox>(id).apply {
-            isChecked = prefs.getBoolean(key, default)
-            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean(key, checked).apply() }
-        }
-    }
-
-    private fun renderSaved() {
-        val box = findViewById<LinearLayout>(R.id.savedContainer)
-        box.removeAllViews()
-        feeds.historyWarning?.let { box.addView(small(it, error = true)) }
-        val saved = try {
-            feeds.saved()
-        } catch (e: java.io.IOException) {
-            box.addView(small(e.message ?: "Your Read later list couldn't be read.", error = true))
-            box.addView(
-                Button(this, null, 0, R.style.Btn_TextError).apply {
-                    text = getString(R.string.auto_sites_remove)
-                    setOnClickListener {
-                        feeds.resetSaved()
-                        renderSaved()
-                    }
-                },
-            )
-            return
-        }
-        if (saved.isEmpty()) {
-            box.addView(small(getString(R.string.auto_sites_saved_empty)))
-            return
-        }
-        val heard = feeds.history().associateBy { it.url }
-        for (article in saved) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
-            }
-            val status = heard[article.url]?.let {
-                if (it.finished) " · heard" else if (it.offsetChars > 0) " · ${(it.fraction * 100).toInt()}% heard" else ""
-            }.orEmpty()
-            row.addView(
-                TextView(this, null, 0, R.style.Body).apply {
-                    text = article.title + status
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    setPadding(0, dp(8), dp(8), dp(8))
-                },
-            )
-            row.addView(
-                Button(this, null, 0, R.style.Btn_TextError).apply {
-                    text = getString(R.string.auto_sites_remove)
-                    setOnClickListener {
-                        try {
-                            feeds.removeSaved(article.url)
-                        } catch (e: java.io.IOException) {
-                            Log.e("Readly", "Removing a Read later link failed", e)
-                            Toast.makeText(this@FeedsActivity, e.message ?: "Couldn't remove it.", Toast.LENGTH_LONG).show()
-                        }
-                        renderSaved()
-                    }
-                },
-            )
-            box.addView(row)
-        }
     }
 
     override fun onDestroy() {
@@ -159,40 +87,6 @@ class FeedsActivity : Activity() {
     private fun showAddError(message: String) {
         addError.text = message
         addError.visibility = View.VISIBLE
-    }
-
-    private fun setupLimits() {
-        val maxEdit = findViewById<EditText>(R.id.maxArticles)
-        val refreshEdit = findViewById<EditText>(R.id.refreshMinutes)
-        val status = findViewById<TextView>(R.id.limitsStatus)
-        // Saved at once (no Save tap); the car's "Play next" button changes the same setting.
-        findViewById<CheckBox>(R.id.playNext).apply {
-            isChecked = feeds.isPlayNextOn()
-            setOnCheckedChangeListener { _, checked -> feeds.setPlayNext(checked) }
-        }
-        // Saved at once, like Play next.
-        bindCheck(R.id.carSentence, ReaderService.KEY_CAR_SENTENCE, default = true)
-        bindCheck(R.id.carPrefetch, FeedRepository.KEY_PREFETCH, default = true)
-        bindCheck(R.id.carIntro, FeedRepository.KEY_INTRO, default = true)
-        bindCheck(R.id.carPausePrompts, ReaderService.KEY_PAUSE_FOR_PROMPTS, default = true)
-        bindCheck(R.id.carAutoPlay, FeedRepository.KEY_AUTO_PLAY, default = false)
-        val limits = feeds.limits()
-        maxEdit.setText(limits.maxArticles.toString())
-        refreshEdit.setText(limits.refreshMinutes.toString())
-        findViewById<Button>(R.id.saveLimits).setOnClickListener {
-            val max = FeedLimits.parseMaxArticles(maxEdit.text.toString())
-            val refresh = FeedLimits.parseRefreshMinutes(refreshEdit.text.toString())
-            val error = max.exceptionOrNull() ?: refresh.exceptionOrNull()
-            status.visibility = View.VISIBLE
-            if (error != null) {
-                status.text = error.message
-                status.setTextColor(getColor(R.color.error))
-                return@setOnClickListener
-            }
-            feeds.saveLimits(FeedLimits(max.getOrThrow(), refresh.getOrThrow()))
-            status.setText(R.string.auto_sites_saved)
-            status.setTextColor(getColor(R.color.text2))
-        }
     }
 
     private fun renderSites() {
@@ -261,7 +155,7 @@ class FeedsActivity : Activity() {
             val result = try {
                 Result.success(feeds.headlines(site))
             } catch (e: Exception) {
-                Log.e("Readly", "Previewing Android Auto titles for ${site.url} (site=${site.id}) failed", e)
+                Log.e("Readly", "Previewing titles for ${site.url} (site=${site.id}) failed", e)
                 Result.failure(e)
             }
             main.post {
@@ -291,12 +185,11 @@ class FeedsActivity : Activity() {
                     isClickable = true
                     isFocusable = true
                     setBackgroundResource(R.drawable.btn_text)
-                    // Reads on the phone with the full article engine.
                     setOnClickListener {
                         try {
                             startActivity(ArticleActivity.intent(this@FeedsActivity, headline.url))
                         } catch (e: Exception) {
-                            Log.e("Readly", "Opening ${headline.url} from the Android Auto preview failed", e)
+                            Log.e("Readly", "Opening ${headline.url} from preview failed", e)
                             Toast.makeText(this@FeedsActivity, "Couldn't open that article.", Toast.LENGTH_LONG).show()
                         }
                     }
@@ -305,12 +198,11 @@ class FeedsActivity : Activity() {
         }
     }
 
-    /** Applies a change to the saved list, reporting a list that can't be read. */
     private fun change(block: () -> Unit) {
         try {
             block()
         } catch (e: java.io.IOException) {
-            Log.e("Readly", "Changing the Android Auto websites failed", e)
+            Log.e("Readly", "Changing websites failed", e)
             Toast.makeText(this, e.message ?: "Your websites couldn't be changed.", Toast.LENGTH_LONG).show()
         }
         renderSites()

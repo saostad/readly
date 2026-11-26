@@ -8,15 +8,16 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
+        android:minHeight="56dp"
         android:orientation="horizontal"
-        android:padding="16dp"
-        android:paddingBottom="8dp">
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="6dp">
 
         <ImageButton
             android:id="@+id/backButton"
             style="@style/IconButton"
-            android:layout_width="34dp"
-            android:layout_height="34dp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             android:contentDescription="@string/back_desc"
             android:src="@drawable/ic_back" />
 
@@ -29,9 +30,14 @@
             android:text="@string/auto_sites_title" />
 
         <Space
-            android:layout_width="34dp"
-            android:layout_height="34dp" />
+            android:layout_width="48dp"
+            android:layout_height="48dp" />
     </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/line" />
 
     <ScrollView
         android:layout_width="match_parent"
@@ -41,8 +47,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="16dp"
-            android:paddingTop="0dp">
+            android:padding="16dp">
 
             <TextView
                 style="@style/Small"
@@ -101,152 +106,18 @@
                 android:id="@+id/sitesContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
+                android:layout_marginTop="14dp"
                 android:orientation="vertical" />
-
-            <TextView
-                style="@style/SectionLabel"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/auto_sites_saved_title" />
-
-            <TextView
-                style="@style/Small"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/auto_sites_saved_help" />
-
-            <LinearLayout
-                android:id="@+id/savedContainer"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:orientation="vertical" />
-
-            <TextView
-                style="@style/SectionLabel"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/auto_sites_limits_title" />
-
-            <CheckBox
-                android:id="@+id/playNext"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:buttonTint="@color/accent"
-                android:minHeight="48dp"
-                android:text="@string/auto_sites_play_next"
-                android:textColor="@color/text"
-                android:textSize="@dimen/text_body" />
-
-            <CheckBox
-                android:id="@+id/carSentence"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:buttonTint="@color/accent"
-                android:minHeight="48dp"
-                android:text="@string/auto_sites_show_sentence"
-                android:textColor="@color/text"
-                android:textSize="@dimen/text_body" />
-
-            <CheckBox
-                android:id="@+id/carPrefetch"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:buttonTint="@color/accent"
-                android:minHeight="48dp"
-                android:text="@string/auto_sites_prefetch"
-                android:textColor="@color/text"
-                android:textSize="@dimen/text_body" />
-
-            <CheckBox
-                android:id="@+id/carIntro"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:buttonTint="@color/accent"
-                android:minHeight="48dp"
-                android:text="@string/auto_sites_intro"
-                android:textColor="@color/text"
-                android:textSize="@dimen/text_body" />
-
-            <CheckBox
-                android:id="@+id/carPausePrompts"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:buttonTint="@color/accent"
-                android:minHeight="48dp"
-                android:text="@string/auto_sites_pause_prompts"
-                android:textColor="@color/text"
-                android:textSize="@dimen/text_body" />
-
-            <CheckBox
-                android:id="@+id/carAutoPlay"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:buttonTint="@color/accent"
-                android:minHeight="48dp"
-                android:text="@string/auto_sites_auto_play"
-                android:textColor="@color/text"
-                android:textSize="@dimen/text_body" />
-
-            <TextView
-                style="@style/Small"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/auto_sites_max_label" />
-
-            <EditText
-                android:id="@+id/maxArticles"
-                style="@style/BoxEdit"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:importantForAutofill="no"
-                android:inputType="number"
-                android:maxLines="1" />
-
-            <TextView
-                style="@style/Small"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/auto_sites_refresh_label" />
-
-            <EditText
-                android:id="@+id/refreshMinutes"
-                style="@style/BoxEdit"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:importantForAutofill="no"
-                android:inputType="number"
-                android:maxLines="1" />
 
             <Button
-                android:id="@+id/saveLimits"
-                style="@style/Btn.Text"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="@string/auto_sites_save" />
-
-            <TextView
-                android:id="@+id/limitsStatus"
-                style="@style/Small"
+                android:id="@+id/feedsSettingsLink"
+                style="@style/Btn.Ghost"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:visibility="gone" />
-
-            <TextView
-                style="@style/Small"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/auto_sites_unknown_sources" />
+                android:layout_marginTop="12dp"
+                android:drawableEnd="@drawable/ic_chevron_right"
+                android:drawableTint="@color/text2"
+                android:text="@string/feeds_moved_hint" />
         </LinearLayout>
     </ScrollView>
 </LinearLayout>
