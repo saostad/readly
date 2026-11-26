@@ -27,6 +27,34 @@ object ShareInput {
     const val ACTION_PROCESS_TEXT = "android.intent.action.PROCESS_TEXT"
 
     /**
+     * Picks the shared file URI to inspect for PDF/image import.
+     *
+     * Browsers (Chrome, Quetta, Chromium) attach a ShareSheet preview thumbnail
+     * in `clipData` alongside `EXTRA_TEXT` on `text/plain` link shares without
+     * setting `EXTRA_STREAM`. When `EXTRA_STREAM` is absent and the intent
+     * carries text/HTML or a `text/` MIME type, ignore `clipData`/`data` so
+     * link and text shares are not hijacked as image OCR imports.
+     */
+    fun <T> pickSharedAttachment(
+        action: String?,
+        type: String?,
+        text: String?,
+        htmlText: String?,
+        streamUri: T?,
+        clipUri: T?,
+        dataUri: T?,
+    ): T? {
+        if (action == ACTION_PROCESS_TEXT) return null
+        if (streamUri != null) return streamUri
+        val baseType = type?.substringBefore(';')?.trim()?.lowercase()
+        val isTextShare = baseType?.startsWith("text/") == true ||
+            !text.isNullOrBlank() ||
+            !htmlText.isNullOrBlank()
+        if (isTextShare) return null
+        return clipUri ?: dataUri?.takeIf { action == ACTION_SEND }
+    }
+
+    /**
      * Resolves a share. [streamText] is the shared file's content (`null` when no file
      * was shared); [streamSizeBytes] is its true byte size when the activity measured
      * one (it caps the read, so the size can exceed the text it passes).

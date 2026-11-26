@@ -198,4 +198,124 @@ class ShareInputTest {
         assertEquals("https://example.com/bare", got.url)
         assertNull(got.titleHint)
     }
+
+    @Test
+    fun pickSharedAttachment_browserUrlWithPreviewClip_returnsNull() {
+        val picked = ShareInput.pickSharedAttachment(
+            action = ShareInput.ACTION_SEND,
+            type = "text/plain",
+            text = "https://ir.voanews.com/a/us-israel-test-anti-drone-systems-iran-hezbollah-threat/8228272.html",
+            htmlText = null,
+            streamUri = null,
+            clipUri = "content://net.quetta.browser/179565987175017748417",
+            dataUri = null,
+        )
+        assertNull(picked)
+    }
+
+    @Test
+    fun pickSharedAttachment_textOrHtmlWithPreviewClip_returnsNull() {
+        assertNull(
+            ShareInput.pickSharedAttachment(
+                action = ShareInput.ACTION_SEND,
+                type = null,
+                text = "Some copied article text",
+                htmlText = null,
+                streamUri = null,
+                clipUri = "content://browser/preview.png",
+                dataUri = "content://browser/data.png",
+            ),
+        )
+        assertNull(
+            ShareInput.pickSharedAttachment(
+                action = ShareInput.ACTION_SEND,
+                type = "text/html; charset=utf-8",
+                text = null,
+                htmlText = "<p>Article</p>",
+                streamUri = null,
+                clipUri = "content://browser/preview.png",
+                dataUri = null,
+            ),
+        )
+        assertNull(
+            ShareInput.pickSharedAttachment(
+                action = ShareInput.ACTION_SEND,
+                type = "text/plain",
+                text = null,
+                htmlText = null,
+                streamUri = null,
+                clipUri = "content://browser/preview.png",
+                dataUri = null,
+            ),
+        )
+    }
+
+    @Test
+    fun pickSharedAttachment_realImageStreamWithCaption_keepsStreamUri() {
+        val picked = ShareInput.pickSharedAttachment(
+            action = ShareInput.ACTION_SEND,
+            type = "image/png",
+            text = "Check this",
+            htmlText = null,
+            streamUri = "content://photo",
+            clipUri = "content://clip-other",
+            dataUri = "content://data-other",
+        )
+        assertEquals("content://photo", picked)
+    }
+
+    @Test
+    fun pickSharedAttachment_imageOrPdfViaClipOrDataWithoutText_keepsUri() {
+        assertEquals(
+            "content://gallery/photo.jpg",
+            ShareInput.pickSharedAttachment(
+                action = ShareInput.ACTION_SEND,
+                type = "image/jpeg",
+                text = null,
+                htmlText = null,
+                streamUri = null,
+                clipUri = "content://gallery/photo.jpg",
+                dataUri = null,
+            ),
+        )
+        assertEquals(
+            "content://files/doc.pdf",
+            ShareInput.pickSharedAttachment(
+                action = ShareInput.ACTION_SEND,
+                type = "application/pdf",
+                text = null,
+                htmlText = null,
+                streamUri = null,
+                clipUri = null,
+                dataUri = "content://files/doc.pdf",
+            ),
+        )
+        assertEquals(
+            "content://unknown/scan.png",
+            ShareInput.pickSharedAttachment(
+                action = ShareInput.ACTION_SEND,
+                type = null,
+                text = null,
+                htmlText = null,
+                streamUri = null,
+                clipUri = "content://unknown/scan.png",
+                dataUri = null,
+            ),
+        )
+    }
+
+    @Test
+    fun pickSharedAttachment_processText_alwaysReturnsNull() {
+        assertNull(
+            ShareInput.pickSharedAttachment(
+                action = ShareInput.ACTION_PROCESS_TEXT,
+                type = "text/plain",
+                text = "Selected text",
+                htmlText = null,
+                streamUri = "content://unexpected-stream",
+                clipUri = "content://unexpected-clip",
+                dataUri = "content://unexpected-data",
+            ),
+        )
+    }
 }

@@ -64,10 +64,23 @@ class ShareActivity : Activity() {
             return
         }
         try {
+            val action = intent.action
+            val sharedText = if (action == Intent.ACTION_PROCESS_TEXT) {
+                intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+            } else {
+                intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+            }
+            val sharedHtml = intent.getCharSequenceExtra(Intent.EXTRA_HTML_TEXT)?.toString()
             @Suppress("DEPRECATION")
-            val sharedUri: Uri? = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
-                ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
-                ?: intent.data?.takeIf { intent.action == Intent.ACTION_SEND }
+            val sharedUri: Uri? = ShareInput.pickSharedAttachment(
+                action = action,
+                type = intent.type,
+                text = sharedText,
+                htmlText = sharedHtml,
+                streamUri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM),
+                clipUri = intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri,
+                dataUri = intent.data,
+            )
             if (sharedUri != null) {
                 val name = queryDisplayName(sharedUri)
                 val mime = contentResolver.getType(sharedUri)
