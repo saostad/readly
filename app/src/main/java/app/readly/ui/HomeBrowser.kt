@@ -363,9 +363,9 @@ class HomeBrowser(
         }
         val compact = WebsiteLayout.compact(activity)
         val tiles = if (compact) emptyList() else items.filter { it.isBrowsable && it.description.iconUri != null }
-        (items - tiles.toSet()).forEach { content.addView(row(it)) }
         val websites = parentId == CarBrowser.WEBSITES
         if (tiles.isNotEmpty() || (websites && !compact)) grid(tiles)
+        (items - tiles.toSet()).forEach { content.addView(row(it)) }
     }
 
     private fun libraryFilters() {

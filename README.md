@@ -188,8 +188,8 @@ combined feed; inside a website it refreshes that site. A manual refresh bypasse
 the normal cache interval. Failed or older feeds show a visible notice. Library
 and Recents reload their local lists. Reading continues while lists refresh.
 
-Websites use compact rows with small artwork by default. In **Voice & speed**,
-turn **Compact website lists** off to return to large tiles. This setting also
+Websites use tiles by default. In **Voice & speed**, turn on **Compact website lists**
+to switch to rows. This setting also
 requests list or grid presentation in Android Auto; the car host renders those
 hints using its own layout. Changing the setting refreshes the browser lists.
 
@@ -253,8 +253,8 @@ Readly shows up in Android Auto as a media app. In **Voice & speed →
 Android Auto websites** add news sites or feed addresses (and an optional
 name). In the car, open Readly. There are four tabs:
 
-- **Websites**: compact website rows by default ("3 new" counts unheard articles); pick one
-  to see its article titles, then tap a title to hear it.
+- **Websites** shows publisher artwork when available and a compact refresh time.
+  Choose a website to see its headlines, then tap a headline to hear it.
 - **Latest**: the newest articles from all your sites, taking turns.
 - **Saved**: links you shared on the phone with **Share → Read later**.
 - **Recents**: what you listened to, half-finished articles first.
@@ -263,7 +263,7 @@ The phone uses the same article lists, heard marks and Shuffle actions, with
 fixed bottom navigation for **Websites**, **Latest**, **Library**, and **Recents**.
 **Library** contains imported PDFs and pictures as well as **Saved articles**.
 **Open file** and **Paste text** stay in the header. **Add website** is a compact
-action beside the heading above the website list; large tiles remain available in settings.
+action beside the heading above the website list; the tile or list preference is in settings.
 
 On the phone, each article has a **⋮** menu (or long-press the row): **Mark as
 heard / unheard**, **Save to Read later**, and a delete that fits the list:
@@ -271,7 +271,7 @@ heard / unheard**, **Save to Read later**, and a delete that fits the list:
 from Saved**, or **Remove from Recents** (forgets its listening history). Each
 change except saving offers **Undo** at the top of the list.
 
-Every list starts with **Shuffle**, which plays its articles in a random
+Lists with multiple articles offer **Shuffle** after the headlines to play them in a random
 order. Rows show whether you heard an article ("Heard", "40% heard"). A
 half-heard article picks up at the sentence where it stopped, and Android Auto
 can offer it as "continue listening" when the car starts. "Hey Google, play *the verge* on Readly" reads that
@@ -410,7 +410,6 @@ Feed headlines and their successful update timestamps are stored locally; a fail
 refresh keeps the previous list and displays a warning and its older timestamp.
 The schedule downloads headlines, not full articles or audio.
 
-On **Android Auto**, open **Websites → Refresh feeds** for all sources, **Latest →
-Refresh feeds**, or **Refresh feed** inside a website. Website rows and feed lists
-show the last successful update date and time in your selected time zone. Refresh
-failures and background refresh status are visible on the Websites screen.
+On **Android Auto**, choose **Refresh all** at the end of Websites, **Refresh feeds**
+in Latest, or **Refresh feed** inside a website. Website tiles show the last successful
+refresh in your selected time zone and indicate a refresh failure for that site.

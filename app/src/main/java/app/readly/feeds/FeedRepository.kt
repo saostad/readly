@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import app.readly.library.*
 import app.readly.input.ArticleFetcher
+import app.readly.playback.ArtworkProvider
 import app.readly.playback.ReaderService
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
@@ -52,13 +53,37 @@ class FeedRepository(context: Context) {
 
     private val cache = HeadlineCache(
         finder = { site, max ->
-            HeadlineFinder(ArticleFetcher::httpUrlOpener) { Log.w(TAG, "Android Auto headlines: $it") }
-                .find(site.url, site.mode, max)
+            val finder = HeadlineFinder(ArticleFetcher::httpUrlOpener) { Log.w(TAG, "Android Auto headlines: $it") }
+            finder.find(site.url, site.mode, max).also { list -> updateArtwork(site, list.artworkUrl, finder) }
         },
         clock = System::currentTimeMillis,
         onWarn = { Log.w(TAG, "Android Auto headlines: $it") },
         formatTime = { updatedTime(it) },
     )
+
+    fun siteArtwork(site: FeedSite): android.net.Uri {
+        val key = prefs.getString("feedArtwork:${site.id}", null)
+        return if (key != null && ArtworkProvider.publisherFile(appContext, key).isFile) ArtworkProvider.publisherUri(key)
+        else ArtworkProvider.siteUri(site.label())
+    }
+
+    private fun updateArtwork(site: FeedSite, url: String?, finder: HeadlineFinder) {
+        val imageKey = "feedArtwork:${site.id}"
+        val sourceKey = "feedArtworkUrl:${site.id}"
+        val errorKey = "feedArtworkError:${site.id}"
+        val existing = prefs.getString(imageKey, null)
+        if (url != null && prefs.getString(sourceKey, null) == url && existing != null &&
+            ArtworkProvider.publisherFile(appContext, existing).isFile) return
+        try {
+            val key = url?.let { ArtworkProvider.cachePublisher(appContext, finder.artworkBytes(it)) }
+            prefs.edit().putString(imageKey, key).putString(sourceKey, url).remove(errorKey).apply()
+        } catch (error: Exception) {
+            Log.e(TAG, "fallback=true site=${site.id} attempted=publisher-artwork reason=${error.javaClass.simpleName} taken=name-artwork")
+            prefs.edit().remove(imageKey).remove(sourceKey).putBoolean(errorKey, true).apply()
+        }
+    }
+
+    fun artworkUnavailable(siteId: String): Boolean = prefs.getBoolean("feedArtworkError:$siteId", false)
 
     /**
      * The saved websites. A list that can't be read at all is reported and thrown, so
@@ -89,14 +114,16 @@ class FeedRepository(context: Context) {
         save(sites().filterNot { it.id == id })
         ReadingStore(appContext).use { it.removeFeed(id) }
         cache.forget(id)
-        prefs.edit().remove(KEY_UPDATED_PREFIX + id).apply()
+        prefs.edit().remove(KEY_UPDATED_PREFIX + id).remove("feedArtwork:$id").remove("feedArtworkUrl:$id")
+            .remove("feedArtworkError:$id").apply()
     }
 
     fun setMode(id: String, mode: FindMode) {
         save(sites().map { if (it.id == id) it.copy(mode = mode) else it })
         ReadingStore(appContext).use { it.removeFeed(id) }
         cache.forget(id)
-        prefs.edit().remove(KEY_UPDATED_PREFIX + id).apply()
+        prefs.edit().remove(KEY_UPDATED_PREFIX + id).remove("feedArtwork:$id").remove("feedArtworkUrl:$id")
+            .remove("feedArtworkError:$id").apply()
     }
 
     private fun save(sites: List<FeedSite>) {

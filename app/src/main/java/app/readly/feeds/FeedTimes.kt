@@ -18,6 +18,19 @@ object FeedTimes {
         DateTimeFormatter.ofPattern("MMM d, yyyy, h:mm a z", locale)
             .withZone(zone(zoneId)).format(Instant.ofEpochMilli(epochMs))
 
+    fun tile(epochMs: Long, zoneId: String, now: Instant = Instant.now(), locale: Locale = Locale.getDefault()): String {
+        val zone = zone(zoneId)
+        val updated = Instant.ofEpochMilli(epochMs).atZone(zone)
+        val today = now.atZone(zone).toLocalDate()
+        val pattern = when {
+            updated.toLocalDate() == today -> "h:mm a"
+            updated.toLocalDate() == today.minusDays(1) -> return "Yesterday"
+            updated.year == today.year -> "MMM d"
+            else -> "MMM d, yyyy"
+        }
+        return updated.format(DateTimeFormatter.ofPattern(pattern, locale))
+    }
+
     fun parse(raw: String?): Instant? {
         if (raw.isNullOrBlank()) return null
         val value = raw.trim()

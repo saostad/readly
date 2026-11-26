@@ -22,7 +22,7 @@ class SiteArtwork {
          * Sharp on a car's art square, yet small enough (RGB_565, ~130 KB) to send with
          * every sentence's metadata update without nearing the 1 MB binder limit.
          */
-        private const val SIZE_PX = 256
+        internal const val SIZE_PX = 256
         private const val PADDING_PX = 24
         private const val MAX_TEXT_PX = 46f
         private const val MIN_TEXT_PX = 22f

@@ -34,6 +34,7 @@ data class HeadlineList(
     val feedUrl: String?,
     /** A user-visible note about how the list was made (e.g. guessed from links), or null. */
     val notice: String?,
+    val artworkUrl: String? = null,
 )
 
 /**
@@ -118,18 +119,22 @@ class HeadlineFinder(
             if (feed.headlines.isNotEmpty()) {
                 return feed.copy(
                     headlines = feed.headlines.take(maxArticles),
+                    artworkUrl = feed.artworkUrl ?: resolve(page.finalUrl, "/favicon.ico"),
                     source = HeadlineSource.FEED,
                 )
             }
             throw IOException("The feed at $host has no articles right now.")
         }
         val html = Jsoup.parse(decode(page.bytes, page.contentType), page.finalUrl)
+        val icon = html.selectFirst("link[href][rel~=\\b(?i:icon|apple-touch-icon)\\b]")?.absUrl("href")
+            ?.let { resolve(page.finalUrl, it) }
         val pageTitle = html.title().trim().ifBlank { host }
         if (mode == FindMode.AUTO) {
             val reasons = mutableListOf<String>()
             val feed = findLinkedFeed(html, page.finalUrl, reasons)
             if (feed != null) {
                 return feed.copy(
+                    artworkUrl = feed.artworkUrl ?: icon ?: resolve(page.finalUrl, "/favicon.ico"),
                     siteTitle = feed.siteTitle.ifBlank { pageTitle },
                     headlines = feed.headlines.take(maxArticles),
                     source = HeadlineSource.LINKED_FEED,
@@ -147,6 +152,7 @@ class HeadlineFinder(
             )
         }
         return HeadlineList(
+            artworkUrl = icon ?: resolve(page.finalUrl, "/favicon.ico"),
             siteTitle = pageTitle,
             headlines = links.take(maxArticles),
             source = HeadlineSource.PAGE_LINKS,
@@ -236,7 +242,9 @@ class HeadlineFinder(
                 addItem(items, item.selectFirst("title")?.text(), link, date, page.finalUrl)
             }
         }
-        return HeadlineList(siteTitle, items.distinctBy { it.url }, HeadlineSource.FEED, page.finalUrl, null)
+        val image = xml.selectFirst("feed > icon") ?: xml.selectFirst("feed > logo") ?: xml.selectFirst("channel > image > url")
+        return HeadlineList(siteTitle, items.distinctBy { it.url }, HeadlineSource.FEED, page.finalUrl, null,
+            image?.let { resolve(page.finalUrl, it.text().trim()) })
     }
 
     private fun addItem(items: MutableList<Headline>, rawTitle: String?, rawLink: String, date: String?, base: String) {
@@ -366,6 +374,8 @@ class HeadlineFinder(
         val scheme = resolved.substringBefore(':').lowercase(Locale.US)
         return if (scheme == "http" || scheme == "https") resolved.substringBefore('#') else null
     }
+
+    fun artworkBytes(url: String): ByteArray = download(url).bytes
 
     private fun download(url: String): Page {
         var current = url

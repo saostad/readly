@@ -24,8 +24,7 @@ import java.util.concurrent.Executors
  * The Android Auto screens behind [ReaderService]. Four tabs: **Websites** (the saved
  * sites as compact rows or optional tiles, each opening its article titles), **Latest** (every site's newest
  * articles taking turns), **Saved** (links shared to Read later) and **Recents**
- * (what you listened to, with half-finished ones first to resume). Every list starts
- * with a Shuffle row. Rows carry heard / part-heard marks from the listening history.
+ * (what you listened to, with half-finished ones first to resume). Article lists offer Shuffle after the headlines. Rows carry heard / part-heard marks from the listening history.
  *
  * Media ids: [ROOT], the tab ids, [RECENT_ROOT] (Android Auto's "continue listening"),
  * `site:<id>`, `retry:<listId>`, `article:<listId>|<url>` and `shuffle:<listId>`,
@@ -336,36 +335,27 @@ class CarBrowser(
         if (force) for (site in sites) {
             try {
                 val loaded = feeds.headlines(site, force = true)
-                if (loaded.stale) unavailable += site.label()
+                if (loaded.stale) unavailable += site.id
             } catch (error: Exception) {
                 Log.e(TAG, "Couldn't refresh website site=${site.id}", error)
-                unavailable += site.label()
+                unavailable += site.id
             }
         }
-        sites.filter { feeds.cachedHeadlineRefreshNotice(it.id) != null }.forEach { unavailable += it.label() }
-        val heard = feeds.history().associateBy { it.url }
-        val hidden = hiddenOrNotice().first
-        val items = mutableListOf(browsable(RETRY + WEBSITES, "Refresh feeds", "Fetch the latest headlines from all websites"))
-        feeds.prefs.getString(app.readly.feeds.FeedRefreshScheduler.STATUS, null)?.let {
-            items += browsable("notice:background", "Background refresh", it)
-        }
-        if (unavailable.isNotEmpty()) items[0] = browsable(RETRY + WEBSITES,
-            "Refresh feeds · some websites couldn't update",
-            "${unavailable.joinToString(", ")}. Previous headlines are kept where available.")
-        return sites.mapTo(items) { site ->
-            // "3 new" when the titles are already loaded; never a network call per tile.
-            val unheard = feeds.cachedHeadlines(site.id)
-                ?.count { heard[it.url]?.finished != true && it.url !in hidden }
+        sites.filter { feeds.cachedHeadlineRefreshNotice(it.id) != null }.forEach { unavailable += it.id }
+        val items = sites.mapTo(mutableListOf<MediaItem>()) { site ->
+            val updated = feeds.lastUpdated(site.id)?.let { FeedTimes.tile(it, feeds.timeZoneId()) }
+            val status = when {
+                site.id in unavailable -> listOfNotNull("Refresh failed", updated).joinToString(" · ")
+                feeds.artworkUnavailable(site.id) -> listOfNotNull("Logo unavailable", updated).joinToString(" · ")
+                else -> updated ?: "Not updated yet"
+            }
             browsable(
-                SITE + site.id,
-                site.label(),
-                (if (unheard != null) "$unheard new" else FeedSites.hostOf(site.url)) + "\n" +
-                    (feeds.lastUpdated(site.id)?.let { "Last updated: ${feeds.updatedTime(it)}" } ?: "Not updated yet"),
-                ArtworkProvider.siteUri(site.label()),
-                // Inside a site: rows (a retry row is browsable too), never tiles.
+                SITE + site.id, site.label(), status, feeds.siteArtwork(site),
                 childrenStyle = CONTENT_STYLE_LIST,
             )
         }
+        items += browsable(RETRY + WEBSITES, "Refresh all", null, childrenStyle = websiteStyle)
+        return items
     }
 
     private fun articleItems(siteId: String, force: Boolean): MutableList<MediaItem> {
@@ -388,14 +378,13 @@ class CarBrowser(
             // The stale-list notice is the first row, and tapping it retries.
             items += browsable(RETRY + site.id, "Refresh feed · showing an older list", loaded.notices.first())
         }
-        if (!loaded.stale) items += browsable(RETRY + site.id, "Refresh feed", "Fetch the latest headlines for this website")
-        items += browsable("notice:update", "Last updated", feeds.updatedTime(loaded.fetchedAtMs))
         items += articleRows(site.id, entries) { entry ->
             listOfNotNull(
                 if (guessed) "Guessed from page links" else null,
                 feeds.publicationTime(entry.headline.published),
             ).joinToString(" · ").ifBlank { FeedSites.hostOf(entry.headline.url) }
         }
+        if (!loaded.stale) items += browsable(RETRY + site.id, "Refresh feed", "Fetch the latest headlines for this website")
         return items
     }
 
@@ -433,10 +422,8 @@ class CarBrowser(
             ).joinToString(" · ")
             items += browsable(RETRY + LATEST, "Refresh feeds · some websites are missing or old", subtitle)
         }
-        if (failed.isEmpty() && stale.isEmpty()) items += browsable(RETRY + LATEST, "Refresh feeds", "Fetch the latest headlines from all websites")
-        val oldest = sites.mapNotNull { feeds.lastUpdated(it.id) }.minOrNull()
-        if (oldest != null) items += browsable("notice:update", "Oldest feed update", feeds.updatedTime(oldest))
         items += articleRows(LATEST, entries) { listOfNotNull(it.siteLabel, feeds.publicationTime(it.headline.published)).joinToString(" · ") }
+        if (failed.isEmpty() && stale.isEmpty()) items += browsable(RETRY + LATEST, "Refresh feeds", "Fetch the latest headlines from all websites")
         return items
     }
 
@@ -504,17 +491,6 @@ class CarBrowser(
         val filter = feeds.filter()
         val facts = feeds.articleFacts()
         val rows = mutableListOf<MediaItem>()
-        if (filter != app.readly.library.ArticleFilter()) rows += browsable("notice:filter", "Filters & sort",
-            "${if (filter.unheard) "Unheard only · " else ""}${filter.site.ifBlank { "All websites" }} · ${filter.sort.label}" +
-                (if (filter.language.isNotBlank()) " · ${filter.language}" else "") +
-                (filter.maxMinutes?.let { " · Up to $it min; unknown lengths excluded" } ?: ""))
-        if (withShuffle && entries.size > 1) {
-            rows += MediaItem(
-                MediaDescription.Builder().setMediaId(SHUFFLE + listId).setTitle("Shuffle")
-                    .setSubtitle("Play these ${entries.size} articles in a random order").build(),
-                MediaItem.FLAG_PLAYABLE,
-            )
-        }
         for (entry in entries) {
             val history = heard[entry.headline.url]
             val (status, fraction) = completion(history)
@@ -542,6 +518,17 @@ class CarBrowser(
             )
         }
         if (entries.isEmpty()) rows += browsable(NOTICE, "No matching articles", "Change Filters & sort on your phone, or refresh this feed.")
+        if (filter != app.readly.library.ArticleFilter()) rows += browsable("notice:filter", "Filters & sort",
+            "${if (filter.unheard) "Unheard only · " else ""}${filter.site.ifBlank { "All websites" }} · ${filter.sort.label}" +
+                (if (filter.language.isNotBlank()) " · ${filter.language}" else "") +
+                (filter.maxMinutes?.let { " · Up to $it min; unknown lengths excluded" } ?: ""))
+        if (withShuffle && entries.size > 1) {
+            rows += MediaItem(
+                MediaDescription.Builder().setMediaId(SHUFFLE + listId).setTitle("Shuffle")
+                    .setSubtitle("Play these ${entries.size} articles in a random order").build(),
+                MediaItem.FLAG_PLAYABLE,
+            )
+        }
         return rows
     }
 

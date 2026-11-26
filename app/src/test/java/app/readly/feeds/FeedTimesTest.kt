@@ -7,6 +7,14 @@ import java.util.Locale
 import java.util.TimeZone
 
 class FeedTimesTest {
+    @Test fun tileDatesFollowTheSelectedZonesCalendar() {
+        val now = Instant.parse("2026-01-02T04:00:00Z")
+        fun label(raw: String) = FeedTimes.tile(Instant.parse(raw).toEpochMilli(), FeedTimes.DEFAULT_TIME_ZONE, now, Locale.US)
+        assertEquals("10:30 PM", label("2026-01-02T03:30:00Z"))
+        assertEquals("Yesterday", label("2026-01-01T03:30:00Z"))
+        assertEquals("Dec 29, 2025", label("2025-12-29T15:00:00Z"))
+    }
+
     @Test fun rssAndAtomDatesConvertToNewYorkAcrossDayBoundary() {
         val oldLocale = Locale.getDefault()
         try {

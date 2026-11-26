@@ -42,7 +42,7 @@ class HeadlineFinderTest {
     private fun xml(body: String) = FakeConnection(200, mapOf("Content-Type" to "application/rss+xml"), body)
 
     private val rss = """<?xml version="1.0"?>
-        <rss version="2.0"><channel><title>Daily News</title>
+        <rss version="2.0"><channel><title>Daily News</title><image><url>/brand.png</url></image>
           <item><title>Council approves the new riverside park plan</title><link>https://news.example/2026/11/park</link><pubDate>Tue, 10 Nov 2026 08:00:00 GMT</pubDate></item>
           <item><title><![CDATA[Storm &amp; flood warnings for the coast]]></title><link>https://news.example/2026/11/storm</link></item>
           <item><title>Local team wins the regional final at home</title><guid>https://news.example/2026/11/final</guid></item>
@@ -53,6 +53,7 @@ class HeadlineFinderTest {
         val list = finder(mapOf("https://news.example/rss" to xml(rss))).find("https://news.example/rss", FindMode.AUTO, 10)
         assertEquals(HeadlineSource.FEED, list.source)
         assertEquals("Daily News", list.siteTitle)
+        assertEquals("https://news.example/brand.png", list.artworkUrl)
         assertEquals(
             listOf(
                 "Council approves the new riverside park plan",
@@ -67,6 +68,17 @@ class HeadlineFinderTest {
     }
 
     @Test
+    fun linkedFeedWithoutArtworkUsesWebsiteIcon() {
+        val home = "https://news.example/"
+        val feed = "https://cdn.example/news.xml"
+        val pages = mapOf(
+            home to html("", """<link rel="shortcut icon" href="/brand.ico"><link rel="alternate" type="application/rss+xml" href="$feed">"""),
+            feed to xml(rss.replace("<image><url>/brand.png</url></image>", "")),
+        )
+        assertEquals(home + "brand.ico", finder(pages).find(home, FindMode.AUTO, 10).artworkUrl)
+    }
+
+    @Test
     fun maxArticles_limitsTheList() {
         val list = finder(mapOf("https://news.example/rss" to xml(rss))).find("https://news.example/rss", FindMode.AUTO, 2)
         assertEquals(2, list.headlines.size)
@@ -75,7 +87,7 @@ class HeadlineFinderTest {
     @Test
     fun homepage_followsTheAdvertisedAtomFeed() {
         val atom = """<?xml version="1.0" encoding="utf-8"?>
-            <feed xmlns="http://www.w3.org/2005/Atom"><title>Tech Desk</title>
+            <feed xmlns="http://www.w3.org/2005/Atom"><title>Tech Desk</title><icon>/tech.png</icon>
               <entry><title>New phone chips are faster and cooler</title><link rel="alternate" href="/tech/chips"/><updated>2026-11-10T08:00:00Z</updated></entry>
             </feed>"""
         val pages = mapOf(
@@ -88,6 +100,7 @@ class HeadlineFinderTest {
         val list = finder(pages).find("https://news.example/", FindMode.AUTO, 10)
         assertEquals(HeadlineSource.LINKED_FEED, list.source)
         assertEquals("https://news.example/atom.xml", list.feedUrl)
+        assertEquals("https://news.example/tech.png", list.artworkUrl)
         assertEquals("https://news.example/tech/chips", list.headlines.single().url)
         assertTrue(warnings.isEmpty())
     }
